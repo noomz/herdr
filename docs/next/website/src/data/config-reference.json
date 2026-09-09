@@ -698,6 +698,12 @@
           "description": "Rename the focused pane."
         },
         {
+          "key": "keys.pane_menu",
+          "type": "keybinding",
+          "default": "\"prefix+m\"",
+          "description": "Open the focused pane menu."
+        },
+        {
           "key": "keys.edit_scrollback",
           "type": "keybinding",
           "default": "\"prefix+e\"",

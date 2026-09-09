@@ -599,6 +599,53 @@ impl ClientShellState {
             return;
         }
 
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::PaneTargetSelector(_))
+        ) {
+            use super::rearrangement::PaneNavigation;
+            match key.code {
+                KeyCode::Esc => {
+                    self.overlay = None;
+                    outcome.repaint = true;
+                }
+                KeyCode::Tab => {
+                    if let Some(ClientShellOverlay::PaneTargetSelector(selector)) =
+                        self.overlay.as_mut()
+                    {
+                        selector.cycle(key.modifiers.contains(KeyModifiers::SHIFT));
+                    }
+                    outcome.repaint = true;
+                }
+                KeyCode::BackTab => {
+                    if let Some(ClientShellOverlay::PaneTargetSelector(selector)) =
+                        self.overlay.as_mut()
+                    {
+                        selector.cycle(true);
+                    }
+                    outcome.repaint = true;
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                    let direction = match key.code {
+                        KeyCode::Left => PaneNavigation::Left,
+                        KeyCode::Right => PaneNavigation::Right,
+                        KeyCode::Up => PaneNavigation::Up,
+                        KeyCode::Down => PaneNavigation::Down,
+                        _ => unreachable!("directional target key"),
+                    };
+                    if let Some(ClientShellOverlay::PaneTargetSelector(selector)) =
+                        self.overlay.as_mut()
+                    {
+                        selector.select_direction(&self.hits.panes, direction);
+                    }
+                    outcome.repaint = true;
+                }
+                KeyCode::Enter => self.confirm_pane_target(outcome),
+                _ => {}
+            }
+            return;
+        }
+
         if matches!(self.overlay, Some(ClientShellOverlay::ContextMenu(_))) {
             match key.code {
                 KeyCode::Esc => {

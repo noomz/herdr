@@ -681,6 +681,9 @@ impl ClientShellState {
     /// Hit-test order determines which overlapping control receives the event;
     /// the sidebar toggle takes precedence over the agent scrollbar beneath it.
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
+        if self.handle_pane_rearrangement_mouse(mouse, outcome) {
+            return;
+        }
         self.update_link_hover(mouse, outcome);
         let point = (mouse.column, mouse.row);
         if self.mode == ClientShellMode::Navigate
@@ -1414,6 +1417,46 @@ impl ClientShellState {
             }
             return;
         }
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::PaneTargetSelector(_))
+        ) {
+            let pane_id = self
+                .hits
+                .pane_target_rows
+                .iter()
+                .find(|(rect, _)| super::contains(*rect, point))
+                .and_then(|(_, index)| match self.overlay.as_ref() {
+                    Some(ClientShellOverlay::PaneTargetSelector(selector)) => {
+                        selector.eligible_pane_ids.get(*index).cloned()
+                    }
+                    _ => None,
+                });
+            match mouse.kind {
+                MouseEventKind::Moved => {
+                    if let (Some(pane_id), Some(ClientShellOverlay::PaneTargetSelector(selector))) =
+                        (pane_id.as_deref(), self.overlay.as_mut())
+                    {
+                        outcome.repaint |= selector.select_pane(pane_id);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let (Some(pane_id), Some(ClientShellOverlay::PaneTargetSelector(selector))) =
+                        (pane_id.as_deref(), self.overlay.as_mut())
+                    {
+                        selector.select_pane(pane_id);
+                        self.confirm_pane_target(outcome);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    self.revoke_rearrangement_follow();
+                    self.overlay = None;
+                    outcome.repaint = true;
+                }
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.overlay, Some(ClientShellOverlay::ContextMenu(_))) {
             let row_hit = self
                 .hits
@@ -1434,6 +1477,7 @@ impl ClientShellState {
                     if let Some((_, index)) = row_hit {
                         self.activate_context_menu_item(index, outcome);
                     } else {
+                        self.revoke_rearrangement_follow();
                         self.overlay = None;
                         outcome.repaint = true;
                     }
@@ -2203,6 +2247,10 @@ impl ClientShellState {
                     .iter()
                     .find(|hit| super::contains(hit.hit_rect, point))
                     .cloned();
+                if self.try_arm_pane_rearrangement_drag(mouse) {
+                    outcome.repaint = true;
+                    return;
+                }
                 if let Some(hit) = split_hit {
                     let Some(tab_id) = self
                         .snapshot

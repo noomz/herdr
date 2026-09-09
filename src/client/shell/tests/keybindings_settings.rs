@@ -965,3 +965,232 @@ fn resize_mode_reuses_endpoint_resize_and_stays_active_until_done() {
     assert!(state.handle_input_bytes(b"\r").actions.is_empty());
     assert_eq!(state.mode, ClientShellMode::Terminal);
 }
+
+#[test]
+fn endpoint_timeout_quarantines_actions_until_late_response_without_navigation() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let method = || {
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: "work".into(),
+        })
+    };
+    let mut sent = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut sent);
+    let request_id = match &sent.actions[0] {
+        ClientShellAction::Endpoint { request, .. } => request.id.clone(),
+        _ => panic!("expected endpoint request"),
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "timeout".into(),
+        }),
+    );
+    let notice = state.visible_endpoint_notice.as_ref().unwrap();
+    assert!(notice.body.contains("may already have applied"));
+    assert!(notice.body.contains("Detach"));
+    let mut blocked = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut blocked);
+    assert!(blocked.actions.is_empty());
+    assert!(state.pending_requests.is_empty());
+    let old_snapshot = state.snapshot.clone();
+    assert!(!state.handle_late_endpoint_result(
+        "wrong-boot",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::Ok {})
+    ));
+    assert!(state.timed_out_endpoint.is_some());
+    assert!(state.handle_late_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::Ok {})
+    ));
+    assert!(state.timed_out_endpoint.is_none());
+    assert_eq!(state.snapshot, old_snapshot);
+    assert!(state.navigate_workspace_id.is_none());
+    let mut resumed = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut resumed);
+    assert_eq!(resumed.actions.len(), 1);
+}
+
+#[test]
+fn endpoint_quarantine_does_not_block_detach_or_other_clients() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.timed_out_endpoint = Some(TimedOutEndpointRequest {
+        boot_id: "boot-1".into(),
+        request_id: "old".into(),
+        method_name: "pane.swap".into(),
+    });
+    let mut detached = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::Detach),
+        &mut detached,
+    );
+    assert!(detached.detach);
+    assert!(detached.actions.is_empty());
+    let mut other = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    other.set_snapshot(Box::new(snapshot()));
+    let mut request = ClientShellInput::default();
+    other.push_endpoint_method(
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: "work".into(),
+        }),
+        &mut request,
+    );
+    assert_eq!(request.actions.len(), 1);
+}
+
+#[test]
+fn uncertain_link_activation_does_not_replay_its_gesture() {
+    for code in ["endpoint_timeout", "endpoint_not_sent"] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.compose(106, 20).expect("pane hit geometry");
+        let pane = state.hits.panes[0].clone();
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: pane.inner_rect.x + 2,
+            row: pane.inner_rect.y + 1,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        let input = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+        let [ClientShellAction::Endpoint { request, .. }] = &input.actions[..] else {
+            panic!("ctrl click should request link activation");
+        };
+        let request_id = request.id.clone();
+        assert!(matches!(
+            &state.pending_requests[&request_id].kind,
+            PendingEndpointKind::PaneLinkActivate { pane_id, inner_rect, fallback_events }
+                if pane_id == &pane.pane_id && *inner_rect == pane.inner_rect && fallback_events == &vec![down]
+        ));
+        let (repaint, actions) = state.handle_endpoint_result(
+            "boot-1",
+            &request_id,
+            Err(ClientShellEndpointError {
+                code: Some(code.into()),
+                message: code.into(),
+            }),
+        );
+        if code == "endpoint_timeout" {
+            assert!(repaint, "the newly created timeout notice must be painted");
+        }
+        assert!(actions.is_empty(), "{code} must not replay the gesture");
+        assert!(state.url_click_consumes_until_up);
+        let release = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..down
+        })]);
+        assert!(release.actions.is_empty() && release.requests.is_empty());
+        assert!(!state.pending_requests.contains_key(&request_id));
+    }
+}
+
+#[test]
+fn queued_rejections_and_notice_timer_preserve_unknown_outcome_recovery() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut sent = ClientShellInput::default();
+    for _ in 0..2 {
+        state.push_endpoint_method(
+            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                pane_id: "pane_1".into(),
+            }),
+            &mut sent,
+        );
+    }
+    let ids: Vec<_> = sent
+        .actions
+        .iter()
+        .map(|action| match action {
+            ClientShellAction::Endpoint { request, .. } => request.id.clone(),
+            _ => panic!("endpoint action"),
+        })
+        .collect();
+    state.handle_endpoint_result(
+        "boot-1",
+        &ids[0],
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "timeout".into(),
+        }),
+    );
+    let notice = state.visible_endpoint_notice.as_ref().unwrap();
+    let expected = (
+        notice.key.clone(),
+        notice.title.clone(),
+        notice.body.clone(),
+    );
+    let expired_at = notice.deadline + std::time::Duration::from_secs(1);
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &ids[1],
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_not_sent".into()),
+            message: "queued action was not sent".into(),
+        }),
+    );
+    assert!(actions.is_empty());
+    state.tick_notifications(expired_at);
+    state.handle_input_bytes(b"x");
+    let notice = state
+        .visible_endpoint_notice
+        .as_ref()
+        .expect("recovery notice must persist");
+    assert_eq!(
+        (
+            notice.key.clone(),
+            notice.title.clone(),
+            notice.body.clone()
+        ),
+        expected
+    );
+    assert!(notice.body.contains("may already have applied"));
+    assert!(notice.body.contains("Detach"));
+    assert!(state.pending_requests.is_empty());
+}
+
+#[test]
+fn second_timeout_after_late_settlement_gets_its_own_recovery_notice() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    for attempt in 0..2 {
+        let mut sent = ClientShellInput::default();
+        state.push_endpoint_method(
+            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                pane_id: "pane_1".into(),
+            }),
+            &mut sent,
+        );
+        let [ClientShellAction::Endpoint { request, .. }] = &sent.actions[..] else {
+            panic!("new action after settlement");
+        };
+        let request_id = request.id.clone();
+        let (repaint, actions) = state.handle_endpoint_result(
+            "boot-1",
+            &request_id,
+            Err(ClientShellEndpointError {
+                code: Some("endpoint_timeout".into()),
+                message: "timeout".into(),
+            }),
+        );
+        assert!(repaint && actions.is_empty());
+        let notice = state.visible_endpoint_notice.as_ref().unwrap();
+        assert_eq!(notice.title, "Server timed out", "attempt {attempt}");
+        assert_eq!(notice.key.code, "pane.focus");
+        assert!(notice.body.contains("may already have applied"));
+        assert!(state.handle_late_endpoint_result(
+            "boot-1",
+            &request_id,
+            Ok(crate::api::schema::ResponseResult::Ok {}),
+        ));
+        assert_eq!(
+            state.visible_endpoint_notice.as_ref().unwrap().title,
+            "Late server response"
+        );
+    }
+}

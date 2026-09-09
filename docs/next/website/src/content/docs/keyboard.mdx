@@ -37,9 +37,20 @@ Panes:
 | --- | --- |
 | Zoom the focused pane | `prefix+z` |
 | Close pane | `prefix+x` |
+| Open pane menu | `prefix+m` |
 | Swap panes | `prefix+shift+h/j/k/l` |
 | Resize mode | `prefix+r` |
 | Copy mode | `prefix+[` |
+
+The pane menu can swap the focused pane with a chosen pane, place it on any
+side of another pane, or move it into a new automatically named tab. Use Tab,
+Shift+Tab, or the arrow keys to select a target, Enter to confirm, and Esc to
+cancel. Target selection does not change terminal focus.
+
+With mouse capture enabled, hold Alt and drag from a visible pane border. Drop
+on the center of another pane to swap, on its outer quarter to place the pane on
+that side, or on the new-tab button or empty tab-bar space to move it into a new
+tab. If the outer terminal intercepts Alt-mouse input, use `prefix+m` instead.
 
 Tabs:
 

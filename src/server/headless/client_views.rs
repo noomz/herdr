@@ -2,6 +2,68 @@ use super::*;
 use crate::server::client_shell::resize_popup_runtime;
 use crate::server::clients::ClientShellTopology;
 
+#[cfg(test)]
+mod reposition_tests {
+    use super::*;
+
+    #[test]
+    fn reposition_claims_geometry_without_reconciling_client_locations() {
+        let request: api::schema::Request = serde_json::from_value(serde_json::json!({
+            "id": "reposition-1",
+            "method": "pane.reposition",
+            "params": {
+                "source_pane_id": "w1:p1",
+                "target_pane_id": "w1:p2",
+                "tab_id": "w1:t1",
+                "side": "left",
+            },
+        }))
+        .expect("reposition request");
+
+        assert!(HeadlessServer::shell_endpoint_claims_geometry(
+            &request.method
+        ));
+        assert!(HeadlessServer::public_request_may_change_geometry(
+            &request.method
+        ));
+        assert!(!HeadlessServer::shell_locations_may_need_reconcile(
+            &request.method
+        ));
+        assert!(HeadlessServer::deferred_endpoint_navigation_tab_id(
+            br#"{"id":"reposition-1","result":{"type":"pane_reposition","reposition":{"changed":true,"layout":{"tab_id":"w1:t1"}}}}"#,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn move_claims_geometry_and_reconciles_client_locations_without_server_navigation() {
+        let request: api::schema::Request = serde_json::from_value(serde_json::json!({
+            "id": "move-1",
+            "method": "pane.move",
+            "params": {
+                "pane_id": "w1:p1",
+                "destination": {"type": "new_tab", "workspace_id": "w1"},
+                "focus": false
+            }
+        }))
+        .expect("move request");
+
+        assert!(HeadlessServer::shell_endpoint_claims_geometry(
+            &request.method
+        ));
+        assert!(HeadlessServer::public_request_may_change_geometry(
+            &request.method
+        ));
+        assert!(HeadlessServer::shell_locations_may_need_reconcile(
+            &request.method
+        ));
+        assert!(HeadlessServer::deferred_endpoint_navigation_tab_id(
+            br#"{"id":"move-1","result":{"type":"pane_move","move_result":{"changed":true,"target_layout":{"tab_id":"w1:t2"}}}}"#,
+        )
+        .is_none());
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ShellFocusTarget {
     pub(super) tab_id: String,
@@ -259,7 +321,9 @@ impl HeadlessServer {
                 | Method::PaneInputSet(_)
                 | Method::PaneLinkActivate(_)
                 | Method::PaneLinkResolve(_)
+                | Method::PaneMove(_)
                 | Method::PaneRename(_)
+                | Method::PaneReposition(_)
                 | Method::PaneResize(_)
                 | Method::PaneScroll(_)
                 | Method::PaneClear(_)
@@ -295,6 +359,8 @@ impl HeadlessServer {
                 | Method::PaneEditScrollback(_)
                 | Method::PaneFocus(_)
                 | Method::PaneFocusDirection(_)
+                | Method::PaneMove(_)
+                | Method::PaneReposition(_)
                 | Method::PaneResize(_)
                 | Method::PaneSplit(_)
                 | Method::PaneSwap(_)

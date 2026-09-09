@@ -46,6 +46,7 @@ pub(crate) fn render_client_overlay(
         o,
         ClientShellOverlay::Navigator(_)
             | ClientShellOverlay::ContextMenu(_)
+            | ClientShellOverlay::PaneTargetSelector(_)
             | ClientShellOverlay::GlobalMenu(_)
     ) {
         for y in b.area.y..b.area.bottom() {
@@ -79,7 +80,9 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::WorktreeRemove(v) => {
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
-        ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
+        ClientShellOverlay::ContextMenu(_)
+        | ClientShellOverlay::PaneTargetSelector(_)
+        | ClientShellOverlay::GlobalMenu(_) => None,
     }
 }
 
@@ -164,14 +167,14 @@ pub(crate) fn render_global_menu(
 
 pub(crate) fn render_context_menu(
     buffer: &mut Buffer,
-    menu: &ClientContextMenuOverlay,
+    menu: &mut ClientContextMenuOverlay,
     palette: &Palette,
 ) -> Option<OverlayRender> {
     let items = menu.items();
     let screen = buffer.area;
     let max_item_width = items
         .iter()
-        .map(|item| display_width(item.label))
+        .map(|item| display_width(&item.label))
         .max()
         .unwrap_or(0);
     let width = max_item_width
@@ -191,24 +194,40 @@ pub(crate) fn render_context_menu(
     );
     let rect = Rect::new(x, y, width, height);
     let inner = panel(buffer, rect, palette.accent, palette.panel_bg)?;
+    let visible_count = usize::from(inner.height);
+    let max_scroll = items.len().saturating_sub(visible_count);
+    menu.scroll = menu.scroll.min(max_scroll);
+    if menu.highlighted < menu.scroll {
+        menu.scroll = menu.highlighted;
+    } else if menu.highlighted >= menu.scroll.saturating_add(visible_count) {
+        menu.scroll = menu
+            .highlighted
+            .saturating_add(1)
+            .saturating_sub(visible_count)
+            .min(max_scroll);
+    }
     let mut rows = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        let row_y = inner.y.saturating_add(index as u16);
+    for (index, item) in items.iter().enumerate().skip(menu.scroll) {
+        let row_y = inner
+            .y
+            .saturating_add(u16::try_from(index.saturating_sub(menu.scroll)).unwrap_or(u16::MAX));
         if row_y >= inner.bottom() {
             break;
         }
         let row = Rect::new(inner.x, row_y, inner.width, 1);
         let highlighted = index == menu.highlighted;
-        let style = if highlighted {
+        let style = if highlighted && item.disabled_reason.is_none() {
             Style::default()
                 .fg(panel_contrast_fg(palette))
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD)
+        } else if item.disabled_reason.is_some() {
+            Style::default().fg(palette.overlay0).bg(palette.panel_bg)
         } else {
             Style::default().fg(palette.text).bg(palette.panel_bg)
         };
         buffer.set_style(row, style);
-        put_text(buffer, row.x, row.y, row.width, item.label, style);
+        put_text(buffer, row.x, row.y, row.width, &item.label, style);
         rows.push((row, index));
     }
     Some(OverlayRender {

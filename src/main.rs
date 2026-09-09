@@ -173,6 +173,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # switch_workspace = ""   # optional indexed binding, e.g. "prefix+shift+1..9"
 # close_tab = "prefix+shift+x"
 # rename_pane = "prefix+shift+p"
+# pane_menu = "prefix+m"
 # edit_scrollback = "prefix+e"
 # clear_pane = ""                  # unbound; e.g. "prefix+ctrl+k"
 # focus_pane_left = "prefix+h"

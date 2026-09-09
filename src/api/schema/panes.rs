@@ -81,6 +81,24 @@ crate::cli::projection::cli_params! {
     }
 }
 
+/// Placement is request-only; published split-direction codecs remain unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneRepositionSide {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneRepositionParams {
+    pub source_pane_id: String,
+    pub target_pane_id: String,
+    pub tab_id: String,
+    pub side: PaneRepositionSide,
+}
+
 crate::cli::projection::cli_params! {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct PaneMoveParams => PaneMoveProjection {
@@ -586,6 +604,23 @@ pub enum PaneSwapReason {
     SamePane,
     NotFound,
     CrossTab,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneRepositionResult {
+    pub changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PaneRepositionReason>,
+    pub source_pane_id: String,
+    pub target_pane_id: String,
+    pub layout: PaneLayoutSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneRepositionReason {
+    SamePane,
+    Unchanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

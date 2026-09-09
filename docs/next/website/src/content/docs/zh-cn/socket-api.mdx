@@ -213,6 +213,16 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 
 交换仅限同一标签页。它保留分割形状、分割比例、窗格 id 和运行中的进程。响应是 `type: "pane_swap"`,带 `changed`、可选的 `reason`、`source_pane_id`、可选的 `target_pane_id`、`focused_pane_id` 和 `layout`。reason 的取值有 `no_neighbor`、`same_pane`、`not_found` 和 `cross_tab`。标签页处于缩放状态时,交换保持缩放,并修改隐藏的整页布局。
 
+`pane.reposition` 将现有窗格放到同一标签页内另一个窗格的旁边:
+
+```json
+{"id":"req_reposition","method":"pane.reposition","params":{"source_pane_id":"w1:p1","target_pane_id":"w1:p2","tab_id":"w1:t1","side":"left"}}
+```
+
+四个字段都必填。`side` 可以是 `left`、`right`、`above` 或 `below`。执行时,两个窗格必须仍属于指定的 `tab_id`。操作先移除来源窗格并折叠其原父分割,再将目标窗格等分以放入同一个来源窗格。其他保留的分割比例、窗格与终端 ID、进程、元数据和焦点保持不变。
+
+响应为 `type: "pane_reposition"`,其 `reposition` 对象包含 `changed`、可选的 `reason`、`source_pane_id`、`target_pane_id` 和 `layout`。来源与目标相同时返回 `reason: "same_pane"`;布局树完全相同时返回 `reason: "unchanged"`。窗格或标签页不存在、标签页归属不符、方向无效或标签页处于缩放状态时返回错误,不会部分修改布局。发生变化时只发出一个 `layout.updated` 事件并安排保存会话。端点客户端调用前必须确认服务器已公布 `pane.reposition` 方法。
+
 `pane.move` 把运行中的窗格移动到另一个标签页、新标签页或新工作区:
 
 ```json
@@ -221,7 +231,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
 
-移动到已有标签页需要 `split: "right" | "down"`。`target_pane_id` 可选,默认是目标标签页的聚焦窗格。同一标签页内的布局变化仍然用 `pane.swap`;移动到来源标签页返回 `changed: false` 和 `reason: "same_tab"`。涉及缩放状态的来源或目标标签页的移动返回 `changed: false` 和 `reason: "zoomed_tab"`。
+移动到已有标签页需要 `split: "right" | "down"`。`target_pane_id` 可选,默认是目标标签页的聚焦窗格。同一标签页内的布局变化使用 `pane.swap` 或 `pane.reposition`;移动到来源标签页返回 `changed: false` 和 `reason: "same_tab"`。涉及缩放状态的来源或目标标签页的移动返回 `changed: false` 和 `reason: "zoomed_tab"`。
 
 响应是 `type: "pane_move"`,带 `changed`、可选的 `reason`、`previous_pane_id`、`previous_workspace_id`、`previous_tab_id`、被移动的 `pane`、可选的 `source_layout`、`target_layout`、可选的新建工作区或标签页记录、可选的已关闭工作区或标签页 id,以及 `focused_pane_id`。跨工作区移动保持内部窗格和终端存活,但在目标工作区分配新的公开窗格 id。订阅者可以监听 `pane.moved`;Herdr 不会为被移动的终端进程发出假的窗格关闭/创建事件。
 

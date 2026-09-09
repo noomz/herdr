@@ -320,6 +320,7 @@ impl ClientShellState {
                 RawInputEvent::OuterFocusLost => {
                     outcome.repaint |= self.clear_link_hover();
                     self.outer_focused = Some(false);
+                    outcome.repaint |= self.cancel_pane_rearrangement_drag(true);
                     self.release_input_leases(&mut outcome);
                     outcome
                         .requests
@@ -373,6 +374,13 @@ impl ClientShellState {
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
+        if key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Esc
+            && self.cancel_pane_rearrangement_drag(true)
+        {
+            outcome.repaint = true;
+            return;
+        }
         outcome.repaint |= self.clear_link_hover();
         if self.copy_operation_in_flight {
             self.copy_input_queue.push_back(key);
@@ -605,6 +613,9 @@ impl ClientShellState {
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> Option<ClientInputTarget> {
+        if key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
+            self.revoke_rearrangement_follow();
+        }
         if self.handle_modal_paste_shortcut_with(key, outcome, crate::platform::read_clipboard_text)
         {
             return None;

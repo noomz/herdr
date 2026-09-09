@@ -203,6 +203,9 @@ impl ClientShellState {
         {
             endpoint.methods = methods;
         }
+        if endpoint_id == &self.active_endpoint_id {
+            self.reconcile_pane_rearrangement_drag();
+        }
     }
 
     pub(crate) fn endpoint_projection_available(&self, endpoint_id: &ClientEndpointId) -> bool {
@@ -496,6 +499,13 @@ impl ClientShellState {
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .and_then(|endpoint| endpoint.methods.as_ref())
             .is_none_or(|methods| methods.contains(crate::api::api_method_name(method)))
+    }
+
+    pub(super) fn active_endpoint_methods(&self) -> Option<&HashSet<String>> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
+            .and_then(|endpoint| endpoint.methods.as_ref())
     }
 
     pub(super) fn focused_tab_count(&self) -> usize {
