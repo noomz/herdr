@@ -614,6 +614,7 @@ fn endpoint_reload_result_does_not_override_snapshot_diagnostic_authority() {
         "reload-1".into(),
         PendingEndpointRequest {
             boot_id: "boot-1".into(),
+            snapshot_revision: 1,
             method_name: "server.reload_config".into(),
             confirmation_workspace_id: None,
             kind: PendingEndpointKind::ReloadConfig,

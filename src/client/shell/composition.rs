@@ -179,6 +179,7 @@ impl ClientShellState {
         ) && !self.pane_target_selector_valid()
         {
             self.overlay = None;
+            self.push_pane_rearrangement_invalidation_notice();
         }
         let snapshot = self.snapshot.as_deref()?;
         // Do not compose a retained surface while waiting for its matching snapshot or

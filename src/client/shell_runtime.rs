@@ -28,7 +28,27 @@ pub(super) fn dispatch_client_shell_actions(
                                     crate::api::schema::Method::WorkspaceFocus(_)
                                 )))
                 }) {
-                    endpoint_commands.enqueue(endpoint_id, connection.generation, boot_id, request);
+                    let generation = connection.generation;
+                    let request_id = request.id.clone();
+                    if !endpoint_commands.enqueue(endpoint_id, generation, boot_id.clone(), request)
+                    {
+                        if let Some(shell) = shell.as_deref_mut() {
+                            let (request_repaint, follow_up) = shell.handle_endpoint_result(
+                                &boot_id,
+                                &request_id,
+                                Err(shell::ClientShellEndpointError {
+                                    code: Some("endpoint_not_sent".into()),
+                                    message: "This action was not sent because the previous action timed out."
+                                        .into(),
+                                }),
+                            );
+                            debug_assert!(
+                                follow_up.is_empty(),
+                                "a quarantined endpoint action must not trigger a follow-up"
+                            );
+                            repaint |= request_repaint;
+                        }
+                    }
                 } else if let Some(shell) = shell.as_deref_mut() {
                     repaint |= shell.cancel_endpoint_request(&request.id);
                 }
@@ -40,6 +60,9 @@ pub(super) fn dispatch_client_shell_actions(
                 endpoint_id,
                 target,
             } => {
+                if let Some(shell) = shell.as_deref_mut() {
+                    shell.revoke_rearrangement_follow();
+                }
                 *scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
                     endpoint_id,
                     target,

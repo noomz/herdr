@@ -967,7 +967,7 @@ fn resize_mode_reuses_endpoint_resize_and_stays_active_until_done() {
 }
 
 #[test]
-fn endpoint_timeout_quarantines_actions_until_late_response_without_navigation() {
+fn endpoint_timeout_quarantines_actions_until_late_response_and_fresh_snapshot() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     let method = || {
@@ -996,7 +996,6 @@ fn endpoint_timeout_quarantines_actions_until_late_response_without_navigation()
     state.push_endpoint_method(method(), &mut blocked);
     assert!(blocked.actions.is_empty());
     assert!(state.pending_requests.is_empty());
-    let old_snapshot = state.snapshot.clone();
     assert!(!state.handle_late_endpoint_result(
         "wrong-boot",
         &request_id,
@@ -1008,12 +1007,45 @@ fn endpoint_timeout_quarantines_actions_until_late_response_without_navigation()
         &request_id,
         Ok(crate::api::schema::ResponseResult::Ok {})
     ));
-    assert!(state.timed_out_endpoint.is_none());
-    assert_eq!(state.snapshot, old_snapshot);
+    assert!(state.timed_out_endpoint.is_some());
     assert!(state.navigate_workspace_id.is_none());
+    let mut still_blocked = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut still_blocked);
+    assert!(still_blocked.actions.is_empty());
+    let mut fresh = snapshot();
+    fresh.revision += 1;
+    state.set_snapshot(Box::new(fresh));
+    assert!(state.timed_out_endpoint.is_none());
     let mut resumed = ClientShellInput::default();
     state.push_endpoint_method(method(), &mut resumed);
     assert_eq!(resumed.actions.len(), 1);
+}
+
+#[test]
+fn endpoint_disconnect_clears_quarantine_for_same_boot_recovery() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut sent = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut sent);
+    let request_id = match &sent.actions[0] {
+        ClientShellAction::Endpoint { request, .. } => request.id.clone(),
+        _ => panic!("expected endpoint request"),
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "timeout".into(),
+        }),
+    );
+    state.mark_endpoint_disconnected(&ClientEndpointId::Local);
+    assert!(state.timed_out_endpoint.is_none());
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(snapshot()));
+    let mut recovered = ClientShellInput::default();
+    state.push_endpoint_method(method(), &mut recovered);
+    assert_eq!(recovered.actions.len(), 1);
 }
 
 #[test]
@@ -1021,9 +1053,12 @@ fn endpoint_quarantine_does_not_block_detach_or_other_clients() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.timed_out_endpoint = Some(TimedOutEndpointRequest {
+        endpoint_id: ClientEndpointId::Local,
         boot_id: "boot-1".into(),
         request_id: "old".into(),
         method_name: "pane.swap".into(),
+        snapshot_revision: 1,
+        late_settled: false,
     });
     let mut detached = ClientShellInput::default();
     state.record_binding(

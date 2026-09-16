@@ -177,11 +177,7 @@ pub(super) fn availability(
                 "pane.swap" | "pane.reposition" | "pane.move"
             )
         });
-    let supported = |method_name: &str| {
-        state
-            .active_endpoint_methods()
-            .is_none_or(|methods| methods.contains(method_name))
-    };
+    let supported = |method_name: &str| state.advertises_endpoint_method(method_name);
     let reason = |method_name: &'static str, zoom_blocks: bool, sole_blocks: bool| {
         if rearrangement_pending {
             Some("operation pending")
@@ -213,7 +209,7 @@ pub(super) fn selector_still_valid(
         ClientPaneTargetOperation::Swap => "pane.swap",
         ClientPaneTargetOperation::Place(_) => "pane.reposition",
     };
-    let method_available = endpoint_methods.is_none_or(|methods| methods.contains(method_name));
+    let method_available = endpoint_methods.is_some_and(|methods| methods.contains(method_name));
     let tab_zoomed = snapshot
         .tabs
         .iter()
@@ -356,7 +352,11 @@ impl ClientShellState {
             .pane_rearrangement_drag
             .as_ref()
             .is_none_or(|drag| self.pane_drag_still_valid(drag));
-        !valid && self.cancel_pane_rearrangement_drag(true)
+        if valid || !self.cancel_pane_rearrangement_drag(true) {
+            return false;
+        }
+        self.push_pane_rearrangement_invalidation_notice();
+        true
     }
 
     pub(super) fn try_arm_pane_rearrangement_drag(
@@ -585,8 +585,26 @@ impl ClientShellState {
         }
     }
 
-    pub(super) fn revoke_rearrangement_follow(&mut self) {
+    pub(crate) fn revoke_rearrangement_follow(&mut self) {
         self.navigation_intent_generation = self.navigation_intent_generation.saturating_add(1);
+    }
+
+    pub(super) fn push_pane_rearrangement_invalidation_notice(&mut self) -> bool {
+        self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
+            boot_id: self
+                .snapshot
+                .as_deref()
+                .map(|snapshot| snapshot.boot_id.clone())
+                .unwrap_or_default(),
+            kind: ClientEndpointNoticeKind::Unavailable,
+            code: "pane_rearrangement_invalidated".into(),
+        });
+        self.push_endpoint_notice(
+            ClientEndpointNoticeKind::Unavailable,
+            "pane_rearrangement_invalidated",
+            "Pane rearrangement canceled",
+            "The pane layout or active server changed. Start the rearrangement again.",
+        )
     }
 
     pub(super) fn push_pane_rearrangement_method(
@@ -597,6 +615,19 @@ impl ClientShellState {
         follow: PaneRearrangementFollow,
         outcome: &mut ClientShellInput,
     ) {
+        let method_name = crate::api::api_method_name(&method);
+        if !self.advertises_endpoint_method(method_name) {
+            self.push_endpoint_notice(
+                ClientEndpointNoticeKind::Unsupported,
+                method_name,
+                "Action unavailable",
+                format!(
+                    "This server does not support {method_name} yet. Update and restart it to enable this action."
+                ),
+            );
+            outcome.repaint = true;
+            return;
+        }
         let navigation_generation = self.navigation_intent_generation;
         self.push_endpoint_method_with_kind(
             method,
@@ -719,6 +750,7 @@ impl ClientShellState {
         source_pane_id: String,
         expected_tab_id: Option<String>,
         navigation_generation: u64,
+        request_snapshot_revision: u64,
         follow: PaneRearrangementFollow,
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
     ) -> (bool, Vec<ClientShellAction>) {
@@ -730,6 +762,8 @@ impl ClientShellState {
         {
             return (true, Vec::new());
         }
+        let current_snapshot = self.snapshot.as_deref().expect("validated snapshot");
+        let current_membership_required = current_snapshot.revision > request_snapshot_revision;
         let follow_method = match (follow, result) {
             (
                 PaneRearrangementFollow::Reposition,
@@ -741,7 +775,12 @@ impl ClientShellState {
                     .layout
                     .panes
                     .iter()
-                    .any(|pane| pane.pane_id == source_pane_id) =>
+                    .any(|pane| pane.pane_id == source_pane_id)
+                && (!current_membership_required
+                    || current_snapshot.panes.iter().any(|pane| {
+                        pane.pane_id == source_pane_id
+                            && Some(pane.tab_id.as_str()) == expected_tab_id.as_deref()
+                    })) =>
             {
                 Some(crate::api::schema::Method::PaneFocus(
                     crate::api::schema::PaneTarget {
@@ -759,7 +798,12 @@ impl ClientShellState {
                     .target_layout
                     .panes
                     .iter()
-                    .any(|pane| pane.pane_id == move_result.pane.pane_id) =>
+                    .any(|pane| pane.pane_id == move_result.pane.pane_id)
+                && (!current_membership_required
+                    || current_snapshot.panes.iter().any(|pane| {
+                        pane.pane_id == move_result.pane.pane_id
+                            && pane.tab_id == move_result.target_layout.tab_id
+                    })) =>
             {
                 Some(crate::api::schema::Method::TabFocus(
                     crate::api::schema::TabTarget {
@@ -1238,6 +1282,39 @@ mod tests {
             [ClientShellAction::Endpoint { request, .. }]
                 if matches!(&request.method, crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2")
         ));
+    }
+
+    #[test]
+    fn newer_snapshot_membership_prevents_stale_follow_up() {
+        let mut reposition = completion_state();
+        let reposition_id = enqueue_follow(
+            &mut reposition,
+            PaneRearrangementFollow::Reposition,
+            Some("tab_1"),
+        );
+        let mut newer = reposition.snapshot.as_deref().unwrap().clone();
+        newer.revision += 1;
+        newer.panes.retain(|pane| pane.pane_id != "pane_1");
+        reposition.set_snapshot(Box::new(newer));
+        assert!(reposition
+            .handle_endpoint_result(
+                "boot-1",
+                &reposition_id,
+                Ok(changed_reposition(true)),
+            )
+            .1
+            .is_empty());
+
+        let mut moved = completion_state();
+        let move_id = enqueue_follow(&mut moved, PaneRearrangementFollow::MoveNewTab, None);
+        let mut newer = moved.snapshot.as_deref().unwrap().clone();
+        newer.revision += 1;
+        newer.panes.retain(|pane| pane.pane_id != "pane_1");
+        moved.set_snapshot(Box::new(newer));
+        assert!(moved
+            .handle_endpoint_result("boot-1", &move_id, Ok(changed_move()))
+            .1
+            .is_empty());
     }
 
     #[test]

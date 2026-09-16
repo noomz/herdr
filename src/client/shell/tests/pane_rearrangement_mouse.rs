@@ -166,6 +166,49 @@ fn alt_right_border_arms_when_the_cell_has_one_pane_owner() {
 }
 
 #[test]
+fn external_drag_invalidation_shows_notice() {
+    let mut state = drag_state();
+    state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        5,
+        0,
+        KeyModifiers::ALT,
+    )]);
+    let mut changed_surface = state.pane_surface.as_ref().unwrap().clone();
+    changed_surface.surface_revision += 1;
+    changed_surface.panes[0].rect.width -= 1;
+    state.set_pane_surface(changed_surface);
+
+    assert!(state.pane_rearrangement_drag.is_none());
+    assert!(state
+        .visible_endpoint_notice
+        .as_ref()
+        .is_some_and(|notice| notice.title == "Pane rearrangement canceled"));
+}
+
+#[test]
+fn external_selector_invalidation_shows_notice() {
+    let mut state = drag_state();
+    state.open_pane_target_selector(
+        "pane_1".into(),
+        "ws_1".into(),
+        "tab_1".into(),
+        super::super::rearrangement::ClientPaneTargetOperation::Swap,
+    );
+    state.set_endpoint_methods(None);
+    state.compose(40, 10).unwrap();
+
+    assert!(!matches!(
+        state.overlay,
+        Some(ClientShellOverlay::PaneTargetSelector(_))
+    ));
+    assert!(state
+        .visible_endpoint_notice
+        .as_ref()
+        .is_some_and(|notice| notice.title == "Pane rearrangement canceled"));
+}
+
+#[test]
 fn drop_zones_use_quarters_tiny_swap_and_horizontal_corner_ties() {
     let rect = Rect::new(10, 10, 20, 20);
     assert_eq!(

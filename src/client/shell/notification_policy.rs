@@ -162,6 +162,7 @@ impl ClientShellState {
             .visible_endpoint_notice
             .as_ref()
             .is_some_and(|visible| now >= visible.deadline)
+            && self.timed_out_endpoint.is_none()
         {
             self.visible_endpoint_notice = None;
             repaint = true;

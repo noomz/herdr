@@ -466,6 +466,7 @@ impl ClientShellState {
             request_id.clone(),
             PendingEndpointRequest {
                 boot_id: snapshot.boot_id.clone(),
+                snapshot_revision: snapshot.revision,
                 method_name,
                 confirmation_workspace_id,
                 kind,
@@ -559,20 +560,28 @@ impl ClientShellState {
         request_id: &str,
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
     ) -> bool {
-        let Some(pending) = self.timed_out_endpoint.as_ref() else {
+        let Some(pending) = self.timed_out_endpoint.as_mut() else {
             return false;
         };
         if pending.boot_id != boot_id || pending.request_id != request_id {
             return false;
         }
+        pending.late_settled = true;
         let method_name = pending.method_name.clone();
-        self.timed_out_endpoint = None;
+        let snapshot_revision = pending.snapshot_revision;
         if self
             .snapshot
             .as_deref()
             .is_none_or(|snapshot| snapshot.boot_id != boot_id)
         {
             return false;
+        }
+        let snapshot_is_fresh = self
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot.revision > snapshot_revision);
+        if snapshot_is_fresh {
+            self.timed_out_endpoint = None;
         }
         self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
             boot_id: boot_id.to_owned(),
@@ -615,9 +624,12 @@ impl ClientShellState {
         }
         if matches!(&result, Err(error) if error.code.as_deref() == Some("endpoint_timeout")) {
             self.timed_out_endpoint = Some(TimedOutEndpointRequest {
+                endpoint_id: self.active_endpoint_id.clone(),
                 boot_id: boot_id.to_owned(),
                 request_id: request_id.to_owned(),
                 method_name: pending.method_name.clone(),
+                snapshot_revision: pending.snapshot_revision,
+                late_settled: false,
             });
         }
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
@@ -687,6 +699,7 @@ impl ClientShellState {
                     source_pane_id,
                     expected_tab_id,
                     navigation_generation,
+                    pending.snapshot_revision,
                     follow,
                     result,
                 );

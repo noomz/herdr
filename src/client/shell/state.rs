@@ -705,13 +705,17 @@ pub(super) enum PaneRearrangementFollow {
 
 /// One uncertain request per client connection; never retains follow-up actions.
 pub(super) struct TimedOutEndpointRequest {
+    pub(super) endpoint_id: ClientEndpointId,
     pub(super) boot_id: String,
     pub(super) request_id: String,
     pub(super) method_name: String,
+    pub(super) snapshot_revision: u64,
+    pub(super) late_settled: bool,
 }
 
 pub(super) struct PendingEndpointRequest {
     pub(super) boot_id: String,
+    pub(super) snapshot_revision: u64,
     pub(super) method_name: String,
     pub(super) confirmation_workspace_id: Option<String>,
     pub(super) kind: PendingEndpointKind,
@@ -1633,6 +1637,16 @@ impl ClientShellState {
         }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
+        if self.timed_out_endpoint.as_ref().is_some_and(|pending| {
+            pending.endpoint_id == self.active_endpoint_id
+                && pending.late_settled
+                && self.snapshot.as_deref().is_some_and(|snapshot| {
+                    snapshot.boot_id == pending.boot_id
+                        && snapshot.revision > pending.snapshot_revision
+                })
+        }) {
+            self.timed_out_endpoint = None;
+        }
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
