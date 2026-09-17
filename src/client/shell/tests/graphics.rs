@@ -307,6 +307,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             x: 35,
             y: 8,
             highlighted: 0,
+            scroll: 0,
         }),
         ClientShellOverlay::GlobalMenu(ClientGlobalMenuOverlay { highlighted: 0 }),
         ClientShellOverlay::Settings(ClientSettingsOverlay {
@@ -320,7 +321,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             installing_integrations: false,
         }),
     ];
-    for overlay in overlays {
+    for mut overlay in overlays {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
         state.set_snapshot(Box::new(snapshot()));
         state.set_pane_surface(surface());
@@ -328,7 +329,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
         let layout = state.layout(106, 40);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 106, 40));
         let snapshot = state.snapshot.as_deref().unwrap();
-        let rendered = match &overlay {
+        let rendered = match &mut overlay {
             ClientShellOverlay::ContextMenu(menu) => {
                 render::render_context_menu(&mut buffer, menu, &state.config.palette)
             }
