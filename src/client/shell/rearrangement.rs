@@ -1079,6 +1079,14 @@ mod tests {
             &crate::config::Config::default(),
         ));
         state.set_snapshot(Box::new(snapshot));
+        state.set_endpoint_methods(Some(vec![
+            "pane.swap".into(),
+            "pane.reposition".into(),
+            "pane.move".into(),
+            "pane.focus".into(),
+            "tab.focus".into(),
+            "tab.create".into(),
+        ]));
         state
     }
 
@@ -1297,11 +1305,7 @@ mod tests {
         newer.panes.retain(|pane| pane.pane_id != "pane_1");
         reposition.set_snapshot(Box::new(newer));
         assert!(reposition
-            .handle_endpoint_result(
-                "boot-1",
-                &reposition_id,
-                Ok(changed_reposition(true)),
-            )
+            .handle_endpoint_result("boot-1", &reposition_id, Ok(changed_reposition(true)),)
             .1
             .is_empty());
 

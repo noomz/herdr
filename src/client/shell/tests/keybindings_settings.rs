@@ -1025,6 +1025,11 @@ fn endpoint_timeout_quarantines_actions_until_late_response_and_fresh_snapshot()
 fn endpoint_disconnect_clears_quarantine_for_same_boot_recovery() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
+    let method = || {
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: "work".into(),
+        })
+    };
     let mut sent = ClientShellInput::default();
     state.push_endpoint_method(method(), &mut sent);
     let request_id = match &sent.actions[0] {
@@ -1227,5 +1232,11 @@ fn second_timeout_after_late_settlement_gets_its_own_recovery_notice() {
             state.visible_endpoint_notice.as_ref().unwrap().title,
             "Late server response"
         );
+        // Late settlement keeps the endpoint quarantined until a newer snapshot
+        // confirms the server state; deliver one before the next attempt.
+        let mut fresh = snapshot();
+        fresh.revision = state.snapshot.as_deref().unwrap().revision + 1;
+        state.set_snapshot(Box::new(fresh));
+        assert!(state.timed_out_endpoint.is_none(), "attempt {attempt}");
     }
 }
