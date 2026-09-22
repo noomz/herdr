@@ -164,12 +164,6 @@ impl ClientShellState {
                 .navigate_workspace_id
                 .as_ref()
                 .is_some_and(|target| self.navigation_target_valid(target));
-        let pending_workspace_highlight =
-            self.pending_workspace_highlight.as_ref().filter(|pending| {
-                self.mode != ClientShellMode::Navigate
-                    && pending.target.endpoint_id == self.active_endpoint_id
-                    && self.navigation_target_valid(&pending.target)
-            });
         if self.snapshot.is_none() || self.pane_surface.is_none() {
             return Some(self.compose_unavailable(cols, rows).into());
         }
@@ -181,6 +175,13 @@ impl ClientShellState {
             self.overlay = None;
             self.push_pane_rearrangement_invalidation_notice();
         }
+        // Borrow after pane-target invalidation. This reference stays live through render.
+        let pending_workspace_highlight =
+            self.pending_workspace_highlight.as_ref().filter(|pending| {
+                self.mode != ClientShellMode::Navigate
+                    && pending.target.endpoint_id == self.active_endpoint_id
+                    && self.navigation_target_valid(&pending.target)
+            });
         let snapshot = self.snapshot.as_deref()?;
         // Do not compose a retained surface while waiting for its matching snapshot or
         // connection generation.
