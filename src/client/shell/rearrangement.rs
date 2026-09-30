@@ -1125,6 +1125,7 @@ mod tests {
             focused: false,
             cwd: None,
             foreground_cwd: None,
+            restore_error: None,
             label: None,
             agent: None,
             title: None,
