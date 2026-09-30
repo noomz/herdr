@@ -428,8 +428,10 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
             .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
         "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
         name if is_python_runtime(name) => hermes_installer_agent_name(argv)
+            .or_else(|| hermes_inline_launcher_agent_name(argv))
             .or_else(|| script_arg_agent_name(argv, &["-c"], &["-m"])),
-        "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
+        "sh" | "bash" | "zsh" | "fish" => hermes_inline_launcher_agent_name(argv)
+            .or_else(|| script_arg_agent_name(argv, &["-c"], &[])),
         "cmd" => windows_cmd_arg_agent_name(argv),
         "powershell" | "pwsh" => powershell_arg_agent_name(argv),
         "tmux" => None,
@@ -597,6 +599,56 @@ fn command_text_token(input: &str) -> Option<(&str, &str)> {
 
     let end = input.find(char::is_whitespace).unwrap_or(input.len());
     Some((&input[..end], &input[end..]))
+}
+
+/// The Hermes installer shim (`~/.hermes/hermes-agent/.hermes/bin/hermes`) is
+/// a `sh` script that immediately execs `python3 -I -c '<bootstrap>'`, so a
+/// normally launched Hermes pane shows a python runtime name plus an inline
+/// `-c` payload instead of a `hermes` binary. Recognize the bootstrap
+/// payload so those panes are process-identified as `hermes`.
+///
+/// Matching is deliberately specific: the payload must name the installer
+/// entrypoint (`hermes_cli.main`) and carry a Hermes install marker
+/// (`hermes_bootstrap` or a `/hermes-agent/` path). Generic substrings such
+/// as "hermes" alone are not matched.
+fn hermes_inline_launcher_agent_name(argv: &[String]) -> Option<String> {
+    let payload = inline_script_payload(argv)?;
+    let is_hermes_bootstrap = payload.contains("hermes_cli.main")
+        && (payload.contains("hermes_bootstrap") || payload.contains("/hermes-agent/"));
+    is_hermes_bootstrap.then(|| agent_label(Agent::Hermes).to_string())
+}
+
+/// Extract the payload of the first inline-script `-c` flag in `argv`,
+/// supporting both the separate-argument form (`-c <payload>`) and the
+/// concatenated short-flag form (`-c<payload>`). Returns `None` when the
+/// arguments carry no inline script.
+fn inline_script_payload(argv: &[String]) -> Option<&str> {
+    let mut args = argv.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return None;
+        }
+
+        if arg == "-c" {
+            return args.next().map(String::as_str);
+        }
+        if let Some(payload) = arg.strip_prefix("-c") {
+            if !payload.is_empty() {
+                return Some(payload);
+            }
+        }
+
+        if arg.starts_with('-') {
+            if option_takes_value(arg) {
+                let _ = args.next();
+            }
+            continue;
+        }
+
+        return None;
+    }
+
+    None
 }
 
 fn script_arg_agent_name(
@@ -1544,6 +1596,88 @@ mod tests {
                     "/nix/store/example/bin/hermes",
                     "--resume",
                     "session-id",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_python_inline_hermes_installer_shim() {
+        let bootstrap = "sys.path.insert(0, \"/opt/hermes/hermes-agent/\"); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())";
+        let concatenated = format!("-c{bootstrap}");
+        let cases = [
+            vec!["/opt/hermes/tools/bin/python3", "-I", "-c", bootstrap],
+            vec!["/opt/hermes/tools/bin/python3", "-I", concatenated.as_str()],
+        ];
+        for argv in cases {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "python3.14", &argv)],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Hermes, "hermes".to_string())),
+                "argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_ignores_non_hermes_inline_script_payloads() {
+        for payload in [
+            "print('hi')",
+            "import hermes_cli.main",
+            "import hermes_bootstrap",
+            "open('/tmp/hermes-agent-notes.txt')",
+            "print('hermes')",
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(
+                    123,
+                    "python3.14",
+                    &["/usr/bin/python3", "-I", "-c", payload],
+                )],
+            };
+            assert_eq!(identify_agent_in_job(&job), None, "payload: {payload}");
+        }
+
+        let module_job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "python3.14",
+                &["/usr/bin/python3", "-m", "tui_gateway.entry"],
+            )],
+        };
+        assert_eq!(identify_agent_in_job(&module_job), None);
+
+        for payload in ["sleep 60", "echo hermes_bootstrap"] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "sh", &["/bin/sh", "-c", payload])],
+            };
+            assert_eq!(identify_agent_in_job(&job), None, "payload: {payload}");
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_shell_c_wrapped_hermes_installer_shim() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "sh",
+                &[
+                    "/bin/sh",
+                    "-c",
+                    "exec /opt/hermes/tools/bin/python3 -I -c 'sys.path.insert(0, \"/opt/hermes/hermes-agent/\"); import hermes_bootstrap; from hermes_cli.main import main'",
                 ],
             )],
         };
