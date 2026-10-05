@@ -309,6 +309,8 @@ text = "#cdd6f4"
 
 `ui.pane_borders` 接受 `"auto"`（默认值，仅为分割窗格显示边框）、`"always"`（也为单个窗格显示边框）或 `"off"`。单窗格的所有边都是外边，因此还需要 `ui.pane_outer_borders = true` 才会显示边框。旧的布尔值仍然有效：`true` 对应 `"auto"`，`false` 对应 `"off"`。
 
+`[ui.focus_follows_mouse]` 在 `enabled` 为 true 时，会在 `delay_ms`（默认 200）后把焦点移到指针下的窗格。默认关闭，且需要鼠标捕获。`area` 为 `"body"`（仅窗格内容）或 `"borders"`（边框和一格间隙，归属到最近窗格，距离相等则不切换）。`enter_cells` 会把窗格内容向内缩进，指针进入该区域后才能开始计时；缩进后为空的窗格永远不会悬停聚焦。`travel_cells` 是上一次悬停切换之后，下一次切换前指针必须移动的切比雪夫格数。复制模式、Navigate 模式、选区、叠层、点击和滚轮不变。一个客户端的悬停会改变所有已连接客户端的焦点。
+
 在 `[ui]` 下设置 `tab_bar_position = "bottom"`，可将桌面标签栏放到终端窗格下方。Prefix、Navigate、Copy 和 Resize 模式栏会在显示期间临时替换底部标签栏。默认值为 `"top"`。
 
 可在标签栏右侧配置一个类似 tmux 的有序状态区：

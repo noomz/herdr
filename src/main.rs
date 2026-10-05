@@ -344,6 +344,17 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
 # accent = "cyan"
 
+# Focus a pane by hovering it. Off by default. Needs mouse capture.
+# area: "body" (content only) or "borders" (frame and one-cell gap, nearest pane, ties do nothing).
+# delay_ms is the dwell before the switch. enter_cells insets the body before a switch can arm.
+# travel_cells is the Chebyshev distance required after a hover switch before the next one arms.
+# [ui.focus_follows_mouse]
+# enabled = false
+# area = "body"
+# delay_ms = 200
+# enter_cells = 0
+# travel_cells = 0
+
 # Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,
 # pane, agent, terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.

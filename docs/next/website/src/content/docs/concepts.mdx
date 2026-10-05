@@ -27,6 +27,8 @@ Panes can be split right or down. They can be renamed manually, read from the CL
 
 Herdr is mouse-native. You can click panes, tabs, workspaces, and agents. You can drag split borders, select text, and use right-click menus. Everything below is also reachable by mouse; keyboard bindings are an optional layer.
 
+Hover focus is off by default. Set `[ui.focus_follows_mouse] enabled = true` to focus the pane under the pointer after `delay_ms` (default 200) without a click. The pointer must be in the pane body unless `area` is `"borders"`. Click, scroll, selection, and mouse-reporting apps keep their current behavior. Focus is shared by every attached client, same as a click.
+
 If you prefer keyboard-only control, or you want Herdr to stop capturing mouse input, disable mouse capture:
 
 ```toml

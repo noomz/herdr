@@ -42,6 +42,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) prompt_new_workspace_name: bool,
     pub(super) confirm_close: bool,
     pub(super) mouse_capture: bool,
+    pub(super) focus_follows_mouse: crate::config::FocusFollowsMouseConfig,
     pub(super) mouse_scroll_lines: usize,
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
@@ -790,6 +791,13 @@ pub(super) enum ClientSelectionAutoscrollDirection {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ClientHoverFocusDwell {
+    pub(super) pane_id: String,
+    pub(super) deadline: std::time::Instant,
+    pub(super) last_cell: (u16, u16),
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct ClientSelectionAutoscroll {
     pub(super) pane_id: String,
     pub(super) direction: ClientSelectionAutoscrollDirection,
@@ -922,6 +930,8 @@ pub(crate) struct ClientShellState {
     pub(super) last_pane_click: Option<ClientPaneClick>,
     pub(super) selection_autoscroll: Option<ClientSelectionAutoscroll>,
     pub(super) selection_autoscroll_deadline: Option<std::time::Instant>,
+    pub(super) hover_focus_dwell: Option<ClientHoverFocusDwell>,
+    pub(super) hover_focus_last_origin: Option<(u16, u16)>,
     pub(super) selection_highlight_clear_deadline: Option<std::time::Instant>,
     pub(super) word_selection_gesture: Option<ClientWordSelection>,
     pub(super) word_selection_generation: u64,
@@ -1090,6 +1100,8 @@ impl ClientShellState {
             last_pane_click: None,
             selection_autoscroll: None,
             selection_autoscroll_deadline: None,
+            hover_focus_dwell: None,
+            hover_focus_last_origin: None,
             selection_highlight_clear_deadline: None,
             word_selection_gesture: None,
             word_selection_generation: 0,
@@ -1283,6 +1295,7 @@ impl ClientShellState {
         self.last_pane_click = None;
         self.selection_autoscroll = None;
         self.selection_autoscroll_deadline = None;
+        self.clear_hover_focus_tracking();
         self.selection_highlight_clear_deadline = None;
         self.word_selection_gesture = None;
         self.copy_mode = None;
@@ -1463,6 +1476,7 @@ impl ClientShellState {
             self.selection = None;
             self.selection_autoscroll = None;
             self.selection_autoscroll_deadline = None;
+            self.clear_hover_focus_tracking();
             self.selection_highlight_clear_deadline = None;
             self.word_selection_gesture = None;
             self.last_pane_click = None;
@@ -1691,6 +1705,7 @@ impl ClientShellState {
             self.last_pane_click = None;
             self.selection_autoscroll = None;
             self.selection_autoscroll_deadline = None;
+            self.clear_hover_focus_tracking();
             self.selection_highlight_clear_deadline = None;
             self.word_selection_gesture = None;
             self.copy_mode = None;
@@ -1883,6 +1898,7 @@ impl ClientShellState {
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.hover_focus_dwell.as_ref().map(|dwell| dwell.deadline))
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

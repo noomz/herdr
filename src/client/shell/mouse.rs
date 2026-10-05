@@ -681,6 +681,9 @@ impl ClientShellState {
     /// Hit-test order determines which overlapping control receives the event;
     /// the sidebar toggle takes precedence over the agent scrollbar beneath it.
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
+        if mouse.kind != MouseEventKind::Moved {
+            self.hover_focus_dwell = None;
+        }
         self.update_link_hover(mouse, outcome);
         let point = (mouse.column, mouse.row);
         if self.mode == ClientShellMode::Navigate
@@ -2308,6 +2311,7 @@ impl ClientShellState {
                 {
                     self.push_pane_mouse_event(&hit, mouse, mouse.modifiers, outcome);
                 }
+                self.maybe_hover_focus_pane(mouse, outcome);
             }
             MouseEventKind::ScrollUp
             | MouseEventKind::ScrollDown
@@ -2333,6 +2337,233 @@ impl ClientShellState {
             }
             _ => {}
         }
+    }
+
+    pub(super) fn clear_hover_focus_tracking(&mut self) {
+        self.hover_focus_dwell = None;
+        self.hover_focus_last_origin = None;
+    }
+
+    fn hover_focus_active(&self) -> bool {
+        self.config.focus_follows_mouse.enabled
+            && self.config.mouse_capture
+            && self.mode == ClientShellMode::Terminal
+            && self.overlay.is_none()
+            && !self.popup_pending
+            && self.hits.popup.is_none()
+            && self.selection.is_none()
+            && self.word_selection_gesture.is_none()
+            && self.pane_mouse_gesture.is_none()
+            && self.chrome_drag.is_none()
+    }
+
+    fn hover_focus_chrome(&self, point: (u16, u16)) -> bool {
+        let hits = &self.hits;
+        let rects = [
+            hits.sidebar_divider,
+            hits.sidebar_section_divider,
+            hits.sidebar_toggle,
+            hits.new_workspace,
+            hits.new_tab,
+            hits.tab_scroll_left,
+            hits.tab_scroll_right,
+            hits.mobile_switch,
+            hits.mobile_close,
+            hits.global_launcher,
+            hits.notification_toast,
+            hits.agent_body,
+            hits.workspace_body,
+        ];
+        if rects.into_iter().any(|rect| super::contains(rect, point)) {
+            return true;
+        }
+        hits.tabs
+            .iter()
+            .any(|(rect, _)| super::contains(*rect, point))
+            || hits
+                .machines
+                .iter()
+                .any(|hit| super::contains(hit.rect, point))
+            || hits
+                .workspaces
+                .iter()
+                .any(|hit| super::contains(hit.rect, point))
+            || hits
+                .agents
+                .iter()
+                .any(|(rect, _)| super::contains(*rect, point))
+            || hits
+                .endpoint_agents
+                .iter()
+                .any(|(rect, _, _)| super::contains(*rect, point))
+            || hits
+                .mobile_targets
+                .iter()
+                .any(|(rect, _)| super::contains(*rect, point))
+            || hits
+                .global_menu_rows
+                .iter()
+                .any(|(rect, _)| super::contains(*rect, point))
+            || hits
+                .context_menu_rows
+                .iter()
+                .any(|(rect, _)| super::contains(*rect, point))
+            || hits
+                .popup
+                .as_ref()
+                .is_some_and(|popup| super::contains(popup.rect, point))
+    }
+
+    fn hover_focus_candidate(&self, point: (u16, u16)) -> Option<PaneHit> {
+        if self.hover_focus_chrome(point) {
+            return None;
+        }
+        let panes = self
+            .hits
+            .panes
+            .iter()
+            .filter(|hit| !hit.popup)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(hit) = panes
+            .iter()
+            .find(|hit| super::contains(hit.inner_rect, point))
+        {
+            return Some(hit.clone());
+        }
+        if self.config.focus_follows_mouse.area != crate::config::FocusFollowsMouseArea::Borders {
+            return None;
+        }
+        let mut best: Option<(u16, PaneHit)> = None;
+        let mut tie = false;
+        for hit in panes {
+            let Some(distance) = chebyshev_to_rect(point, hit.inner_rect) else {
+                continue;
+            };
+            let near_frame = chebyshev_to_rect(point, hit.rect).is_some_and(|gap| gap <= 1);
+            if !near_frame {
+                continue;
+            }
+            match best {
+                None => best = Some((distance, hit)),
+                Some((best_distance, _)) if distance < best_distance => {
+                    tie = false;
+                    best = Some((distance, hit));
+                }
+                Some((best_distance, _)) if distance == best_distance => {
+                    tie = true;
+                }
+                _ => {}
+            }
+        }
+        if tie {
+            None
+        } else {
+            best.map(|(_, hit)| hit)
+        }
+    }
+
+    fn hover_focus_entry_ok(&self, hit: &PaneHit, point: (u16, u16)) -> bool {
+        let Some(inset) = inset_rect(hit.inner_rect, self.config.focus_follows_mouse.enter_cells)
+        else {
+            return false;
+        };
+        if super::contains(hit.inner_rect, point) {
+            return super::contains(inset, point);
+        }
+        self.config.focus_follows_mouse.area == crate::config::FocusFollowsMouseArea::Borders
+    }
+
+    fn hover_focus_travel_ok(&self, point: (u16, u16)) -> bool {
+        let needed = self.config.focus_follows_mouse.travel_cells;
+        if needed == 0 {
+            return true;
+        }
+        let Some(origin) = self.hover_focus_last_origin else {
+            return true;
+        };
+        usize::from(origin.0.abs_diff(point.0).max(origin.1.abs_diff(point.1))) >= needed
+    }
+
+    fn commit_hover_focus(
+        &mut self,
+        pane_id: String,
+        cell: (u16, u16),
+        outcome: &mut ClientShellInput,
+    ) {
+        self.hover_focus_dwell = None;
+        let sent = self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id }),
+            PendingEndpointKind::Generic,
+            outcome,
+        );
+        if sent {
+            self.hover_focus_last_origin = Some(cell);
+        }
+    }
+
+    fn maybe_hover_focus_pane(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
+        if !self.hover_focus_active() {
+            self.hover_focus_dwell = None;
+            return;
+        }
+        let point = (mouse.column, mouse.row);
+        let Some(hit) = self.hover_focus_candidate(point) else {
+            self.hover_focus_dwell = None;
+            return;
+        };
+        if self.focused_pane_id().as_deref() == Some(hit.pane_id.as_str()) {
+            self.hover_focus_dwell = None;
+            return;
+        }
+        if !self.hover_focus_entry_ok(&hit, point) {
+            self.hover_focus_dwell = None;
+            return;
+        }
+        if !self.hover_focus_travel_ok(point) {
+            if self
+                .hover_focus_dwell
+                .as_ref()
+                .is_some_and(|dwell| dwell.pane_id != hit.pane_id)
+            {
+                self.hover_focus_dwell = None;
+            }
+            return;
+        }
+        let delay_ms = self.config.focus_follows_mouse.delay_ms;
+        if delay_ms == 0 {
+            self.commit_hover_focus(hit.pane_id, point, outcome);
+            return;
+        }
+        if let Some(dwell) = self.hover_focus_dwell.as_mut() {
+            if dwell.pane_id == hit.pane_id {
+                dwell.last_cell = point;
+                return;
+            }
+        }
+        self.hover_focus_dwell = Some(ClientHoverFocusDwell {
+            pane_id: hit.pane_id,
+            deadline: std::time::Instant::now() + std::time::Duration::from_millis(delay_ms),
+            last_cell: point,
+        });
+    }
+
+    pub(crate) fn tick_hover_focus(&mut self, now: std::time::Instant) -> ClientShellInput {
+        let mut outcome = ClientShellInput::default();
+        let Some(dwell) = self.hover_focus_dwell.clone() else {
+            return outcome;
+        };
+        if now < dwell.deadline {
+            return outcome;
+        }
+        if !self.hover_focus_active()
+            || self.focused_pane_id().as_deref() == Some(dwell.pane_id.as_str())
+        {
+            self.hover_focus_dwell = None;
+            return outcome;
+        }
+        self.commit_hover_focus(dwell.pane_id, dwell.last_cell, &mut outcome);
+        outcome
     }
 
     fn pane_mouse_position(&self, hit: &PaneHit, mouse: MouseEvent) -> ClientMousePosition {
@@ -2399,4 +2630,48 @@ impl ClientShellState {
             outcome,
         );
     }
+}
+
+fn inset_rect(rect: Rect, cells: usize) -> Option<Rect> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let cells = u16::try_from(cells).ok()?;
+    if cells == 0 {
+        return Some(rect);
+    }
+    let width = rect.width.checked_sub(cells.saturating_mul(2))?;
+    let height = rect.height.checked_sub(cells.saturating_mul(2))?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(Rect::new(
+        rect.x.saturating_add(cells),
+        rect.y.saturating_add(cells),
+        width,
+        height,
+    ))
+}
+
+fn chebyshev_to_rect(point: (u16, u16), rect: Rect) -> Option<u16> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let right = rect.right().saturating_sub(1);
+    let bottom = rect.bottom().saturating_sub(1);
+    let dx = if point.0 < rect.x {
+        rect.x - point.0
+    } else if point.0 > right {
+        point.0 - right
+    } else {
+        0
+    };
+    let dy = if point.1 < rect.y {
+        rect.y - point.1
+    } else if point.1 > bottom {
+        point.1 - bottom
+    } else {
+        0
+    };
+    Some(dx.max(dy))
 }
