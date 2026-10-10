@@ -430,7 +430,7 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
         name if is_python_runtime(name) => hermes_installer_agent_name(argv)
             .or_else(|| hermes_inline_launcher_agent_name(argv))
             .or_else(|| script_arg_agent_name(argv, &["-c"], &["-m"])),
-        "sh" | "bash" | "zsh" | "fish" => hermes_inline_launcher_agent_name(argv)
+        "sh" | "bash" | "zsh" | "fish" => hermes_shell_launcher_agent_name(argv)
             .or_else(|| script_arg_agent_name(argv, &["-c"], &[])),
         "cmd" => windows_cmd_arg_agent_name(argv),
         "powershell" | "pwsh" => powershell_arg_agent_name(argv),
@@ -610,19 +610,35 @@ fn command_text_token(input: &str) -> Option<(&str, &str)> {
 /// Matching is deliberately specific: the payload must name the installer
 /// entrypoint (`hermes_cli.main`) and carry a Hermes install marker
 /// (`hermes_bootstrap` or a `/hermes-agent/` path). Generic substrings such
-/// as "hermes" alone are not matched.
+/// as "hermes" alone are not matched. The bootstrap's helper modes
+/// (`--run-module`, `--print-runtime-command`) run something other than the
+/// interactive agent and are not matched either.
 fn hermes_inline_launcher_agent_name(argv: &[String]) -> Option<String> {
-    let payload = inline_script_payload(argv)?;
-    let is_hermes_bootstrap = payload.contains("hermes_cli.main")
-        && (payload.contains("hermes_bootstrap") || payload.contains("/hermes-agent/"));
-    is_hermes_bootstrap.then(|| agent_label(Agent::Hermes).to_string())
+    let (payload, mode) = inline_script_payload(argv)?;
+    if matches!(mode, Some("--run-module" | "--print-runtime-command")) {
+        return None;
+    }
+    is_hermes_bootstrap(payload).then(|| agent_label(Agent::Hermes).to_string())
+}
+
+/// A shell only launches Hermes when its `-c` command runs the python
+/// bootstrap; bootstrap source handed to the shell itself is not a launch.
+fn hermes_shell_launcher_agent_name(argv: &[String]) -> Option<String> {
+    let (command, _) = inline_script_payload(argv)?;
+    (command.contains("python") && is_hermes_bootstrap(command))
+        .then(|| agent_label(Agent::Hermes).to_string())
+}
+
+fn is_hermes_bootstrap(payload: &str) -> bool {
+    payload.contains("hermes_cli.main")
+        && (payload.contains("hermes_bootstrap") || payload.contains("/hermes-agent/"))
 }
 
 /// Extract the payload of the first inline-script `-c` flag in `argv`,
 /// supporting both the separate-argument form (`-c <payload>`) and the
-/// concatenated short-flag form (`-c<payload>`). Returns `None` when the
-/// arguments carry no inline script.
-fn inline_script_payload(argv: &[String]) -> Option<&str> {
+/// concatenated short-flag form (`-c<payload>`), along with the argument that
+/// follows it. Returns `None` when the arguments carry no inline script.
+fn inline_script_payload(argv: &[String]) -> Option<(&str, Option<&str>)> {
     let mut args = argv.iter().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--" {
@@ -630,11 +646,12 @@ fn inline_script_payload(argv: &[String]) -> Option<&str> {
         }
 
         if arg == "-c" {
-            return args.next().map(String::as_str);
+            let payload = args.next()?;
+            return Some((payload, args.next().map(String::as_str)));
         }
         if let Some(payload) = arg.strip_prefix("-c") {
             if !payload.is_empty() {
-                return Some(payload);
+                return Some((payload, args.next().map(String::as_str)));
             }
         }
 
