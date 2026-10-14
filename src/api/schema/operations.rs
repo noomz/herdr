@@ -182,6 +182,7 @@ mod tests {
             "agent.send_keys",
             "pane.split",
             "pane.swap",
+            "pane.reposition",
             "pane.move",
             "pane.zoom",
             "pane.focus_direction",
