@@ -105,6 +105,7 @@ pub(super) struct ShellHitMap {
     pub(super) sidebar_toggle: Rect,
     pub(super) new_workspace: Rect,
     pub(super) new_tab: Rect,
+    pub(super) tab_bar: Rect,
     pub(super) tab_scroll_left: Rect,
     pub(super) tab_scroll_right: Rect,
     pub(super) mobile_switch: Rect,
@@ -115,6 +116,7 @@ pub(super) struct ShellHitMap {
     pub(super) notification_toast: Rect,
     pub(super) global_menu_rows: Vec<(Rect, usize)>,
     pub(super) context_menu_rows: Vec<(Rect, usize)>,
+    pub(super) pane_target_rows: Vec<(Rect, usize)>,
     pub(super) overlay_primary: Rect,
     pub(super) overlay_clear: Rect,
     pub(super) overlay_cancel: Rect,
@@ -289,6 +291,7 @@ pub(super) enum ClientShellOverlayKind {
     WorktreeOpen,
     WorktreeRemove,
     ContextMenu,
+    PaneTargetSelector,
     GlobalMenu,
     Settings,
 }
@@ -520,6 +523,12 @@ pub(super) enum ClientContextMenuAction {
     RenamePane,
     ClearPaneName,
     SwapWithFocusedPane,
+    SwapPane,
+    PlacePaneLeft,
+    PlacePaneRight,
+    PlacePaneAbove,
+    PlacePaneBelow,
+    MovePaneNewTab,
     SplitRight,
     SplitDown,
     Zoom,
@@ -544,7 +553,9 @@ pub(super) enum ClientContextMenuTarget {
     Pane {
         pane_id: String,
         workspace_id: String,
+        tab_id: String,
         source_pane_id: Option<String>,
+        rearrangement: super::rearrangement::ClientPaneRearrangementAvailability,
         has_manual_label: bool,
         right_click_passthrough: bool,
     },
@@ -556,11 +567,13 @@ pub(super) struct ClientContextMenuOverlay {
     pub(super) x: u16,
     pub(super) y: u16,
     pub(super) highlighted: usize,
+    pub(super) scroll: usize,
 }
 
 pub(super) struct ClientContextMenuItem {
-    pub(super) label: &'static str,
+    pub(super) label: String,
     pub(super) action: ClientContextMenuAction,
+    pub(super) disabled_reason: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -592,6 +605,7 @@ pub(super) enum ClientShellOverlay {
     WorktreeOpen(ClientWorktreeOpenOverlay),
     WorktreeRemove(ClientWorktreeRemoveOverlay),
     ContextMenu(ClientContextMenuOverlay),
+    PaneTargetSelector(super::rearrangement::ClientPaneTargetSelector),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
 }
@@ -610,6 +624,7 @@ impl ClientShellOverlay {
             Self::WorktreeOpen(_) => ClientShellOverlayKind::WorktreeOpen,
             Self::WorktreeRemove(_) => ClientShellOverlayKind::WorktreeRemove,
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
+            Self::PaneTargetSelector(_) => ClientShellOverlayKind::PaneTargetSelector,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
         }
@@ -619,6 +634,12 @@ impl ClientShellOverlay {
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
     Generic,
+    PaneRearrangement {
+        source_pane_id: String,
+        expected_tab_id: Option<String>,
+        navigation_generation: u64,
+        follow: PaneRearrangementFollow,
+    },
     ProductAnnouncementDismiss {
         version: String,
         id: String,
@@ -676,8 +697,25 @@ pub(super) enum PendingEndpointKind {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneRearrangementFollow {
+    Reposition,
+    MoveNewTab,
+}
+
+/// One uncertain request per client connection; never retains follow-up actions.
+pub(super) struct TimedOutEndpointRequest {
+    pub(super) endpoint_id: ClientEndpointId,
+    pub(super) boot_id: String,
+    pub(super) request_id: String,
+    pub(super) method_name: String,
+    pub(super) snapshot_revision: u64,
+    pub(super) late_settled: bool,
+}
+
 pub(super) struct PendingEndpointRequest {
     pub(super) boot_id: String,
+    pub(super) snapshot_revision: u64,
     pub(super) method_name: String,
     pub(super) confirmation_workspace_id: Option<String>,
     pub(super) kind: PendingEndpointKind,
@@ -907,6 +945,8 @@ pub(crate) struct ClientShellState {
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
+    pub(super) pane_rearrangement_drag: Option<super::rearrangement::ClientPaneRearrangementDrag>,
+    pub(super) swallow_pane_rearrangement_left_up: bool,
     pub(super) url_click_consumes_until_up: bool,
     /// The host terminal reports key releases (Kitty event types), so text
     /// presses can be tracked until their release arrives.
@@ -942,6 +982,8 @@ pub(crate) struct ClientShellState {
     pub(super) popup_pending_deadline: Option<std::time::Instant>,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
+    pub(super) navigation_intent_generation: u64,
+    pub(super) timed_out_endpoint: Option<TimedOutEndpointRequest>,
     pub(super) pending_integration_installs: usize,
     pub(super) pending_notifications: Vec<ClientPendingNotification>,
     pub(super) visible_notification: Option<ClientVisibleNotification>,
@@ -1081,6 +1123,8 @@ impl ClientShellState {
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,
+            pane_rearrangement_drag: None,
+            swallow_pane_rearrangement_left_up: false,
             url_click_consumes_until_up: false,
             host_reports_key_releases: false,
             host_erase_is_ctrl_h: false,
@@ -1110,6 +1154,8 @@ impl ClientShellState {
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
+            navigation_intent_generation: 0,
+            timed_out_endpoint: None,
             pending_integration_installs: 0,
             pending_notifications: Vec::new(),
             visible_notification: None,
@@ -1258,6 +1304,8 @@ impl ClientShellState {
         self.last_composed_at = None;
         self.selection_repaint_deadline = None;
         self.pending_requests.clear();
+        self.navigation_intent_generation = 0;
+        self.timed_out_endpoint = None;
         self.pane_scroll_in_flight.clear();
         self.pane_scroll_queued.clear();
         self.pane_scroll_targets.clear();
@@ -1277,6 +1325,8 @@ impl ClientShellState {
         self.previous_pane_id = None;
         self.pane_mouse_gesture = None;
         self.link_hover = None;
+        self.pane_rearrangement_drag = None;
+        self.swallow_pane_rearrangement_left_up = false;
         self.url_click_consumes_until_up = false;
         self.replaying_url_click = false;
         self.selection = None;
@@ -1587,6 +1637,16 @@ impl ClientShellState {
         }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
+        if self.timed_out_endpoint.as_ref().is_some_and(|pending| {
+            pending.endpoint_id == self.active_endpoint_id
+                && pending.late_settled
+                && self.snapshot.as_deref().is_some_and(|snapshot| {
+                    snapshot.boot_id == pending.boot_id
+                        && snapshot.revision > pending.snapshot_revision
+                })
+        }) {
+            self.timed_out_endpoint = None;
+        }
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
@@ -1602,6 +1662,7 @@ impl ClientShellState {
                 self.pending_pane_surface = Some(surface);
             }
         }
+        self.reconcile_pane_rearrangement_drag();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
     }
@@ -1698,6 +1759,7 @@ impl ClientShellState {
             self.chrome_drag = None;
             self.workspace_press = None;
             self.tab_press = None;
+            self.cancel_pane_rearrangement_drag(true);
             if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
                 gesture.hit.popup && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
             }) {
@@ -1805,6 +1867,7 @@ impl ClientShellState {
         self.pane_surface = Some(surface);
         self.pane_surface_generation = self.active_snapshot_generation;
         self.invalidate_link_hover();
+        self.reconcile_pane_rearrangement_drag();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
     }
@@ -1889,6 +1952,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn invalidate_pane_surface(&mut self) {
+        self.cancel_pane_rearrangement_drag(true);
         self.pane_surface = None;
         self.pending_pane_surface = None;
         self.hits = ShellHitMap::default();

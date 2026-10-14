@@ -4,8 +4,12 @@ use super::*;
 use ratatui::{
     style::Color,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
+
+// Keep long notices readable without covering the whole client width.
+const NOTIFICATION_CARD_MAX_WIDTH: u16 = 60;
+const NOTIFICATION_CARD_MAX_BODY_LINES: u16 = 4;
 
 pub(super) fn render_mobile_notice_banner(
     buffer: &mut Buffer,
@@ -122,8 +126,22 @@ pub(super) fn render_notification_card(
         .saturating_add(6);
     let width = u16::try_from(content_width)
         .unwrap_or(u16::MAX)
+        .min(NOTIFICATION_CARD_MAX_WIDTH)
         .min(area.width);
-    let height: u16 = if body.is_empty() { 3 } else { 4 }.min(area.height);
+    let body_paragraph = Paragraph::new(Line::from(Span::styled(
+        body,
+        Style::default().fg(palette.overlay0),
+    )))
+    .wrap(Wrap { trim: true });
+    // Borders take two columns and the body is indented under the title dot.
+    let body_lines = if body.is_empty() {
+        0
+    } else {
+        u16::try_from(body_paragraph.line_count(width.saturating_sub(4)))
+            .unwrap_or(u16::MAX)
+            .clamp(1, NOTIFICATION_CARD_MAX_BODY_LINES)
+    };
+    let height = body_lines.saturating_add(3).min(area.height);
     let x = match position {
         crate::config::ToastHerdrPosition::TopLeft
         | crate::config::ToastHerdrPosition::BottomLeft => area.x,
@@ -159,17 +177,13 @@ pub(super) fn render_notification_card(
         ),
     ]))
     .render(Rect::new(inner.x, inner.y, inner.width, 1), buffer);
-    if !body.is_empty() && inner.height > 1 {
-        Paragraph::new(Line::from(Span::styled(
-            body,
-            Style::default().fg(palette.overlay0),
-        )))
-        .render(
+    if body_lines > 0 && inner.height > 1 {
+        body_paragraph.render(
             Rect::new(
                 inner.x.saturating_add(2),
                 inner.y + 1,
                 inner.width.saturating_sub(2),
-                1,
+                inner.height - 1,
             ),
             buffer,
         );

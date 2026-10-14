@@ -10,11 +10,11 @@ use crate::api::schema::{
     PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
     PaneProcessInfoProcess, PaneReadParams, PaneReadResult, PaneReleaseAgentParams,
     PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
-    PaneScrollParams, PaneSelectionReadParams, PaneSendInputParams, PaneSendKeysParams,
-    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult,
-    PaneTarget, PaneTextPoint, PaneTextRange, PaneZoomMode, PaneZoomParams, PaneZoomReason,
-    PaneZoomResult, ResponseResult,
+    PaneReportMetadataParams, PaneRepositionParams, PaneRepositionReason, PaneRepositionResult,
+    PaneRepositionSide, PaneResizeParams, PaneResizeReason, PaneResizeResult, PaneScrollParams,
+    PaneSelectionReadParams, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
+    PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneTextPoint,
+    PaneTextRange, PaneZoomMode, PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
 };
 use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
 use crate::app::App;
@@ -938,6 +938,87 @@ impl App {
                     source_pane_id: source_public_id,
                     target_pane_id: target_public_id,
                     focused_pane_id,
+                    layout,
+                },
+            },
+        )
+    }
+
+    pub(super) fn handle_pane_reposition(
+        &mut self,
+        id: String,
+        params: PaneRepositionParams,
+    ) -> String {
+        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&params.tab_id) else {
+            return encode_error(id, "tab_not_found", "expected tab not found");
+        };
+        let Some((source_ws, source)) = self.parse_pane_id(&params.source_pane_id) else {
+            return encode_error(id, "pane_not_found", "source pane not found");
+        };
+        let Some((target_ws, target)) = self.parse_pane_id(&params.target_pane_id) else {
+            return encode_error(id, "pane_not_found", "target pane not found");
+        };
+        if source_ws != ws_idx
+            || target_ws != ws_idx
+            || self.state.workspaces[ws_idx].find_tab_index_for_pane(source) != Some(tab_idx)
+            || self.state.workspaces[ws_idx].find_tab_index_for_pane(target) != Some(tab_idx)
+        {
+            return encode_error(
+                id,
+                "pane_tab_mismatch",
+                "panes must belong to the expected tab",
+            );
+        }
+        if self.state.workspaces[ws_idx].tabs[tab_idx].zoomed {
+            return encode_error(
+                id,
+                "pane_tab_zoomed",
+                "cannot reposition panes in a zoomed tab",
+            );
+        }
+        // Resolve the response context before changing anything. Only the pure
+        // tree changes below; pane storage, runtime ownership and focus stay put.
+        let Some(source_pane_id) = self.public_pane_id(ws_idx, source) else {
+            return encode_error(id, "pane_not_found", "source pane not found");
+        };
+        let Some(target_pane_id) = self.public_pane_id(ws_idx, target) else {
+            return encode_error(id, "pane_not_found", "target pane not found");
+        };
+        if self.pane_layout_snapshot(ws_idx, tab_idx).is_none() {
+            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
+        }
+        let side = match params.side {
+            PaneRepositionSide::Left => crate::layout::PanePlacement::Left,
+            PaneRepositionSide::Right => crate::layout::PanePlacement::Right,
+            PaneRepositionSide::Above => crate::layout::PanePlacement::Above,
+            PaneRepositionSide::Below => crate::layout::PanePlacement::Below,
+        };
+        let changed = self.state.workspaces[ws_idx].tabs[tab_idx]
+            .layout
+            .reposition_pane(source, target, side);
+        let reason = if source == target {
+            Some(PaneRepositionReason::SamePane)
+        } else if !changed {
+            Some(PaneRepositionReason::Unchanged)
+        } else {
+            None
+        };
+        let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
+            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
+        };
+        if changed {
+            self.state.mark_session_dirty();
+            self.schedule_session_save();
+            self.emit_layout_updated_snapshot(layout.clone());
+        }
+        encode_success(
+            id,
+            ResponseResult::PaneReposition {
+                reposition: PaneRepositionResult {
+                    changed,
+                    reason,
+                    source_pane_id,
+                    target_pane_id,
                     layout,
                 },
             },
@@ -2319,6 +2400,10 @@ fn invalid_agent(id: String) -> String {
 fn validate_optional_resume_argv(argv: Option<&[String]>) -> Result<(), String> {
     argv.map_or(Ok(()), crate::agent_resume::validate_resume_argv)
 }
+
+#[cfg(test)]
+#[path = "reposition_tests.rs"]
+mod reposition_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1941,12 +1941,26 @@ async fn run_client_loop(
                             |shell| {
                                 if completed.generation == generation
                                     && shell.endpoint_is_active(&completed.endpoint_id)
+                                    && completed.late
+                                {
+                                    (
+                                        shell.handle_late_endpoint_result(
+                                            &completed.boot_id,
+                                            &completed.request_id,
+                                            completed.result,
+                                        ),
+                                        Vec::new(),
+                                    )
+                                } else if completed.generation == generation
+                                    && shell.endpoint_is_active(&completed.endpoint_id)
                                 {
                                     shell.handle_endpoint_result(
                                         &completed.boot_id,
                                         &completed.request_id,
                                         completed.result,
                                     )
+                                } else if completed.late {
+                                    (false, Vec::new())
                                 } else {
                                     (
                                         shell.cancel_endpoint_request(&completed.request_id),

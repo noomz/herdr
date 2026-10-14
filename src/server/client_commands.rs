@@ -255,9 +255,77 @@ mod tests {
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
 
+        for (method, expected_digest) in &expected {
+            assert_eq!(
+                actual.get(method),
+                Some(expected_digest),
+                "existing endpoint method {method} changed shape or disappeared; add load-bearing behavior as a new advertised method or explicitly gate new fields"
+            );
+        }
+        let additive_methods: Vec<&str> = actual
+            .keys()
+            .filter(|method| !expected.contains_key(*method))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(additive_methods, ["pane.move", "pane.reposition"]);
+    }
+
+    #[test]
+    fn reposition_endpoint_requires_explicit_ids_and_supports_exactly_four_sides() {
+        let params = serde_json::json!({
+            "source_pane_id": "w1:p1",
+            "target_pane_id": "w1:p2",
+            "tab_id": "w1:t1",
+            "side": "left",
+        });
+        let decode = |params| {
+            serde_json::from_value::<crate::api::schema::Request>(serde_json::json!({
+                "id": "reposition-1",
+                "method": "pane.reposition",
+                "params": params,
+            }))
+        };
+        for side in ["left", "right", "above", "below"] {
+            let mut params = params.clone();
+            params["side"] = side.into();
+            let request = decode(params).expect("supported reposition side");
+            assert!(matches!(request.method, Method::PaneReposition(_)));
+            assert!(supports_client_shell_method(&request.method));
+        }
+        for field in ["source_pane_id", "target_pane_id", "tab_id", "side"] {
+            let mut params = params.clone();
+            params.as_object_mut().expect("params object").remove(field);
+            assert!(decode(params).is_err(), "{field} must be required");
+        }
+        let mut invalid = params;
+        invalid["side"] = "horizontal".into();
+        assert!(decode(invalid).is_err());
+
+        let schema = serde_json::to_value(schemars::schema_for!(
+            crate::api::schema::PaneRepositionParams
+        ))
+        .expect("reposition params schema");
+        let fields: BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .expect("reposition properties")
+            .keys()
+            .map(String::as_str)
+            .collect();
         assert_eq!(
-            actual, expected,
-            "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"
+            fields,
+            BTreeSet::from(["source_pane_id", "target_pane_id", "tab_id", "side"])
+        );
+        let side_schema = &schema["properties"]["side"];
+        let side_schema = side_schema["$ref"]
+            .as_str()
+            .map_or(side_schema, |reference| {
+                schema
+                    .pointer(reference.strip_prefix('#').expect("local schema reference"))
+                    .expect("side schema definition")
+            });
+        assert_eq!(
+            side_schema["enum"],
+            serde_json::json!(["left", "right", "above", "below"])
         );
     }
 

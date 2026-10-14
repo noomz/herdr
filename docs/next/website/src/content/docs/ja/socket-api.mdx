@@ -213,6 +213,16 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 
 入れ替えは同じタブ内に限られます。分割の形、分割比率、ペイン id、実行中のプロセスを保存します。レスポンスは `type: "pane_swap"` で、`changed`、任意の `reason`、`source_pane_id`、任意の `target_pane_id`、`focused_pane_id`、`layout` を含みます。reason の値は `no_neighbor`、`same_pane`、`not_found`、`cross_tab` です。タブがズームされている場合、入れ替えはズームを維持したまま隠れた全タブレイアウトを変更します。
 
+`pane.reposition` は、同じタブ内の別のペインの隣に既存のペインを配置します:
+
+```json
+{"id":"req_reposition","method":"pane.reposition","params":{"source_pane_id":"w1:p1","target_pane_id":"w1:p2","tab_id":"w1:t1","side":"left"}}
+```
+
+4 つのフィールドはすべて必須です。`side` は `left`、`right`、`above`、`below` のいずれかです。実行時に両方のペインが指定した `tab_id` に属している必要があります。移動元を元の位置から取り除いて親の分割を縮約し、移動先を均等に分割します。他の分割比率、ペインとターミナルの ID、プロセス、メタデータ、フォーカスは保持されます。
+
+レスポンスは `type: "pane_reposition"` で、`reposition` オブジェクトに `changed`、任意の `reason`、`source_pane_id`、`target_pane_id`、`layout` を含みます。同じペインなら `reason: "same_pane"`、ツリーが完全に同じなら `reason: "unchanged"` を返します。存在しないペインやタブ、タブの不一致、不正な方向、ズーム中のタブはエラーとなり、レイアウトは変わりません。変更時には `layout.updated` を 1 回発行し、セッションの保存を予約します。エンドポイントクライアントは、サーバーが `pane.reposition` を公開していることを確認してから呼び出してください。
+
 `pane.move` は、実行中のペインを別のタブ、新しいタブ、または新しいワークスペースに移動します:
 
 ```json
@@ -221,7 +231,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 {"id":"req_move_new_workspace","method":"pane.move","params":{"pane_id":"w1:p2","destination":{"type":"new_workspace","label":"logs","tab_label":"main"},"focus":true}}
 ```
 
-既存タブへの移動には `split: "right" | "down"` が必要です。`target_pane_id` は任意で、デフォルトは移動先タブのフォーカス中ペインです。同じタブ内のレイアウト変更は引き続き `pane.swap` です。元のタブへの移動は `reason: "same_tab"` 付きで `changed: false` を返します。ズームされた移動元/移動先タブを含む移動は `reason: "zoomed_tab"` 付きで `changed: false` を返します。
+既存タブへの移動には `split: "right" | "down"` が必要です。`target_pane_id` は任意で、デフォルトは移動先タブのフォーカス中ペインです。同じタブ内のレイアウト変更には `pane.swap` または `pane.reposition` を使います。元のタブへの移動は `reason: "same_tab"` 付きで `changed: false` を返します。ズームされた移動元/移動先タブを含む移動は `reason: "zoomed_tab"` 付きで `changed: false` を返します。
 
 レスポンスは `type: "pane_move"` で、`changed`、任意の `reason`、`previous_pane_id`、`previous_workspace_id`、`previous_tab_id`、移動された `pane`、任意の `source_layout`、`target_layout`、任意の作成されたワークスペース/タブのレコード、任意の閉じられたワークスペース/タブの id、`focused_pane_id` を含みます。ワークスペースをまたぐ移動では、内部のペインとターミナルは生きたまま、移動先ワークスペースで新しい公開ペイン id が割り当てられます。購読者は `pane.moved` を購読できます。Herdr は移動されたターミナルプロセスについて偽のペインの close/create イベントを発行しません。
 

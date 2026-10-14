@@ -1,10 +1,21 @@
+use super::rearrangement::ClientPaneTargetOperation;
 use super::*;
 
 impl ClientContextMenuOverlay {
     pub(super) fn items(&self) -> Vec<ClientContextMenuItem> {
         use ClientContextMenuAction as Action;
 
-        let item = |label, action| ClientContextMenuItem { label, action };
+        let item = |label: &'static str, action| ClientContextMenuItem {
+            label: label.to_owned(),
+            action,
+            disabled_reason: None,
+        };
+        let disabled =
+            |label: &'static str, action, reason: Option<&'static str>| ClientContextMenuItem {
+                label: reason.map_or_else(|| label.to_owned(), |why| format!("{label} — {why}")),
+                action,
+                disabled_reason: reason,
+            };
         match &self.target {
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
                 vec![item("Rename", Action::Rename), item("Close", Action::Close)]
@@ -52,6 +63,7 @@ impl ClientContextMenuOverlay {
             ],
             ClientContextMenuTarget::Pane {
                 source_pane_id,
+                rearrangement,
                 has_manual_label,
                 right_click_passthrough,
                 ..
@@ -61,8 +73,40 @@ impl ClientContextMenuOverlay {
                     items.push(item("Clear pane name", Action::ClearPaneName));
                 }
                 if source_pane_id.is_some() {
-                    items.push(item("Swap with focused pane", Action::SwapWithFocusedPane));
+                    items.push(disabled(
+                        "Swap with focused pane",
+                        Action::SwapWithFocusedPane,
+                        rearrangement.swap_reason,
+                    ));
                 }
+                items.extend([
+                    disabled("Swap pane…", Action::SwapPane, rearrangement.swap_reason),
+                    disabled(
+                        "Place pane left of…",
+                        Action::PlacePaneLeft,
+                        rearrangement.reposition_reason,
+                    ),
+                    disabled(
+                        "Place pane right of…",
+                        Action::PlacePaneRight,
+                        rearrangement.reposition_reason,
+                    ),
+                    disabled(
+                        "Place pane above…",
+                        Action::PlacePaneAbove,
+                        rearrangement.reposition_reason,
+                    ),
+                    disabled(
+                        "Place pane below…",
+                        Action::PlacePaneBelow,
+                        rearrangement.reposition_reason,
+                    ),
+                    disabled(
+                        "Move to new tab",
+                        Action::MovePaneNewTab,
+                        rearrangement.move_reason,
+                    ),
+                ]);
                 items.extend([
                     item("Split right", Action::SplitRight),
                     item("Split down", Action::SplitDown),
@@ -120,6 +164,7 @@ impl ClientShellState {
             x,
             y,
             highlighted: 0,
+            scroll: 0,
         }));
     }
 
@@ -139,6 +184,7 @@ impl ClientShellState {
             x,
             y,
             highlighted: 0,
+            scroll: 0,
         }));
     }
 
@@ -149,6 +195,20 @@ impl ClientShellState {
         let Some(pane) = snapshot.panes.iter().find(|pane| pane.pane_id == pane_id) else {
             return;
         };
+        let workspace_id = pane.workspace_id.clone();
+        let tab_id = pane.tab_id.clone();
+        let has_manual_label = pane.label.is_some();
+        let right_click_passthrough = pane.right_click_passthrough;
+        let pane_count = snapshot
+            .panes
+            .iter()
+            .filter(|candidate| candidate.tab_id == tab_id)
+            .count();
+        let zoomed = snapshot
+            .tabs
+            .iter()
+            .find(|tab| tab.tab_id == tab_id)
+            .is_some_and(|tab| tab.zoomed);
         let source_pane_id = snapshot
             .focused_pane_id
             .clone()
@@ -156,15 +216,35 @@ impl ClientShellState {
         self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
             target: ClientContextMenuTarget::Pane {
                 pane_id,
-                workspace_id: pane.workspace_id.clone(),
+                workspace_id,
+                tab_id: tab_id.clone(),
                 source_pane_id,
-                has_manual_label: pane.label.is_some(),
-                right_click_passthrough: pane.right_click_passthrough,
+                rearrangement: super::rearrangement::availability(self, pane_count, zoomed),
+                has_manual_label,
+                right_click_passthrough,
             },
             x,
             y,
             highlighted: 0,
+            scroll: 0,
         }));
+    }
+
+    pub(super) fn open_focused_pane_menu(&mut self) {
+        let Some(pane_id) = self
+            .snapshot
+            .as_deref()
+            .and_then(|snapshot| snapshot.focused_pane_id.clone())
+        else {
+            return;
+        };
+        let (x, y) = self
+            .hits
+            .panes
+            .iter()
+            .find(|hit| hit.pane_id == pane_id)
+            .map_or((0, 0), |hit| (hit.rect.x, hit.rect.y));
+        self.open_pane_context_menu(pane_id, x, y);
     }
 
     pub(super) fn move_context_menu_selection(&mut self, delta: isize) {
@@ -175,8 +255,16 @@ impl ClientShellState {
         if item_count == 0 {
             return;
         }
-        menu.highlighted = (menu.highlighted as isize + delta)
-            .clamp(0, item_count.saturating_sub(1) as isize) as usize;
+        let direction = delta.signum();
+        let mut next = menu.highlighted;
+        for _ in 0..item_count {
+            next = (next as isize + direction).clamp(0, item_count.saturating_sub(1) as isize)
+                as usize;
+            if menu.items()[next].disabled_reason.is_none() || next == menu.highlighted {
+                break;
+            }
+        }
+        menu.highlighted = next;
     }
 
     pub(super) fn activate_context_menu_item(
@@ -184,6 +272,17 @@ impl ClientShellState {
         index: usize,
         outcome: &mut ClientShellInput,
     ) {
+        let disabled = self.overlay.as_ref().and_then(|overlay| match overlay {
+            ClientShellOverlay::ContextMenu(menu) => menu
+                .items()
+                .get(index)
+                .and_then(|item| item.disabled_reason),
+            _ => None,
+        });
+        if disabled.is_some() {
+            outcome.repaint = true;
+            return;
+        }
         let Some(ClientShellOverlay::ContextMenu(menu)) = self.overlay.take() else {
             return;
         };
@@ -204,12 +303,14 @@ impl ClientShellState {
             ClientContextMenuTarget::Pane {
                 pane_id,
                 workspace_id,
+                tab_id,
                 source_pane_id,
                 right_click_passthrough,
                 ..
             } => self.activate_pane_context_action(
                 pane_id,
                 workspace_id,
+                tab_id,
                 source_pane_id,
                 right_click_passthrough,
                 action,
@@ -359,15 +460,72 @@ impl ClientShellState {
         &mut self,
         pane_id: String,
         workspace_id: String,
+        tab_id: String,
         source_pane_id: Option<String>,
         right_click_passthrough: bool,
         action: ClientContextMenuAction,
         outcome: &mut ClientShellInput,
     ) {
         use crate::api::schema::{
-            Method, PaneInputSetParams, PaneRenameParams, PaneRightClickTarget, PaneSplitParams,
-            PaneSwapParams, PaneTarget, PaneZoomMode, PaneZoomParams, SplitDirection,
+            Method, PaneInputSetParams, PaneMoveDestination, PaneMoveParams, PaneRenameParams,
+            PaneRightClickTarget, PaneSplitParams, PaneSwapParams, PaneTarget, PaneZoomMode,
+            PaneZoomParams, SplitDirection,
         };
+
+        if matches!(
+            action,
+            ClientContextMenuAction::SwapWithFocusedPane
+                | ClientContextMenuAction::SwapPane
+                | ClientContextMenuAction::PlacePaneLeft
+                | ClientContextMenuAction::PlacePaneRight
+                | ClientContextMenuAction::PlacePaneAbove
+                | ClientContextMenuAction::PlacePaneBelow
+                | ClientContextMenuAction::MovePaneNewTab
+        ) {
+            let Some(snapshot) = self.snapshot.as_deref() else {
+                return;
+            };
+            if !snapshot.panes.iter().any(|pane| {
+                pane.pane_id == pane_id
+                    && pane.workspace_id == workspace_id
+                    && pane.tab_id == tab_id
+            }) {
+                return;
+            }
+            let pane_count = snapshot
+                .panes
+                .iter()
+                .filter(|pane| pane.tab_id == tab_id)
+                .count();
+            let zoomed = snapshot
+                .tabs
+                .iter()
+                .find(|tab| tab.tab_id == tab_id && tab.workspace_id == workspace_id)
+                .is_none_or(|tab| tab.zoomed);
+            let availability = super::rearrangement::availability(self, pane_count, zoomed);
+            let disabled = match action {
+                ClientContextMenuAction::SwapWithFocusedPane
+                | ClientContextMenuAction::SwapPane => availability.swap_reason,
+                ClientContextMenuAction::PlacePaneLeft
+                | ClientContextMenuAction::PlacePaneRight
+                | ClientContextMenuAction::PlacePaneAbove
+                | ClientContextMenuAction::PlacePaneBelow => availability.reposition_reason,
+                ClientContextMenuAction::MovePaneNewTab => availability.move_reason,
+                _ => None,
+            };
+            let captured_source_invalid = action == ClientContextMenuAction::SwapWithFocusedPane
+                && source_pane_id.as_ref().is_none_or(|source| {
+                    !snapshot.panes.iter().any(|pane| {
+                        pane.pane_id == *source
+                            && pane.workspace_id == workspace_id
+                            && pane.tab_id == tab_id
+                    })
+                });
+            if disabled.is_some() || captured_source_invalid {
+                outcome.repaint = true;
+                return;
+            }
+        }
 
         match action {
             ClientContextMenuAction::RenamePane => {
@@ -402,13 +560,47 @@ impl ClientShellState {
                         }),
                         outcome,
                     );
-                    self.push_endpoint_method(
-                        Method::PaneFocus(PaneTarget {
-                            pane_id: source_pane_id,
-                        }),
-                        outcome,
-                    );
                 }
+            }
+            ClientContextMenuAction::SwapPane
+            | ClientContextMenuAction::PlacePaneLeft
+            | ClientContextMenuAction::PlacePaneRight
+            | ClientContextMenuAction::PlacePaneAbove
+            | ClientContextMenuAction::PlacePaneBelow => {
+                let operation = match action {
+                    ClientContextMenuAction::SwapPane => ClientPaneTargetOperation::Swap,
+                    ClientContextMenuAction::PlacePaneLeft => ClientPaneTargetOperation::Place(
+                        crate::api::schema::PaneRepositionSide::Left,
+                    ),
+                    ClientContextMenuAction::PlacePaneRight => ClientPaneTargetOperation::Place(
+                        crate::api::schema::PaneRepositionSide::Right,
+                    ),
+                    ClientContextMenuAction::PlacePaneAbove => ClientPaneTargetOperation::Place(
+                        crate::api::schema::PaneRepositionSide::Above,
+                    ),
+                    ClientContextMenuAction::PlacePaneBelow => ClientPaneTargetOperation::Place(
+                        crate::api::schema::PaneRepositionSide::Below,
+                    ),
+                    _ => unreachable!("pane target action"),
+                };
+                self.open_pane_target_selector(pane_id, workspace_id, tab_id, operation);
+            }
+            ClientContextMenuAction::MovePaneNewTab => {
+                let source_pane_id = pane_id.clone();
+                self.push_pane_rearrangement_method(
+                    Method::PaneMove(PaneMoveParams {
+                        pane_id,
+                        destination: PaneMoveDestination::NewTab {
+                            workspace_id: Some(workspace_id),
+                            label: None,
+                        },
+                        focus: false,
+                    }),
+                    source_pane_id,
+                    None,
+                    PaneRearrangementFollow::MoveNewTab,
+                    outcome,
+                );
             }
             ClientContextMenuAction::SplitRight | ClientContextMenuAction::SplitDown => {
                 self.push_endpoint_method(

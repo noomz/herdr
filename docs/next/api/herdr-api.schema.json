@@ -3084,6 +3084,39 @@
           ],
           "type": "object"
         },
+        "PaneRepositionParams": {
+          "properties": {
+            "side": {
+              "$ref": "#/schemas/request/$defs/PaneRepositionSide"
+            },
+            "source_pane_id": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "target_pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source_pane_id",
+            "target_pane_id",
+            "tab_id",
+            "side"
+          ],
+          "type": "object"
+        },
+        "PaneRepositionSide": {
+          "description": "Placement is request-only; published split-direction codecs remain unchanged.",
+          "enum": [
+            "left",
+            "right",
+            "above",
+            "below"
+          ],
+          "type": "string"
+        },
         "PaneResizeParams": {
           "properties": {
             "amount": {
@@ -5457,6 +5490,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneSwapParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.reposition",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneRepositionParams"
             }
           },
           "required": [
@@ -8383,6 +8432,46 @@
           ],
           "type": "object"
         },
+        "PaneRepositionReason": {
+          "enum": [
+            "same_pane",
+            "unchanged"
+          ],
+          "type": "string"
+        },
+        "PaneRepositionResult": {
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "layout": {
+              "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PaneRepositionReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source_pane_id": {
+              "type": "string"
+            },
+            "target_pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "changed",
+            "source_pane_id",
+            "target_pane_id",
+            "layout"
+          ],
+          "type": "object"
+        },
         "PaneResizeReason": {
           "enum": [
             "unchanged"
@@ -9603,6 +9692,22 @@
               "required": [
                 "type",
                 "swap"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "reposition": {
+                  "$ref": "#/schemas/success_response/$defs/PaneRepositionResult"
+                },
+                "type": {
+                  "const": "pane_reposition",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "reposition"
               ],
               "type": "object"
             },

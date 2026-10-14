@@ -69,7 +69,17 @@ pub enum NavDirection {
     Down,
 }
 
+/// Side of a target pane on which an existing pane is placed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanePlacement {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
 /// A node in the BSP tree. Public for serialization.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Pane(PaneId),
     Split {
@@ -287,6 +297,28 @@ impl TileLayout {
             return false;
         }
         swap_pane_ids(&mut self.root, first, second);
+        true
+    }
+
+    /// Reposition an existing leaf beside another, preserving focus and history.
+    /// Build the complete candidate before replacing the tree so rejected and
+    /// structurally unchanged requests leave the original layout untouched.
+    pub fn reposition_pane(&mut self, source: PaneId, target: PaneId, side: PanePlacement) -> bool {
+        if source == target {
+            return false;
+        }
+        let ids = self.pane_ids();
+        if !ids.contains(&source) || !ids.contains(&target) {
+            return false;
+        }
+        let Some(mut candidate) = remove_pane(self.root.clone(), source) else {
+            return false;
+        };
+        place_pane_at(&mut candidate, target, source, side);
+        if candidate == self.root {
+            return false;
+        }
+        self.root = candidate;
         true
     }
 
@@ -622,6 +654,30 @@ fn split_node(target: PaneId, direction: Direction, new_id: PaneId, split_ratio:
         ratio: split_ratio,
         first: Box::new(Node::Pane(target)),
         second: Box::new(Node::Pane(new_id)),
+    }
+}
+
+fn place_pane_at(node: &mut Node, target: PaneId, source: PaneId, side: PanePlacement) {
+    match node {
+        Node::Pane(id) if *id == target => {
+            let (direction, first, second) = match side {
+                PanePlacement::Left => (Direction::Horizontal, source, target),
+                PanePlacement::Right => (Direction::Horizontal, target, source),
+                PanePlacement::Above => (Direction::Vertical, source, target),
+                PanePlacement::Below => (Direction::Vertical, target, source),
+            };
+            *node = Node::Split {
+                direction,
+                ratio: 0.5,
+                first: Box::new(Node::Pane(first)),
+                second: Box::new(Node::Pane(second)),
+            };
+        }
+        Node::Pane(_) => {}
+        Node::Split { first, second, .. } => {
+            place_pane_at(first, target, source, side);
+            place_pane_at(second, target, source, side);
+        }
     }
 }
 
@@ -990,6 +1046,99 @@ mod tests {
         assert_eq!(pane_rects(&layout), before_rects);
         assert_eq!(split_snapshot(&layout), before_splits);
         assert_eq!(layout.focused(), before_focus);
+    }
+
+    #[test]
+    fn reposition_pane_all_sides_collapse_source_parent_before_splitting_target() {
+        for (side, direction, first, second) in [
+            (PanePlacement::Left, Direction::Horizontal, pane(3), pane(2)),
+            (
+                PanePlacement::Right,
+                Direction::Horizontal,
+                pane(2),
+                pane(3),
+            ),
+            (PanePlacement::Above, Direction::Vertical, pane(3), pane(2)),
+            (PanePlacement::Below, Direction::Vertical, pane(2), pane(3)),
+        ] {
+            let mut layout = sample_layout();
+            assert!(layout.reposition_pane(pane(3), pane(2), side));
+            assert_eq!(
+                layout.root(),
+                &Node::Split {
+                    direction: Direction::Horizontal,
+                    ratio: 0.3,
+                    first: Box::new(Node::Pane(pane(1))),
+                    second: Box::new(Node::Split {
+                        direction: Direction::Vertical,
+                        ratio: 0.6,
+                        first: Box::new(Node::Split {
+                            direction,
+                            ratio: 0.5,
+                            first: Box::new(Node::Pane(first)),
+                            second: Box::new(Node::Pane(second)),
+                        }),
+                        second: Box::new(Node::Pane(pane(4))),
+                    }),
+                }
+            );
+            let mut ids = layout.pane_ids();
+            ids.sort_by_key(|id| id.raw());
+            assert_eq!(ids, vec![pane(1), pane(2), pane(3), pane(4)]);
+        }
+    }
+
+    #[test]
+    fn reposition_pane_same_missing_and_unchanged_leave_exact_state_intact() {
+        let mut layout = sample_layout();
+        layout.focus_pane(pane(3));
+        assert!(layout.set_ratio_at(&[true, true], 0.5));
+        let before = layout.root().clone();
+        let focus = layout.focus;
+        let prev_focus = layout.prev_focus;
+        for (source, target) in [(3, 3), (3, 99), (99, 3), (3, 4)] {
+            assert!(!layout.reposition_pane(pane(source), pane(target), PanePlacement::Left));
+            assert_eq!(layout.root(), &before);
+            assert_eq!(layout.focus, focus);
+            assert_eq!(layout.prev_focus, prev_focus);
+        }
+    }
+
+    #[test]
+    fn reposition_pane_preserves_current_and_previous_focus_when_moving_either() {
+        for source in [pane(2), pane(3)] {
+            let mut layout = sample_layout();
+            layout.focus_pane(pane(3));
+            assert_eq!(layout.prev_focus, Some(pane(2)));
+            assert!(layout.reposition_pane(source, pane(1), PanePlacement::Below));
+            assert_eq!(layout.focus, pane(3));
+            assert_eq!(layout.prev_focus, Some(pane(2)));
+            // Retained history remains usable by the ordinary close operation.
+            assert!(layout.close_focused());
+            assert_eq!(layout.focus, pane(2));
+        }
+    }
+
+    #[test]
+    fn reposition_pane_compares_and_preserves_unrounded_ratios() {
+        let mut layout = sample_layout();
+        assert!(layout.set_ratio_at(&[], 0.30001));
+        assert!(layout.set_ratio_at(&[true], 0.60001));
+        assert!(layout.set_ratio_at(&[true, true], 0.50001));
+
+        // Pixel geometry and four-decimal ratio strings cannot detect this edit.
+        let rects = pane_rects(&layout);
+        assert!(layout.reposition_pane(pane(3), pane(4), PanePlacement::Left));
+        assert_eq!(pane_rects(&layout), rects);
+        assert_eq!(
+            split_snapshot(&layout),
+            vec![
+                (Direction::Horizontal, 0.30001),
+                (Direction::Vertical, 0.60001),
+                (Direction::Horizontal, 0.5),
+            ]
+        );
+        assert!(!layout.reposition_pane(pane(3), pane(4), PanePlacement::Left));
     }
 
     #[test]

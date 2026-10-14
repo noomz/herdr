@@ -29,6 +29,7 @@ pub(crate) fn render_tab_bar(
         })
         .collect::<Vec<_>>();
     let content = tab_bar_content_area(snapshot, area);
+    hits.tab_bar = content;
     let mouse_chrome = config.mouse_capture;
     let new_tab_width = if mouse_chrome { NEW_TAB_WIDTH } else { 0 };
     let desired_total = desired_widths

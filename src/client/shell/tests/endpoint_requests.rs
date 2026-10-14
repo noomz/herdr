@@ -295,6 +295,40 @@ fn local_selection_is_scheduled_ahead_of_a_full_event_queue() {
 }
 
 #[test]
+fn endpoint_activation_records_navigation_intent_before_handoff() {
+    use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
+    use crate::client::endpoint_commands::EndpointCommands;
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut endpoints = EndpointRegistry::new(
+        TestTransport { fail: false },
+        1,
+        EndpointNegotiation::default(),
+    );
+    let mut commands = EndpointCommands::default();
+    let mut scheduled = None;
+    crate::client::shell_runtime::dispatch_client_shell_actions(
+        vec![ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: None,
+        }],
+        &mut commands,
+        &mut endpoints,
+        Some(&mut state),
+        &mut Vec::new(),
+        &mut scheduled,
+    )
+    .unwrap();
+
+    assert_eq!(state.navigation_intent_generation, 1);
+    assert!(matches!(
+        scheduled,
+        Some(crate::client::ClientLoopEvent::ActivateEndpoint { .. })
+    ));
+}
+
+#[test]
 fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
     use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
     use crate::client::endpoint_commands::EndpointCommands;
@@ -371,33 +405,48 @@ fn stale_queued_request_is_cancelled_without_blocking_the_current_generation() {
 }
 
 #[test]
-fn cancelled_integration_install_does_not_queue_a_refresh() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.open_settings_overlay();
-    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() else {
-        panic!("settings overlay");
-    };
-    settings.installing_integrations = true;
-    state.pending_integration_installs = 1;
-    let mut outcome = ClientShellInput::default();
-    assert!(state.push_endpoint_method_with_kind(
-        crate::api::schema::Method::IntegrationInstall(
-            crate::api::schema::IntegrationInstallParams {
-                target: crate::api::schema::IntegrationTarget::Pi,
-            }
-        ),
-        PendingEndpointKind::IntegrationInstall,
-        &mut outcome,
-    ));
-    assert!(state.cancel_endpoint_request(request_id(&outcome.actions)));
-    assert!(state.pending_requests.is_empty());
-    assert_eq!(state.pending_integration_installs, 0);
-    assert!(matches!(
-        &state.overlay,
-        Some(ClientShellOverlay::Settings(settings))
-            if !settings.installing_integrations && !settings.loading_integrations
-    ));
+fn interrupted_integration_install_does_not_queue_a_refresh() {
+    for code in [
+        "endpoint_cancelled",
+        "endpoint_timeout",
+        "endpoint_not_sent",
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state.open_settings_overlay();
+        let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() else {
+            panic!("settings overlay");
+        };
+        settings.installing_integrations = true;
+        state.pending_integration_installs = 1;
+        let mut outcome = ClientShellInput::default();
+        assert!(state.push_endpoint_method_with_kind(
+            crate::api::schema::Method::IntegrationInstall(
+                crate::api::schema::IntegrationInstallParams {
+                    target: crate::api::schema::IntegrationTarget::Pi,
+                }
+            ),
+            PendingEndpointKind::IntegrationInstall,
+            &mut outcome,
+        ));
+        let (repaint, follow_up) = state.handle_endpoint_result(
+            "boot-1",
+            request_id(&outcome.actions),
+            Err(ClientShellEndpointError {
+                code: Some(code.into()),
+                message: "interrupted".into(),
+            }),
+        );
+        assert!(repaint);
+        assert!(follow_up.is_empty(), "{code} queued a refresh");
+        assert!(state.pending_requests.is_empty());
+        assert_eq!(state.pending_integration_installs, 0);
+        assert!(matches!(
+            &state.overlay,
+            Some(ClientShellOverlay::Settings(settings))
+                if !settings.installing_integrations && !settings.loading_integrations
+        ));
+    }
 }
 
 #[test]

@@ -161,6 +161,20 @@ impl ClientShellState {
 
     pub(crate) fn mark_endpoint_disconnected(&mut self, endpoint_id: &ClientEndpointId) {
         self.set_endpoint_status(endpoint_id, ClientEndpointStatus::Reconnecting);
+        if self
+            .timed_out_endpoint
+            .as_ref()
+            .is_some_and(|pending| &pending.endpoint_id == endpoint_id)
+        {
+            self.timed_out_endpoint = None;
+            if self
+                .visible_endpoint_notice
+                .as_ref()
+                .is_some_and(|notice| notice.key.kind == ClientEndpointNoticeKind::Timeout)
+            {
+                self.visible_endpoint_notice = None;
+            }
+        }
         if endpoint_id == &self.active_endpoint_id {
             let pending = self.pending_requests.keys().cloned().collect::<Vec<_>>();
             for request_id in pending {
@@ -202,6 +216,9 @@ impl ClientShellState {
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
         {
             endpoint.methods = methods;
+        }
+        if endpoint_id == &self.active_endpoint_id {
+            self.reconcile_pane_rearrangement_drag();
         }
     }
 
@@ -496,6 +513,18 @@ impl ClientShellState {
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .and_then(|endpoint| endpoint.methods.as_ref())
             .is_none_or(|methods| methods.contains(crate::api::api_method_name(method)))
+    }
+
+    pub(super) fn advertises_endpoint_method(&self, method_name: &str) -> bool {
+        self.active_endpoint_methods()
+            .is_some_and(|methods| methods.contains(method_name))
+    }
+
+    pub(super) fn active_endpoint_methods(&self) -> Option<&HashSet<String>> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
+            .and_then(|endpoint| endpoint.methods.as_ref())
     }
 
     pub(super) fn focused_tab_count(&self) -> usize {

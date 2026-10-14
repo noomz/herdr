@@ -10,6 +10,7 @@ use super::endpoint::{ClientEndpointId, EndpointRegistry, EndpointSendOutcome};
 use super::shell::ClientShellEndpointError;
 
 const ENDPOINT_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_LATE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RETIRED_REQUESTS_PER_ENDPOINT: usize = 128;
 
 struct QueuedCommand {
@@ -24,6 +25,8 @@ struct InFlightCommand {
     request_id: String,
     response: Vec<u8>,
     sent_at: Instant,
+    timed_out: bool,
+    response_discarded: bool,
 }
 
 pub(super) struct EndpointCommandResult {
@@ -31,6 +34,7 @@ pub(super) struct EndpointCommandResult {
     pub(super) generation: u64,
     pub(super) boot_id: String,
     pub(super) request_id: String,
+    pub(super) late: bool,
     pub(super) result: Result<ResponseResult, ClientShellEndpointError>,
 }
 
@@ -75,16 +79,21 @@ impl EndpointCommands {
         generation: u64,
         boot_id: String,
         request: Box<Request>,
-    ) {
-        self.lanes
-            .entry(endpoint_id)
-            .or_default()
-            .queued
-            .push_back(QueuedCommand {
-                generation,
-                boot_id,
-                request,
-            });
+    ) -> bool {
+        let lane = self.lanes.entry(endpoint_id).or_default();
+        if lane
+            .in_flight
+            .as_ref()
+            .is_some_and(|command| command.timed_out)
+        {
+            return false;
+        }
+        lane.queued.push_back(QueuedCommand {
+            generation,
+            boot_id,
+            request,
+        });
+        true
     }
 
     pub(super) fn send_next(
@@ -125,6 +134,8 @@ impl EndpointCommands {
                 request_id,
                 response: Vec::new(),
                 sent_at: Instant::now(),
+                timed_out: false,
+                response_discarded: false,
             });
             break;
         }
@@ -169,31 +180,59 @@ impl EndpointCommands {
     }
 
     pub(super) fn expire(&mut self, now: Instant) -> Vec<EndpointCommandResult> {
-        self.lanes
-            .iter_mut()
-            .filter_map(|(endpoint_id, lane)| {
-                let command = lane.in_flight.as_ref()?;
-                if now.saturating_duration_since(command.sent_at) < ENDPOINT_COMMAND_TIMEOUT {
-                    return None;
-                }
-                let command = lane.in_flight.take().expect("checked in-flight command");
-                lane.retire((
-                    command.generation,
-                    command.boot_id.clone(),
-                    command.request_id.clone(),
-                ));
-                Some(EndpointCommandResult {
+        let mut expired = Vec::new();
+        for (endpoint_id, lane) in &mut self.lanes {
+            let Some(command) = lane.in_flight.as_mut() else {
+                continue;
+            };
+            if command.timed_out {
+                expired.extend(lane.queued.drain(..).map(|queued| EndpointCommandResult {
                     endpoint_id: endpoint_id.clone(),
-                    generation: command.generation,
-                    boot_id: command.boot_id,
-                    request_id: command.request_id,
+                    generation: queued.generation,
+                    boot_id: queued.boot_id,
+                    request_id: queued.request.id,
+                    late: false,
                     result: Err(ClientShellEndpointError {
-                        code: Some("endpoint_timeout".into()),
-                        message: "this server did not respond to the action".into(),
+                        code: Some("endpoint_not_sent".into()),
+                        message:
+                            "this action was not sent because the previous action timed out".into(),
                     }),
-                })
-            })
-            .collect()
+                }));
+                continue;
+            }
+            if now.saturating_duration_since(command.sent_at) < ENDPOINT_COMMAND_TIMEOUT {
+                continue;
+            }
+            command.timed_out = true;
+            if command.response.len() > MAX_LATE_RESPONSE_BYTES {
+                command.response.clear();
+                command.response_discarded = true;
+            }
+            expired.push(EndpointCommandResult {
+                endpoint_id: endpoint_id.clone(),
+                generation: command.generation,
+                boot_id: command.boot_id.clone(),
+                request_id: command.request_id.clone(),
+                late: false,
+                result: Err(ClientShellEndpointError {
+                    code: Some("endpoint_timeout".into()),
+                    message: "this server did not respond to the action".into(),
+                }),
+            });
+            expired.extend(lane.queued.drain(..).map(|queued| EndpointCommandResult {
+                endpoint_id: endpoint_id.clone(),
+                generation: queued.generation,
+                boot_id: queued.boot_id,
+                request_id: queued.request.id,
+                late: false,
+                result: Err(ClientShellEndpointError {
+                    code: Some("endpoint_not_sent".into()),
+                    message:
+                        "this action was not sent because the previous action timed out".into(),
+                }),
+            }));
+        }
+        expired
     }
 
     pub(super) fn receive_chunk(
@@ -225,18 +264,41 @@ impl EndpointCommands {
         {
             return Ok(None);
         }
-        in_flight.response.extend(data);
+        if in_flight.timed_out {
+            if !in_flight.response_discarded
+                && in_flight
+                    .response
+                    .len()
+                    .checked_add(data.len())
+                    .is_some_and(|size| size <= MAX_LATE_RESPONSE_BYTES)
+            {
+                in_flight.response.extend(data);
+            } else {
+                in_flight.response.clear();
+                in_flight.response_discarded = true;
+            }
+        } else {
+            in_flight.response.extend(data);
+        }
         if !final_chunk {
             return Ok(None);
         }
 
         let in_flight = lane.in_flight.take().expect("checked in-flight command");
-        let result = parse_response(&in_flight.request_id, &in_flight.response);
+        let result = if in_flight.response_discarded {
+            Err(ClientShellEndpointError {
+                code: Some("endpoint_late_response_too_large".into()),
+                message: "the late server response exceeded the safe response limit".into(),
+            })
+        } else {
+            parse_response(&in_flight.request_id, &in_flight.response)
+        };
         Ok(Some(EndpointCommandResult {
             endpoint_id: endpoint_id.clone(),
             generation: in_flight.generation,
             boot_id: in_flight.boot_id,
             request_id: in_flight.request_id,
+            late: in_flight.timed_out,
             result,
         }))
     }
@@ -316,6 +378,8 @@ mod tests {
                         request_id: "request-a".into(),
                         response: Vec::new(),
                         sent_at: Instant::now(),
+                        timed_out: false,
+                        response_discarded: false,
                     }),
                     ..EndpointCommandLane::default()
                 },
@@ -367,6 +431,7 @@ mod tests {
         assert_eq!(completed.generation, 1);
         assert_eq!(completed.boot_id, "boot-a");
         assert_eq!(completed.request_id, "request-a");
+        assert!(!completed.late);
         assert!(matches!(completed.result, Ok(ResponseResult::Ok {})));
         assert!(!has_in_flight(&commands));
     }
@@ -405,45 +470,128 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_endpoint_command_expires_and_releases_the_lane() {
+    fn timed_out_endpoint_command_quarantines_until_its_late_response() {
         let mut commands = commands_with_in_flight();
-        let expired = commands
-            .expire(std::time::Instant::now() + ENDPOINT_COMMAND_TIMEOUT)
-            .pop()
-            .expect("expired endpoint command");
+        commands
+            .lanes
+            .get_mut(&endpoint())
+            .unwrap()
+            .queued
+            .push_back(QueuedCommand {
+                generation: 1,
+                boot_id: "boot-a".into(),
+                request: Box::new(Request {
+                    id: "queued-before-timeout".into(),
+                    method: crate::api::schema::Method::WorkspaceList(
+                        crate::api::schema::EmptyParams::default(),
+                    ),
+                }),
+            });
+        let expired = commands.expire(Instant::now() + ENDPOINT_COMMAND_TIMEOUT);
 
-        assert_eq!(expired.endpoint_id, endpoint());
-        assert_eq!(expired.boot_id, "boot-a");
-        assert_eq!(expired.request_id, "request-a");
+        assert_eq!(expired.len(), 2);
+        assert_eq!(expired[0].endpoint_id, endpoint());
+        assert_eq!(expired[0].boot_id, "boot-a");
+        assert_eq!(expired[0].request_id, "request-a");
+        assert!(!expired[0].late);
         assert!(matches!(
-            expired.result,
+            &expired[0].result,
             Err(ClientShellEndpointError {
                 code: Some(code),
                 ..
             }) if code == "endpoint_timeout"
         ));
-        assert!(!has_in_flight(&commands));
+        assert!(matches!(
+            &expired[1].result,
+            Err(ClientShellEndpointError {
+                code: Some(code),
+                ..
+            }) if code == "endpoint_not_sent"
+        ));
+        assert!(has_in_flight(&commands));
         assert!(commands
-            .expire(std::time::Instant::now() + ENDPOINT_COMMAND_TIMEOUT)
+            .expire(Instant::now() + ENDPOINT_COMMAND_TIMEOUT)
             .is_empty());
+        assert!(!commands.enqueue(
+            endpoint(),
+            1,
+            "boot-a".into(),
+            Box::new(Request {
+                id: "queued-after-timeout".into(),
+                method: crate::api::schema::Method::WorkspaceList(
+                    crate::api::schema::EmptyParams::default(),
+                ),
+            }),
+        ));
         let late_response = serde_json::to_vec(&SuccessResponse {
             id: "request-a".into(),
             result: ResponseResult::Ok {},
         })
         .unwrap();
-        assert!(commands
+        let late = commands
             .receive_chunk(&endpoint(), 1, "boot-a", "request-a", true, late_response)
-            .expect("late retired response is ignored")
-            .is_none());
+            .unwrap()
+            .expect("late response settles quarantine");
+        assert!(late.late);
+        assert!(matches!(late.result, Ok(ResponseResult::Ok {})));
         assert!(!has_in_flight(&commands));
     }
 
     #[test]
-    fn endpoint_lanes_complete_independently() {
+    fn malformed_and_oversized_late_responses_settle_without_io_errors() {
+        let mut malformed = commands_with_in_flight();
+        malformed.expire(Instant::now() + ENDPOINT_COMMAND_TIMEOUT);
+        let malformed_result = malformed
+            .receive_chunk(
+                &endpoint(),
+                1,
+                "boot-a",
+                "request-a",
+                true,
+                b"not json".to_vec(),
+            )
+            .unwrap()
+            .expect("malformed late response settles quarantine");
+        assert!(malformed_result.late);
+        assert!(malformed_result.result.is_err());
+        assert!(!has_in_flight(&malformed));
+
+        let mut oversized = commands_with_in_flight();
+        oversized.expire(Instant::now() + ENDPOINT_COMMAND_TIMEOUT);
+        let oversized_result = oversized
+            .receive_chunk(
+                &endpoint(),
+                1,
+                "boot-a",
+                "request-a",
+                true,
+                vec![b'x'; MAX_LATE_RESPONSE_BYTES + 1],
+            )
+            .unwrap()
+            .expect("oversized late response settles quarantine");
+        assert!(oversized_result.late);
+        assert!(matches!(
+            oversized_result.result,
+            Err(ClientShellEndpointError {
+                code: Some(code),
+                ..
+            }) if code == "endpoint_late_response_too_large"
+        ));
+        assert!(!has_in_flight(&oversized));
+    }
+
+    #[test]
+    fn other_endpoint_lane_completes_while_one_lane_is_quarantined() {
         let remote = ClientEndpointId::Ssh(
             crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         );
         let mut commands = commands_with_in_flight();
+        commands
+            .lanes
+            .get_mut(&endpoint())
+            .and_then(|lane| lane.in_flight.as_mut())
+            .unwrap()
+            .timed_out = true;
         commands.lanes.insert(
             remote.clone(),
             EndpointCommandLane {
@@ -453,6 +601,8 @@ mod tests {
                     request_id: "request-b".into(),
                     response: Vec::new(),
                     sent_at: Instant::now(),
+                    timed_out: false,
+                    response_discarded: false,
                 }),
                 ..EndpointCommandLane::default()
             },
@@ -469,6 +619,7 @@ mod tests {
             .expect("remote response");
 
         assert_eq!(completed.endpoint_id, remote);
+        assert!(!completed.late);
         assert!(has_in_flight(&commands));
         assert!(commands
             .lanes

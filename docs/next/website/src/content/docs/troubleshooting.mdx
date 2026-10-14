@@ -12,6 +12,18 @@ herdr status
 
 Also record your operating system, outer terminal name and version, whether the session is local or remote, and whether tmux is involved.
 
+## A server action timed out
+
+A timeout does not prove an action failed: it may already have changed the session.
+Herdr stops sending new endpoint actions on that client connection and rejects
+queued actions that were not sent. Ordinary terminal input and Detach remain
+available. Other attached clients keep their own connections.
+
+Wait for the late response, or use your configured Detach shortcut (default
+`prefix+q`) and reattach to the same session. Reattachment creates a new
+connection and reads the current state. Check the layout before repeating the
+action. Herdr does not replay the timed-out request or navigate on a late result.
+
 ## The CJK IME window is misplaced or the cursor flickers on Windows
 
 Herdr defaults to a cell-drawn cursor on native Windows and WSL because native cursors can flicker, jump, or show stale positions while ConPTY-based multiplexers repaint the screen. A cell-drawn cursor cannot provide the native cursor anchor used by Korean, Japanese, and Chinese IME composition UI.

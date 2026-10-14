@@ -148,6 +148,11 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::PaneMenu {
+                    self.open_focused_pane_menu();
+                    outcome.repaint = true;
+                    return;
+                }
                 if action == crate::input::KeybindAction::WorkspacePicker {
                     self.pending_workspace_highlight = None;
                     self.mobile_switcher_scroll = 0;
@@ -317,6 +322,11 @@ impl ClientShellState {
         title: impl Into<String>,
         body: impl Into<String>,
     ) -> bool {
+        // Queued-unsent failures must not hide the uncertain operation or its
+        // recovery path while this connection remains quarantined.
+        if self.timed_out_endpoint.is_some() && kind != ClientEndpointNoticeKind::Timeout {
+            return false;
+        }
         let key = ClientEndpointNoticeKey {
             boot_id: self
                 .snapshot
@@ -376,6 +386,51 @@ impl ClientShellState {
             outcome.repaint |= self.receive_endpoint_unavailable(format!("{label} is not ready"));
             return false;
         }
+        use crate::api::schema::Method;
+        let expresses_navigation_intent = match &method {
+            Method::WorkspaceFocus(_)
+            | Method::TabFocus(_)
+            | Method::AgentFocus(_)
+            | Method::PaneFocus(_)
+            | Method::PaneFocusDirection(_)
+            | Method::PluginPaneFocus(_)
+            | Method::PaneSwap(_)
+            | Method::WorkspaceClose(_)
+            | Method::TabClose(_)
+            | Method::PaneClose(_)
+            | Method::PluginPaneClose(_)
+            | Method::CommandInvoke(_)
+            | Method::PluginActionInvoke(_) => true,
+            Method::WorkspaceCreate(params) => params.focus,
+            Method::WorktreeCreate(params) => params.focus,
+            Method::WorktreeOpen(params) => params.focus,
+            Method::TabCreate(params) => params.focus,
+            Method::PaneSplit(params) => params.focus,
+            Method::PaneMove(params) => params.focus,
+            Method::LayoutApply(params) => params.focus,
+            Method::PluginPaneOpen(params) => params.focus,
+            _ => false,
+        };
+        if expresses_navigation_intent
+            && !matches!(kind, PendingEndpointKind::PaneRearrangement { .. })
+        {
+            self.revoke_rearrangement_follow();
+        }
+        if let Some(pending) = self.timed_out_endpoint.as_ref() {
+            let code = pending.method_name.clone();
+            self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
+                boot_id: pending.boot_id.clone(),
+                kind: ClientEndpointNoticeKind::Timeout,
+                code: code.clone(),
+            });
+            outcome.repaint |= self.push_endpoint_notice(
+                ClientEndpointNoticeKind::Timeout,
+                code,
+                "Waiting for the previous action",
+                "The previous action may already have applied. Detach this client and reconnect to recover, or wait for its response. New actions have not been sent.",
+            );
+            return false;
+        }
         let method_name = crate::api::api_method_name(&method).to_owned();
         if !self.supports_endpoint_method(&method) {
             outcome.repaint |= self.push_endpoint_notice(
@@ -411,6 +466,7 @@ impl ClientShellState {
             request_id.clone(),
             PendingEndpointRequest {
                 boot_id: snapshot.boot_id.clone(),
+                snapshot_revision: snapshot.revision,
                 method_name,
                 confirmation_workspace_id,
                 kind,
@@ -496,6 +552,59 @@ impl ClientShellState {
         repaint
     }
 
+    /// Late responses settle the notice only. The original follow-up kind was
+    /// discarded at timeout, so navigation and other effects cannot run here.
+    pub(crate) fn handle_late_endpoint_result(
+        &mut self,
+        boot_id: &str,
+        request_id: &str,
+        result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
+    ) -> bool {
+        let Some(pending) = self.timed_out_endpoint.as_mut() else {
+            return false;
+        };
+        if pending.boot_id != boot_id || pending.request_id != request_id {
+            return false;
+        }
+        pending.late_settled = true;
+        let method_name = pending.method_name.clone();
+        let snapshot_revision = pending.snapshot_revision;
+        if self
+            .snapshot
+            .as_deref()
+            .is_none_or(|snapshot| snapshot.boot_id != boot_id)
+        {
+            return false;
+        }
+        let snapshot_is_fresh = self
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot.revision > snapshot_revision);
+        if snapshot_is_fresh {
+            self.timed_out_endpoint = None;
+        }
+        self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
+            boot_id: boot_id.to_owned(),
+            kind: ClientEndpointNoticeKind::Timeout,
+            code: method_name.clone(),
+        });
+        let body = match result {
+            Ok(_) => format!("{method_name} returned after its timeout. Check the current layout before acting again; no follow-up navigation was sent."),
+            Err(error) => format!("{method_name} returned after its timeout: {}. Check the current layout before acting again.", error.message),
+        };
+        self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
+            boot_id: boot_id.to_owned(),
+            kind: ClientEndpointNoticeKind::Timeout,
+            code: "endpoint_late_response".to_owned(),
+        });
+        self.push_endpoint_notice(
+            ClientEndpointNoticeKind::Timeout,
+            "endpoint_late_response",
+            "Late server response",
+            body,
+        )
+    }
+
     pub(crate) fn handle_endpoint_result(
         &mut self,
         boot_id: &str,
@@ -512,6 +621,16 @@ impl ClientShellState {
                 .is_none_or(|snapshot| snapshot.boot_id != boot_id)
         {
             return (false, Vec::new());
+        }
+        if matches!(&result, Err(error) if error.code.as_deref() == Some("endpoint_timeout")) {
+            self.timed_out_endpoint = Some(TimedOutEndpointRequest {
+                endpoint_id: self.active_endpoint_id.clone(),
+                boot_id: boot_id.to_owned(),
+                request_id: request_id.to_owned(),
+                method_name: pending.method_name.clone(),
+                snapshot_revision: pending.snapshot_revision,
+                late_settled: false,
+            });
         }
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
             return self.complete_link_hover(target, result);
@@ -542,7 +661,7 @@ impl ClientShellState {
                         ClientEndpointNoticeKind::Timeout,
                         pending.method_name.clone(),
                         "Server timed out",
-                        format!("This server did not respond to {}.", pending.method_name),
+                        format!("This server did not respond to {}. The action may already have applied. Detach this client and reconnect to recover, or wait for its response. Do not repeat the action without checking the current layout.", pending.method_name),
                     ),
                     "endpoint_cancelled" => (
                         ClientEndpointNoticeKind::Unavailable,
@@ -569,6 +688,22 @@ impl ClientShellState {
         match pending.kind {
             PendingEndpointKind::Generic => {}
             PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
+            PendingEndpointKind::PaneRearrangement {
+                source_pane_id,
+                expected_tab_id,
+                navigation_generation,
+                follow,
+            } => {
+                return self.complete_pane_rearrangement(
+                    boot_id,
+                    source_pane_id,
+                    expected_tab_id,
+                    navigation_generation,
+                    pending.snapshot_revision,
+                    follow,
+                    result,
+                );
+            }
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {
                 return match result {
                     Ok(_) => (false, Vec::new()),
@@ -717,11 +852,23 @@ impl ClientShellState {
                     Err(error)
                         if matches!(
                             error.code.as_deref(),
-                            Some("stale_content" | "stale_target" | "endpoint_cancelled")
+                            Some(
+                                "stale_content"
+                                    | "stale_target"
+                                    | "endpoint_cancelled"
+                                    | "endpoint_timeout"
+                                    | "endpoint_not_sent"
+                            )
                         ) =>
                     {
                         self.url_click_consumes_until_up = completed_before_release;
-                        (false, Vec::new())
+                        (
+                            matches!(
+                                error.code.as_deref(),
+                                Some("endpoint_timeout" | "endpoint_not_sent")
+                            ),
+                            Vec::new(),
+                        )
                     }
                     Err(_) => (true, replay_action(replay)),
                 };

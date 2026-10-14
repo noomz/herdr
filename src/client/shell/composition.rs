@@ -164,15 +164,24 @@ impl ClientShellState {
                 .navigate_workspace_id
                 .as_ref()
                 .is_some_and(|target| self.navigation_target_valid(target));
+        if self.snapshot.is_none() || self.pane_surface.is_none() {
+            return Some(self.compose_unavailable(cols, rows).into());
+        }
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::PaneTargetSelector(_))
+        ) && !self.pane_target_selector_valid()
+        {
+            self.overlay = None;
+            self.push_pane_rearrangement_invalidation_notice();
+        }
+        // Borrow after pane-target invalidation. This reference stays live through render.
         let pending_workspace_highlight =
             self.pending_workspace_highlight.as_ref().filter(|pending| {
                 self.mode != ClientShellMode::Navigate
                     && pending.target.endpoint_id == self.active_endpoint_id
                     && self.navigation_target_valid(&pending.target)
             });
-        if self.snapshot.is_none() || self.pane_surface.is_none() {
-            return Some(self.compose_unavailable(cols, rows).into());
-        }
         let snapshot = self.snapshot.as_deref()?;
         // Do not compose a retained surface while waiting for its matching snapshot or
         // connection generation.
@@ -335,6 +344,7 @@ impl ClientShellState {
         if mode_bar == Some(layout.tab_bar) {
             self.hits.tabs.clear();
             self.hits.new_tab = Rect::default();
+            self.hits.tab_bar = Rect::default();
             self.hits.tab_scroll_left = Rect::default();
             self.hits.tab_scroll_right = Rect::default();
         }
@@ -642,13 +652,33 @@ impl ClientShellState {
         if let Some(bar) = mode_bar {
             occlusion.cover(bar);
         }
-        if let Some(overlay) = self.overlay.as_ref() {
+        if let Some(drag) = self.pane_rearrangement_drag.as_ref() {
+            let mut composed = frame.to_ratatui_buffer()?;
+            super::rearrangement::render_pane_drag(
+                &mut composed,
+                drag,
+                &self.hits.panes,
+                snapshot,
+                &self.config.palette,
+            );
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+        }
+        if let Some(overlay) = self.overlay.as_mut() {
             let mut composed = frame.to_ratatui_buffer()?;
             let cursor = if let ClientShellOverlay::ContextMenu(menu) = overlay {
                 let rendered =
                     render::render_context_menu(&mut composed, menu, &self.config.palette)?;
                 occlusion.cover(rendered.area);
                 self.hits.context_menu_rows = rendered.menu_rows;
+                None
+            } else if let ClientShellOverlay::PaneTargetSelector(selector) = overlay {
+                self.hits.pane_target_rows = super::rearrangement::render_target_selector(
+                    &mut composed,
+                    selector,
+                    &self.hits.panes,
+                    snapshot,
+                    &self.config.palette,
+                );
                 None
             } else if let ClientShellOverlay::GlobalMenu(menu) = overlay {
                 let rendered = render::render_global_menu(
