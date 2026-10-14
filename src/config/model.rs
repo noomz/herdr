@@ -886,6 +886,44 @@ pub enum TabBarPositionConfig {
     Bottom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusFollowsMouseArea {
+    #[default]
+    Body,
+    Borders,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct FocusFollowsMouseConfig {
+    /// Master switch. Default: false.
+    pub enabled: bool,
+    /// `body` uses the pane content rect. `borders` also accepts the frame and
+    /// the one-cell gap, attributed to the nearest pane body.
+    pub area: FocusFollowsMouseArea,
+    /// Dwell before a hover switch, in milliseconds. Default: 200.
+    pub delay_ms: u64,
+    /// Cells the pointer must sit inside the pane body before a switch may arm.
+    /// Default: 0. An empty inset never hover-focuses.
+    pub enter_cells: usize,
+    /// Chebyshev cells the pointer must travel after a hover switch before the
+    /// next switch may arm. Default: 0.
+    pub travel_cells: usize,
+}
+
+impl Default for FocusFollowsMouseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            area: FocusFollowsMouseArea::Body,
+            delay_ms: 200,
+            enter_cells: 0,
+            travel_cells: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PaneBordersConfig {
     #[default]
@@ -956,6 +994,8 @@ pub struct UiConfig {
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
     pub mouse_capture: bool,
+    /// Focus the pane under the pointer after a dwell. Off by default.
+    pub focus_follows_mouse: FocusFollowsMouseConfig,
     /// Copy text selected with the mouse. Default: true.
     pub copy_on_select: bool,
     /// Host cursor policy. Default: auto.
@@ -1212,6 +1252,7 @@ impl Default for UiConfig {
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
+            focus_follows_mouse: FocusFollowsMouseConfig::default(),
             copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
@@ -1522,6 +1563,41 @@ status_indicators = "symbols"
             .unwrap_err()
             .to_string();
         assert!(wrong_type.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+    }
+
+    #[test]
+    fn focus_follows_mouse_defaults_and_parses() {
+        let defaults = Config::default().ui.focus_follows_mouse;
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.area, FocusFollowsMouseArea::Body);
+        assert_eq!(defaults.delay_ms, 200);
+        assert_eq!(defaults.enter_cells, 0);
+        assert_eq!(defaults.travel_cells, 0);
+
+        let config: Config = toml::from_str(
+            r#"
+[ui.focus_follows_mouse]
+enabled = true
+area = "borders"
+delay_ms = 0
+enter_cells = 2
+travel_cells = 4
+"#,
+        )
+        .unwrap();
+        assert!(config.ui.focus_follows_mouse.enabled);
+        assert_eq!(
+            config.ui.focus_follows_mouse.area,
+            FocusFollowsMouseArea::Borders
+        );
+        assert_eq!(config.ui.focus_follows_mouse.delay_ms, 0);
+        assert_eq!(config.ui.focus_follows_mouse.enter_cells, 2);
+        assert_eq!(config.ui.focus_follows_mouse.travel_cells, 4);
+
+        let unknown = toml::from_str::<Config>("[ui.focus_follows_mouse]\narea = \"frame\"\n")
+            .unwrap_err()
+            .to_string();
+        assert!(unknown.contains("body") || unknown.contains("borders"));
     }
 
     #[test]

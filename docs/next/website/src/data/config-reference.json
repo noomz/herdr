@@ -918,6 +918,40 @@
           "description": "Capture mouse input for Herdr's mouse UI."
         },
         {
+          "key": "ui.focus_follows_mouse.enabled",
+          "type": "boolean",
+          "default": "false",
+          "description": "Focus the pane under the pointer after a dwell, without a click. Off by default. Requires mouse capture. One client's hover changes focus for every attached client."
+        },
+        {
+          "key": "ui.focus_follows_mouse.area",
+          "type": "enum",
+          "default": "\"body\"",
+          "description": "Where hover focus may arm. body is the pane content rect only. borders also accepts the pane frame and the one-cell gap, attributed to the nearest pane body; an exact distance tie does nothing.",
+          "values": [
+            "body",
+            "borders"
+          ]
+        },
+        {
+          "key": "ui.focus_follows_mouse.delay_ms",
+          "type": "integer",
+          "default": "200",
+          "description": "Milliseconds the pointer must dwell on the candidate pane before focus switches. Zero switches immediately."
+        },
+        {
+          "key": "ui.focus_follows_mouse.enter_cells",
+          "type": "integer",
+          "default": "0",
+          "description": "Cells the pointer must sit inside every edge of the pane body before a hover switch may arm. A pane whose inset rect is empty never hover-focuses."
+        },
+        {
+          "key": "ui.focus_follows_mouse.travel_cells",
+          "type": "integer",
+          "default": "0",
+          "description": "Minimum pointer travel, in Chebyshev cells, since the last hover-focus switch before the next switch may arm. Zero disables the dead zone."
+        },
+        {
           "key": "ui.copy_on_select",
           "type": "boolean",
           "default": "true",
