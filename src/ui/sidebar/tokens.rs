@@ -1,12 +1,43 @@
+use std::collections::HashMap;
+
 use crate::config::{
-    AgentSidebarToken, AgentsSidebarConfig, SidebarTokenStyle, SpaceSidebarToken,
-    SpacesSidebarConfig,
+    AgentSidebarToken, AgentsSidebarConfig, SidebarTokenColor, SidebarTokenGradient,
+    SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToken {
     pub kind: ResolvedTokenKind,
     pub style: SidebarTokenStyle,
+    pub gradient: Option<ResolvedGradient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedGradient {
+    pub colors: Vec<SidebarTokenColor>,
+    /// Offset into `colors` for the first grapheme, already reduced modulo its length.
+    pub phase: usize,
+}
+
+impl ResolvedGradient {
+    fn resolve(gradient: &SidebarTokenGradient, tokens: &HashMap<String, String>) -> Self {
+        let phase = gradient
+            .phase_token
+            .as_ref()
+            .and_then(|name| tokens.get(name))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        Self {
+            phase: phase % gradient.colors.len().max(1),
+            colors: gradient.colors.clone(),
+        }
+    }
+
+    /// Colour for the grapheme at `index`: `colors[(index + phase) % len]`.
+    pub(crate) fn color_at(&self, index: usize) -> Option<SidebarTokenColor> {
+        let len = self.colors.len();
+        (len > 0).then(|| self.colors[(index % len + self.phase) % len])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,14 +72,14 @@ impl ResolvedTokenKind {
     }
 }
 
+#[cfg(test)]
 impl ResolvedToken {
-    fn new(kind: ResolvedTokenKind, style: SidebarTokenStyle) -> Self {
-        Self { kind, style }
-    }
-
-    #[cfg(test)]
     pub(super) fn unstyled(kind: ResolvedTokenKind) -> Self {
-        Self::new(kind, SidebarTokenStyle::default())
+        Self {
+            kind,
+            style: SidebarTokenStyle::default(),
+            gradient: None,
+        }
     }
 }
 
@@ -61,7 +92,7 @@ pub(crate) struct AgentTokenContext<'a> {
     pub(crate) terminal_title: Option<&'a str>,
     pub(crate) terminal_title_stripped: Option<&'a str>,
     pub(crate) canonical_agent: Option<crate::detect::Agent>,
-    pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+    pub(crate) tokens: &'a HashMap<String, String>,
 }
 
 pub(crate) fn agent_rows(
@@ -113,7 +144,15 @@ pub(crate) fn agent_rows(
                     let style = kind
                         .text_value()
                         .map_or(Some(style), |value| configured.style_for_value(value))?;
-                    Some(ResolvedToken::new(kind, style))
+                    let gradient = kind
+                        .text_value()
+                        .and(configured.gradient())
+                        .map(|gradient| ResolvedGradient::resolve(gradient, context.tokens));
+                    Some(ResolvedToken {
+                        kind,
+                        style,
+                        gradient,
+                    })
                 })
                 .collect::<Vec<_>>();
             (!resolved.is_empty()).then_some(resolved)
@@ -126,7 +165,7 @@ pub(crate) struct SpaceTokenContext<'a> {
     pub(crate) branch: Option<&'a str>,
     pub(crate) state_text: &'a str,
     pub(crate) ahead_behind: Option<(usize, usize)>,
-    pub(crate) tokens: &'a std::collections::HashMap<String, String>,
+    pub(crate) tokens: &'a HashMap<String, String>,
     pub(crate) suppress_git_details: bool,
 }
 
@@ -169,7 +208,15 @@ pub(crate) fn space_rows(
                     let style = kind
                         .text_value()
                         .map_or(Some(style), |value| configured.style_for_value(value))?;
-                    Some(ResolvedToken::new(kind, style))
+                    let gradient = kind
+                        .text_value()
+                        .and(configured.gradient())
+                        .map(|gradient| ResolvedGradient::resolve(gradient, context.tokens));
+                    Some(ResolvedToken {
+                        kind,
+                        style,
+                        gradient,
+                    })
                 })
                 .collect::<Vec<_>>();
             (!resolved.is_empty()).then_some(resolved)
@@ -582,6 +629,152 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
             vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Custom(
                 "2 changes".into()
             ))]]
+        );
+    }
+
+    fn gradient_spans(
+        text: &str,
+        phase: Option<&str>,
+        width: usize,
+    ) -> Vec<ratatui::text::Span<'static>> {
+        let config: AgentsSidebarConfig = toml::from_str(
+            r##"
+rows = [[{ token = "workspace", bold = true, gradient = ["#000001", "#000002", "#000003"], gradient_phase = "$phase" }]]
+"##,
+        )
+        .unwrap();
+        let mut entry = entry();
+        entry.workspace = text.into();
+        if let Some(phase) = phase {
+            entry.tokens.insert("phase".into(), phase.into());
+        }
+        let rows = agent_rows(&config, context(&entry), "working");
+        let theme = ratatui::style::Style::default();
+        super::super::resolved_token_spans(
+            &rows[0],
+            ("*", theme),
+            theme,
+            theme,
+            theme,
+            theme,
+            &super::super::Palette::catppuccin(),
+            width,
+        )
+    }
+
+    fn span_blues(spans: &[ratatui::text::Span<'_>]) -> Vec<u8> {
+        spans
+            .iter()
+            .map(|span| match span.style.fg {
+                Some(ratatui::style::Color::Rgb(0, 0, blue)) => blue,
+                other => panic!("unexpected fg {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn gradient_phase_resolves_from_custom_tokens() {
+        let config: AgentsSidebarConfig = toml::from_str(
+            r##"
+rows = [[{ token = "agent", gradient = ["#000", "#fff", "#f00"], gradient_phase = "$phase" }, { token = "tab", gradient = ["#000", "#fff"] }]]
+"##,
+        )
+        .unwrap();
+        for (value, expected) in [
+            (Some("1"), 1),
+            (Some("5"), 2),
+            (Some(" 4 "), 1),
+            (None, 0),
+            (Some("garbage"), 0),
+            (Some("-1"), 0),
+            (Some(""), 0),
+        ] {
+            let mut entry = entry();
+            entry.tab = Some("t".into());
+            if let Some(value) = value {
+                entry.tokens.insert("phase".into(), value.into());
+            }
+            let rows = agent_rows(&config, context(&entry), "working");
+            let gradient = rows[0][0].gradient.as_ref().unwrap();
+            assert_eq!(gradient.phase, expected, "{value:?}");
+            assert_eq!(gradient.colors.len(), 3);
+            assert_eq!(rows[0][1].gradient.as_ref().unwrap().phase, 0);
+        }
+        let plain: AgentsSidebarConfig = toml::from_str(r#"rows = [["agent"]]"#).unwrap();
+        assert_eq!(
+            agent_rows(&plain, context(&entry()), "working")[0][0].gradient,
+            None
+        );
+    }
+
+    #[test]
+    fn gradient_hidden_by_matching_rule() {
+        let config: SpacesSidebarConfig = toml::from_str(
+            r##"
+rows = [[{ token = "workspace", gradient = ["#000", "#fff"], rules = [{ equals = "repo", hide = true }] }, "branch"]]
+"##,
+        )
+        .unwrap();
+        let tokens = std::collections::HashMap::new();
+        let rows = space_rows(
+            &config,
+            SpaceTokenContext {
+                workspace: "repo",
+                branch: Some("main"),
+                state_text: "idle",
+                ahead_behind: None,
+                tokens: &tokens,
+                suppress_git_details: false,
+            },
+        );
+        assert_eq!(
+            rows,
+            vec![vec![ResolvedToken::unstyled(ResolvedTokenKind::Branch(
+                "main".into()
+            ))]]
+        );
+    }
+
+    #[test]
+    fn gradient_splits_text_into_graphemes_with_phase_offset() {
+        let spans = gradient_spans("abcd", Some("1"), 40);
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(text, ["a", "b", "c", "d"]);
+        assert_eq!(span_blues(&spans), [2, 3, 1, 2]);
+        assert!(spans.iter().all(|span| span
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)));
+
+        assert_eq!(span_blues(&gradient_spans("abcd", None, 40)), [1, 2, 3, 1]);
+    }
+
+    #[test]
+    fn gradient_keeps_truncated_width_and_wide_graphemes() {
+        let joined = |spans: &[ratatui::text::Span<'_>]| {
+            spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+        let spans = gradient_spans("abcdefgh", Some("0"), 4);
+        assert_eq!(joined(&spans), "abc…");
+        assert_eq!(spans.len(), 4);
+        assert_eq!(super::super::display_width(&joined(&spans)), 4);
+
+        let spans = gradient_spans("漢e\u{301}x", Some("2"), 40);
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(text, ["漢", "e\u{301}", "x"]);
+        assert_eq!(span_blues(&spans), [3, 1, 2]);
+        assert_eq!(
+            super::super::display_width(&joined(&spans)),
+            super::super::display_width("漢e\u{301}x")
         );
     }
 }
