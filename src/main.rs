@@ -325,6 +325,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # tab_bar_right = []
 # tab_bar_right_separator = " "
 
+# Text between adjacent tokens in Spaces and Agents sidebar rows.
+# A state icon is always followed by one space.
+# sidebar_token_separator = " · "
+
 # Title Herdr writes to the terminal it runs in, which is what window managers
 # show in title, tab, and group bars. Tokens are {hostname}, {workspace}, {tab},
 # {pane}, and {terminal_title}; {{ and }} are literal braces.

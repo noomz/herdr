@@ -177,13 +177,17 @@ pub(crate) fn space_rows(
         .collect()
 }
 
-pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
+pub(crate) fn separator<'a>(
+    previous: &ResolvedToken,
+    current: &ResolvedToken,
+    configured: &'a str,
+) -> &'a str {
     if matches!(previous.kind, ResolvedTokenKind::StateIcon)
         || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
     {
         " "
     } else {
-        " · "
+        configured
     }
 }
 
@@ -283,6 +287,7 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
                 theme,
                 &super::super::Palette::catppuccin(),
                 width,
+                " · ",
             );
             assert_eq!(spans.len(), 1);
             assert!(super::super::display_width(&spans[0].content) <= width);
@@ -583,5 +588,38 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 "2 changes".into()
             ))]]
         );
+    }
+
+    #[test]
+    fn configured_separator_joins_tokens_but_state_icon_keeps_one_space() {
+        use ratatui::style::Style;
+        let token = |kind| ResolvedToken {
+            kind,
+            style: Default::default(),
+        };
+        let row = [
+            token(ResolvedTokenKind::StateIcon),
+            token(ResolvedTokenKind::Workspace("api".into())),
+            token(ResolvedTokenKind::Custom("fix login".into())),
+        ];
+        let text = |separator| {
+            super::super::resolved_token_spans(
+                &row,
+                ("*", Style::default()),
+                Style::default(),
+                Style::default(),
+                Style::default(),
+                Style::default(),
+                &super::super::Palette::catppuccin(),
+                40,
+                separator,
+            )
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>()
+        };
+        assert_eq!(text(" · "), "* api · fix login");
+        assert_eq!(text(" "), "* api fix login");
+        assert_eq!(text(""), "* apifix login");
     }
 }

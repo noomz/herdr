@@ -1034,6 +1034,8 @@ pub struct UiConfig {
     pub tab_bar_right: Vec<TabBarRightEntryConfig>,
     /// Text inserted between visible right-side tab bar entries. Default: one space.
     pub tab_bar_right_separator: String,
+    /// Text inserted between adjacent sidebar row tokens. Default: " · ".
+    pub sidebar_token_separator: String,
     /// Format for the outer terminal window title. Empty leaves the title alone.
     /// Default: "{hostname}: {workspace}".
     pub window_title: String,
@@ -1270,6 +1272,7 @@ impl Default for UiConfig {
             tab_bar_position: TabBarPositionConfig::Top,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
+            sidebar_token_separator: " · ".into(),
             window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
@@ -1615,6 +1618,7 @@ travel_cells = 4
         );
         assert!(default_config.ui.tab_bar_right.is_empty());
         assert_eq!(default_config.ui.tab_bar_right_separator, " ");
+        assert_eq!(default_config.ui.sidebar_token_separator, " · ");
 
         let toml = r#"
 [ui]
@@ -1633,6 +1637,7 @@ tab_bar_right = [
   { type = "command", command = "status.sh", interval_seconds = 10, timeout_seconds = 3 },
 ]
 tab_bar_right_separator = " · "
+sidebar_token_separator = " "
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.pane_borders, PaneBordersConfig::Always);
@@ -1648,6 +1653,7 @@ tab_bar_right_separator = " · "
             TabBarRightEntryConfig::Hostname
         ));
         assert_eq!(config.ui.tab_bar_right_separator, " · ");
+        assert_eq!(config.ui.sidebar_token_separator, " ");
     }
 
     #[test]
