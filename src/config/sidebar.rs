@@ -104,6 +104,16 @@ pub struct SidebarTokenStyle {
     pub dim: Option<bool>,
 }
 
+const MIN_SIDEBAR_GRADIENT_COLORS: usize = 2;
+const MAX_SIDEBAR_GRADIENT_COLORS: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarTokenGradient {
+    pub colors: Vec<SidebarTokenColor>,
+    /// Custom token name (without `$`) whose value is the gradient phase.
+    pub phase_token: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSidebarToken {
     StateIcon,
@@ -120,6 +130,7 @@ pub enum AgentSidebarToken {
         token: Box<AgentSidebarToken>,
         style: SidebarTokenStyle,
         rules: Vec<SidebarTokenRule>,
+        gradient: Option<SidebarTokenGradient>,
     },
 }
 
@@ -135,6 +146,7 @@ pub enum SpaceSidebarToken {
         token: Box<SpaceSidebarToken>,
         style: SidebarTokenStyle,
         rules: Vec<SidebarTokenRule>,
+        gradient: Option<SidebarTokenGradient>,
     },
 }
 
@@ -150,6 +162,13 @@ impl AgentSidebarToken {
         match self {
             Self::Styled { token, style, .. } => (token, *style),
             token => (token, SidebarTokenStyle::default()),
+        }
+    }
+
+    pub(crate) fn gradient(&self) -> Option<&SidebarTokenGradient> {
+        match self {
+            Self::Styled { gradient, .. } => gradient.as_ref(),
+            _ => None,
         }
     }
 }
@@ -168,6 +187,13 @@ impl SpaceSidebarToken {
             token => (token, SidebarTokenStyle::default()),
         }
     }
+
+    pub(crate) fn gradient(&self) -> Option<&SidebarTokenGradient> {
+        match self {
+            Self::Styled { gradient, .. } => gradient.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -182,6 +208,17 @@ struct RawStyledSidebarToken {
     dim: Option<bool>,
     #[serde(default)]
     rules: Vec<SidebarTokenRule>,
+    #[serde(default)]
+    gradient: Option<Vec<SidebarTokenColor>>,
+    #[serde(default)]
+    gradient_phase: Option<String>,
+}
+
+struct SidebarTokenParts {
+    token: String,
+    style: Option<SidebarTokenStyle>,
+    rules: Vec<SidebarTokenRule>,
+    gradient: Option<SidebarTokenGradient>,
 }
 
 #[derive(Deserialize)]
@@ -192,27 +229,66 @@ enum RawSidebarToken {
 }
 
 impl RawSidebarToken {
-    fn parts(self) -> Result<(String, Option<SidebarTokenStyle>, Vec<SidebarTokenRule>), String> {
+    fn parts(self) -> Result<SidebarTokenParts, String> {
         match self {
-            Self::Plain(token) => Ok((token, None, Vec::new())),
+            Self::Plain(token) => Ok(SidebarTokenParts {
+                token,
+                style: None,
+                rules: Vec::new(),
+                gradient: None,
+            }),
             Self::Styled(token) => {
+                let text_valued = !matches!(token.token.as_str(), "state_icon" | "git_status");
                 if token.rules.len() > 16 {
                     return Err("sidebar tokens may contain at most 16 rules".into());
                 }
-                if !token.rules.is_empty()
-                    && matches!(token.token.as_str(), "state_icon" | "git_status")
-                {
+                if !token.rules.is_empty() && !text_valued {
                     return Err("sidebar rules require a text-valued token".into());
                 }
-                Ok((
-                    token.token,
-                    Some(SidebarTokenStyle {
+                let gradient = match (token.gradient, token.gradient_phase) {
+                    (None, None) => None,
+                    (None, Some(_)) => {
+                        return Err("sidebar gradient_phase requires a gradient".into());
+                    }
+                    (Some(colors), phase) => {
+                        if !text_valued {
+                            return Err("sidebar gradients require a text-valued token".into());
+                        }
+                        if !(MIN_SIDEBAR_GRADIENT_COLORS..=MAX_SIDEBAR_GRADIENT_COLORS)
+                            .contains(&colors.len())
+                        {
+                            return Err(format!(
+                                "sidebar gradients must contain {MIN_SIDEBAR_GRADIENT_COLORS} to \
+                                 {MAX_SIDEBAR_GRADIENT_COLORS} colors"
+                            ));
+                        }
+                        let phase_token = phase
+                            .map(|phase| {
+                                if !phase.starts_with('$') {
+                                    return Err(format!(
+                                        "sidebar gradient_phase `{phase}` must be a custom \
+                                         token starting with `$`"
+                                    ));
+                                }
+                                parse_sidebar_token::<String>(phase, &[])
+                            })
+                            .transpose()?;
+                        Some(SidebarTokenGradient {
+                            colors,
+                            phase_token,
+                        })
+                    }
+                };
+                Ok(SidebarTokenParts {
+                    token: token.token,
+                    style: Some(SidebarTokenStyle {
                         fg: token.fg,
                         bold: token.bold,
                         dim: token.dim,
                     }),
-                    token.rules,
-                ))
+                    rules: token.rules,
+                    gradient,
+                })
             }
         }
     }
@@ -245,6 +321,7 @@ fn serialize_styled_token<S>(
     name: String,
     style: SidebarTokenStyle,
     rules: &[SidebarTokenRule],
+    gradient: Option<&SidebarTokenGradient>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -264,6 +341,12 @@ where
     }
     if !rules.is_empty() {
         map.serialize_entry("rules", rules)?;
+    }
+    if let Some(gradient) = gradient {
+        map.serialize_entry("gradient", &gradient.colors)?;
+        if let Some(phase_token) = &gradient.phase_token {
+            map.serialize_entry("gradient_phase", &format!("${phase_token}"))?;
+        }
     }
     map.end()
 }
@@ -306,7 +389,14 @@ impl Serialize for AgentSidebarToken {
                 token,
                 style,
                 rules,
-            } => serialize_styled_token(agent_token_name(token), *style, rules, serializer),
+                gradient,
+            } => serialize_styled_token(
+                agent_token_name(token),
+                *style,
+                rules,
+                gradient.as_ref(),
+                serializer,
+            ),
             token => serializer.serialize_str(&agent_token_name(token)),
         }
     }
@@ -323,7 +413,12 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
     where
         D: serde::Deserializer<'de>,
     {
-        let (value, style, rules) = RawSidebarToken::deserialize(deserializer)?
+        let SidebarTokenParts {
+            token: value,
+            style,
+            rules,
+            gradient,
+        } = RawSidebarToken::deserialize(deserializer)?
             .parts()
             .map_err(serde::de::Error::custom)?;
         let token = parse_sidebar_token(
@@ -345,6 +440,7 @@ impl<'de> Deserialize<'de> for AgentSidebarToken {
             token: Box::new(token),
             style,
             rules,
+            gradient,
         }))
     }
 }
@@ -359,7 +455,14 @@ impl Serialize for SpaceSidebarToken {
                 token,
                 style,
                 rules,
-            } => serialize_styled_token(space_token_name(token), *style, rules, serializer),
+                gradient,
+            } => serialize_styled_token(
+                space_token_name(token),
+                *style,
+                rules,
+                gradient.as_ref(),
+                serializer,
+            ),
             token => serializer.serialize_str(&space_token_name(token)),
         }
     }
@@ -376,7 +479,12 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
     where
         D: serde::Deserializer<'de>,
     {
-        let (value, style, rules) = RawSidebarToken::deserialize(deserializer)?
+        let SidebarTokenParts {
+            token: value,
+            style,
+            rules,
+            gradient,
+        } = RawSidebarToken::deserialize(deserializer)?
             .parts()
             .map_err(serde::de::Error::custom)?;
         let token = parse_sidebar_token(
@@ -394,6 +502,7 @@ impl<'de> Deserialize<'de> for SpaceSidebarToken {
             token: Box::new(token),
             style,
             rules,
+            gradient,
         }))
     }
 }
@@ -658,6 +767,106 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
                 .join(",");
             let input = format!("[agents]\nrows = [[{{ token = 'machine', rules = [{rules}] }}]]");
             assert_eq!(toml::from_str::<SidebarConfig>(&input).is_ok(), count == 16);
+        }
+    }
+
+    #[test]
+    fn parses_gradients_and_round_trips() {
+        let input = r##"
+[agents]
+rows = [[{ token = "$title_working", gradient = ["#7aa2f7", "#bb9af7", "#f7768e"], gradient_phase = "$anim_phase" }, { token = "agent", bold = true, gradient = ["#fff", "#000"] }]]
+[spaces]
+rows = [[{ token = "workspace", gradient = ["#111", "#222"], gradient_phase = "$p" }]]
+"##;
+        let config: SidebarConfig = toml::from_str(input).expect("gradient sidebar config");
+        let gradient = config.agents.rows[0][0].gradient().expect("gradient");
+        assert_eq!(gradient.colors.len(), 3);
+        assert_eq!(
+            gradient.colors[1].ratatui(),
+            ratatui::style::Color::Rgb(0xbb, 0x9a, 0xf7)
+        );
+        assert_eq!(gradient.phase_token.as_deref(), Some("anim_phase"));
+        assert_eq!(
+            config.agents.rows[0][0].parts().0,
+            &AgentSidebarToken::Custom("title_working".into())
+        );
+        let gradient = config.agents.rows[0][1].gradient().expect("gradient");
+        assert_eq!(gradient.phase_token, None);
+        assert_eq!(config.agents.rows[0][1].parts().1.bold, Some(true));
+        assert_eq!(
+            config.spaces.rows[0][0]
+                .gradient()
+                .and_then(|gradient| gradient.phase_token.as_deref()),
+            Some("p")
+        );
+
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("gradient_phase"));
+        assert_eq!(toml::from_str::<SidebarConfig>(&encoded).unwrap(), config);
+    }
+
+    #[test]
+    fn rejects_invalid_gradients() {
+        let sixteen = std::iter::repeat_n("'#fff'", 16)
+            .collect::<Vec<_>>()
+            .join(",");
+        let seventeen = std::iter::repeat_n("'#fff'", 17)
+            .collect::<Vec<_>>()
+            .join(",");
+        let input = format!("[agents]\nrows = [[{{ token = 'agent', gradient = [{sixteen}] }}]]");
+        assert!(toml::from_str::<SidebarConfig>(&input).is_ok());
+        for (section, entry) in [
+            ("agents", "{ token = 'agent', gradient = [] }".to_string()),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff'] }".to_string(),
+            ),
+            (
+                "agents",
+                format!("{{ token = 'agent', gradient = [{seventeen}] }}"),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff', 'red'] }".to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient_phase = '$p' }".to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'state_icon', gradient = ['#fff', '#000'] }".to_string(),
+            ),
+            (
+                "spaces",
+                "{ token = 'git_status', gradient = ['#fff', '#000'] }".to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff', '#000'], gradient_phase = 'phase' }"
+                    .to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff', '#000'], gradient_phase = 'agent' }"
+                    .to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff', '#000'], gradient_phase = '$bad.name' }"
+                    .to_string(),
+            ),
+            (
+                "agents",
+                "{ token = 'agent', gradient = ['#fff', '#000'], gradient_phase = '$' }"
+                    .to_string(),
+            ),
+        ] {
+            let input = format!("[{section}]\nrows = [[{entry}]]");
+            assert!(
+                toml::from_str::<SidebarConfig>(&input).is_err(),
+                "accepted {entry}"
+            );
         }
     }
 

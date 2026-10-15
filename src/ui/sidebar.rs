@@ -6,6 +6,7 @@ use ratatui::{
     text::Span,
 };
 
+use self::tokens::ResolvedGradient;
 pub(crate) use self::tokens::{
     agent_rows as sidebar_agent_rows, space_rows as sidebar_space_rows, AgentTokenContext,
     ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
@@ -15,6 +16,7 @@ use crate::app::state::Palette;
 use crate::app::AppState;
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -240,22 +242,28 @@ pub(crate) fn resolved_token_spans(
                 state_icon.0.to_string(),
                 apply_token_style(state_icon.1, token.style),
             )),
-            ResolvedTokenKind::StateText(text) => spans.push(Span::styled(
+            ResolvedTokenKind::StateText(text) => push_text_spans(
+                &mut spans,
                 truncate_end(text, budgets[index]),
                 apply_token_style(state_text_style, token.style),
-            )),
-            ResolvedTokenKind::Workspace(text) => spans.push(Span::styled(
+                token.gradient.as_ref(),
+            ),
+            ResolvedTokenKind::Workspace(text) => push_text_spans(
+                &mut spans,
                 truncate_end(text, budgets[index]),
                 apply_token_style(workspace_style, token.style),
-            )),
+                token.gradient.as_ref(),
+            ),
             ResolvedTokenKind::Machine(text)
             | ResolvedTokenKind::Tab(text)
             | ResolvedTokenKind::Pane(text)
             | ResolvedTokenKind::Agent(text)
-            | ResolvedTokenKind::Branch(text) => spans.push(Span::styled(
+            | ResolvedTokenKind::Branch(text) => push_text_spans(
+                &mut spans,
                 truncate_end(text, budgets[index]),
                 apply_token_style(secondary_style, token.style),
-            )),
+                token.gradient.as_ref(),
+            ),
             ResolvedTokenKind::GitStatus { ahead, behind } => {
                 if *ahead > 0 {
                     spans.push(Span::styled(
@@ -277,14 +285,34 @@ pub(crate) fn resolved_token_spans(
                 }
             }
             ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
-                spans.push(Span::styled(
+                push_text_spans(
+                    &mut spans,
                     truncate_end(text, budgets[index]),
                     apply_token_style(custom_style, token.style),
-                ));
+                    token.gradient.as_ref(),
+                );
             }
         }
     }
     spans
+}
+
+fn push_text_spans(
+    spans: &mut Vec<Span<'static>>,
+    text: String,
+    style: Style,
+    gradient: Option<&ResolvedGradient>,
+) {
+    let Some(gradient) = gradient else {
+        spans.push(Span::styled(text, style));
+        return;
+    };
+    spans.extend(text.graphemes(true).enumerate().map(|(index, grapheme)| {
+        let style = gradient
+            .color_at(index)
+            .map_or(style, |color| style.fg(color.ratatui()));
+        Span::styled(grapheme.to_string(), style)
+    }));
 }
 
 fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) -> Style {

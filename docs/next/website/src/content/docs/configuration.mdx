@@ -436,6 +436,17 @@ The first matching rule wins. Its specified style fields override the occurrence
 
 Rules work with text-valued built-ins and custom `$name` tokens in Agent rows, `rows_by_agent` overrides, and Space rows. Custom tokens match their reported value: `$load` reporting `"90"` selects red and bold above, `"60"` selects yellow, and `"90%"` keeps white. Unreported tokens still disappear. `state_icon` and composite `git_status` accept fixed styles only, not rules. Unknown conditions and malformed rules are rejected when loading config; regex, fuzzy matching, and scripts are not supported.
 
+Text-valued tokens also accept a `gradient`: a list of 2 to 16 colors in the same format as `fg`. Herdr colors each visible character of the value in turn, cycling through the list:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  [{ token = "$title_working", gradient = ["#7aa2f7", "#bb9af7", "#f7768e"], gradient_phase = "$anim_phase" }],
+]
+```
+
+The gradient replaces only the foreground color. `bold`, `dim`, and matching rules still apply, and a rule with `hide = true` still hides the token. The optional `gradient_phase` names a custom `$name` token whose value is a non-negative integer. Herdr shifts the first color by that many steps, so a plugin can animate the gradient by updating the value. A missing or non-numeric value uses phase `0`. Without `gradient_phase`, the gradient stays static. `gradient_phase` requires `gradient`. `state_icon` and `git_status` do not accept gradients.
+
 `row_gap` controls the blank terminal rows between entries, independently for the Agent and Space panels. It defaults to `0`, which packs entries together; set it to `1` to restore the previous spacing. It does not add spacing between the content lines declared in `rows`. Consecutive indented worktree children remain packed as one Space group.
 
 Override the complete Agent layout for a known agent under `rows_by_agent`:
