@@ -349,6 +349,7 @@ pub(super) fn render_agent_row(
         vec![vec![crate::ui::ResolvedToken {
             kind: crate::ui::ResolvedTokenKind::StateIcon,
             style: Default::default(),
+            gradient: None,
         }]]
     } else {
         row.rows.clone()
