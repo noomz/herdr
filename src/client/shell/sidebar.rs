@@ -333,6 +333,7 @@ pub(crate) fn render_sidebar(
             state.selected_workspace_id.is_some(),
             dragged,
             palette,
+            &config.sidebar_token_separator,
         );
         let group_toggle = render_parent_group_toggle(
             buffer,
@@ -701,6 +702,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
     navigating: bool,
     dragged: bool,
     palette: &Palette,
+    separator: &str,
 ) {
     for (row_index, row) in rows.iter().enumerate() {
         let y = area.y + row_index as u16;
@@ -762,6 +764,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
             Style::default().fg(palette.overlay1),
             palette,
             area.right().saturating_sub(2).saturating_sub(x) as usize,
+            separator,
         );
         Paragraph::new(Line::from(spans)).render(
             Rect::new(x, y, area.right().saturating_sub(2).saturating_sub(x), 1),
