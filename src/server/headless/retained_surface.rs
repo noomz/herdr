@@ -448,11 +448,17 @@ impl HeadlessServer {
                     fallback!("graphics_target");
                 };
                 let client = &self.clients[&client_id];
+                let floats = crate::server::client_shell_graphics::visible_floats(
+                    &self.app,
+                    self.shell_float_graphics(client_id),
+                    Rect::new(0, 0, surface.frame.width, surface.frame.height),
+                );
                 let Some((graphics, delivery, sources)) =
                     crate::server::client_shell_graphics::collect_retained(
                         &self.app,
                         &panes,
                         target,
+                        &floats,
                         client.cell_size,
                         &client.shell_graphics_delivery,
                         client_id,

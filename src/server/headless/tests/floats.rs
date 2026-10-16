@@ -236,3 +236,124 @@ async fn modal_popup_blocks_float_input() {
     assert!(float_input.try_recv().is_err());
     shutdown_test_runtimes(&mut server);
 }
+
+const FLOAT_IMAGE: &[u8] = b"PIP\x1b_Ga=T,f=32,t=d,i=9,p=4,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\";
+
+fn float_image_targets(surface: &protocol::PaneSurfaceFrame) -> Vec<String> {
+    surface
+        .graphics
+        .placements
+        .iter()
+        .filter_map(|placement| match &placement.asset.source {
+            protocol::SurfaceGraphicsSource::Terminal {
+                target: protocol::SurfaceGraphicsTarget::Popup { terminal_id },
+                image_id: 9,
+            } => Some(terminal_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn next_pane_surface(render_rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> protocol::PaneSurfaceFrame {
+    read_server_messages(render_rx.recv().expect("render"))
+        .into_iter()
+        .find_map(|message| match message {
+            ServerMessage::PaneSurface(surface) => Some(surface),
+            _ => None,
+        })
+        .expect("pane surface")
+}
+
+#[tokio::test]
+async fn float_images_reach_only_clients_that_negotiated_floats() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    let with_floats = connect_shell(&mut server, 7, true);
+    let without_floats = connect_shell(&mut server, 8, false);
+
+    server.render_and_stream();
+
+    let surface = next_pane_surface(&with_floats);
+    assert_eq!(float_image_targets(&surface), vec![terminal_id.to_string()]);
+    assert_eq!(surface.graphics.assets.len(), 1);
+    let surface = next_pane_surface(&without_floats);
+    assert!(surface.graphics.placements.is_empty());
+    assert!(surface.graphics.assets.is_empty());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn hidden_or_closed_floats_deliver_no_images() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let source = server.app.state.workspaces[0].tabs[0].root_pane;
+    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    let render_rx = connect_shell(&mut server, 7, true);
+    server.render_and_stream();
+    assert_eq!(float_image_targets(&next_pane_surface(&render_rx)).len(), 1);
+
+    server.app.edit_float(
+        terminal_id.as_str(),
+        FloatEdit::Visibility(FloatVisibility::Hidden),
+    );
+    server.render_and_stream();
+    assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
+
+    server.app.edit_float(
+        terminal_id.as_str(),
+        FloatEdit::Visibility(FloatVisibility::Shown),
+    );
+    server.render_and_stream();
+    let shown = next_pane_surface(&render_rx);
+    assert_eq!(float_image_targets(&shown).len(), 1);
+    assert_eq!(
+        shown.graphics.assets.len(),
+        1,
+        "pixels are resent after show"
+    );
+
+    server.app.edit_float(
+        terminal_id.as_str(),
+        FloatEdit::HideWhileFocused(Some(source)),
+    );
+    server.render_and_stream();
+    assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
+    server
+        .app
+        .edit_float(terminal_id.as_str(), FloatEdit::HideWhileFocused(None));
+    server.render_and_stream();
+    assert_eq!(float_image_targets(&next_pane_surface(&render_rx)).len(), 1);
+
+    assert!(server.app.close_float(terminal_id.as_str()));
+    server.render_and_stream();
+    assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn retained_tiled_patches_keep_float_images() {
+    let (mut server, _control_rx, render_rx, pane_id) =
+        retained_test_server_with_control(b"tiled text");
+    let client = server.clients.get_mut(&1).unwrap();
+    client.mode = ClientConnectionMode::ClientShell;
+    client.shell_floats = Some(Default::default());
+    client.cell_size = crate::kitty_graphics::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };
+    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    server.render_and_stream();
+    assert_eq!(
+        float_image_targets(&next_pane_surface(&render_rx)),
+        vec![terminal_id.to_string()]
+    );
+
+    write_shared_test_pane(&mut server, pane_id, b"\r\nchanged tiled text");
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    let surface = next_pane_surface(&render_rx);
+    assert!(frame_text(&surface.frame).contains("changed tiled text"));
+    assert_eq!(float_image_targets(&surface), vec![terminal_id.to_string()]);
+    assert!(surface.graphics.assets.is_empty(), "pixels are not resent");
+    shutdown_test_runtimes(&mut server);
+}

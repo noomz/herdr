@@ -574,7 +574,11 @@ impl ClientShellState {
             if let Some(geometry) =
                 crate::popup_size::resolve_popup_geometry(width, height, layout.pane_surface)
             {
-                occlusion.start_popup(geometry.outer);
+                occlusion.start_terminal(
+                    &popup.terminal_id,
+                    geometry.outer,
+                    (geometry.inner.x, geometry.inner.y),
+                );
                 let mut composed = frame.to_ratatui_buffer()?;
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)

@@ -63,20 +63,12 @@ impl ClientShellState {
     ) -> crate::kitty_graphics::GraphicsOutput {
         let visibility = if self.endpoint_error.is_some() {
             crate::kitty_graphics::surface::Visibility::Hidden
-        } else if self.hits.popup.is_some() {
-            crate::kitty_graphics::surface::Visibility::Popup
         } else {
             crate::kitty_graphics::surface::Visibility::Main
         };
-        let popup_origin = self
-            .hits
-            .popup
-            .as_ref()
-            .map(|popup| (popup.inner_rect.x, popup.inner_rect.y));
         self.graphics.encode_output(
             visibility,
             (layout.pane_surface.x, layout.pane_surface.y),
-            popup_origin,
             self.graphics_cell_size,
             occlusion,
         )

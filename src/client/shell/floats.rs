@@ -120,7 +120,7 @@ pub(super) fn compose_floats(
         )
         .intersection(outer);
         let is_focused = focused == Some(float.float_id.as_str());
-        occlusion.cover(outer);
+        occlusion.start_terminal(&float.float_id, outer, (inner.x, inner.y));
         let mut composed = frame.to_ratatui_buffer()?;
         let border_color = if is_focused {
             palette.accent
