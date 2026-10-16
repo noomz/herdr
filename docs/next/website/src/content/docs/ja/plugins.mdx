@@ -270,7 +270,8 @@ Herdr は `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、
 コマンドは加えて `HERDR_PLUGIN_ACTION_ID` を受け取ります。スタートアップフックと
 イベントフックは `HERDR_PLUGIN_EVENT`（スタートアップフックでは `startup`）を受け取り、
 イベントフックはさらに `HERDR_PLUGIN_EVENT_JSON` を、ペインコマンドは
-`HERDR_PLUGIN_ENTRYPOINT_ID` を受け取ります。
+`HERDR_PLUGIN_ENTRYPOINT_ID` を受け取ります。フロートとして開いたペインコマンドは、
+フロートの `float_id` を `HERDR_FLOAT_ID` としても受け取ります。
 
 `HERDR_PLUGIN_ROOT` は、インストールまたはリンクされたプラグインディレクトリです。
 GitHub からインストールされたプラグインのルートは管理されたソースチェックアウト
@@ -371,7 +372,7 @@ Escape はフロート内のプログラムに届き、プレフィックスの�
 {
   "type": "float_opened",
   "float": {
-    "float_id": "term_18f3a2c0b41",
+    "float_id": "f1",
     "title": "Peek",
     "width": 50,
     "height": 14,
@@ -384,7 +385,7 @@ Escape はフロート内のプログラムに届き、プレフィックスの�
 }
 ```
 
-`float_id` はすべての `float.*` メソッドでフロートを指定します。`width` と `height` はセル数か `"80%"` のような割合の文字列で、既定サイズのときは含まれません。
+`float_id` はすべての `float.*` メソッドでフロートを指定します。この ID はフロートが閉じるまで変わらず、`server live-handoff` の後も同じです。同じセッションで別のフロートに再利用されることはありません。`width` と `height` はセル数か `"80%"` のような割合の文字列で、既定サイズのときは含まれません。
 `x` と `y` は中央配置の間は含まれません。`visibility` は `shown` か `hidden` です。`hide_while_focused` は非表示ルールがないときは含まれません。
 `z` は重なり順の位置で、0 が最下層のフロートです。`float.list` は同じオブジェクトを `floats` 配列で返します。
 

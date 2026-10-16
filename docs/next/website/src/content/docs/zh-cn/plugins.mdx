@@ -242,6 +242,7 @@ Herdr 恢复会话且 API socket 就绪后,会为每个已启用插件运行一�
 `HERDR_PLUGIN_ACTION_ID`;启动钩子和事件钩子收到 `HERDR_PLUGIN_EVENT`
 （启动钩子中的值为 `startup`）,事件钩子还会收到
 `HERDR_PLUGIN_EVENT_JSON`;窗格命令收到 `HERDR_PLUGIN_ENTRYPOINT_ID`。
+以浮动窗口打开的窗格命令还会收到 `HERDR_FLOAT_ID`,即该浮动窗口的 `float_id`。
 
 `HERDR_PLUGIN_ROOT` 是已安装或已链接的插件目录。不要把用户凭据或持久
 状态放在那里,因为 GitHub 安装的插件根目录是托管的源码检出。把 `.env`
@@ -334,7 +335,7 @@ Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
 {
   "type": "float_opened",
   "float": {
-    "float_id": "term_18f3a2c0b41",
+    "float_id": "f1",
     "title": "Peek",
     "width": 50,
     "height": 14,
@@ -347,7 +348,7 @@ Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
 }
 ```
 
-`float_id` 在所有 `float.*` 方法中标识浮动窗口。`width` 和 `height` 是单元格数或 `"80%"` 这样的百分比字符串，使用默认尺寸时不出现。
+`float_id` 在所有 `float.*` 方法中标识浮动窗口。它在浮动窗口关闭前保持不变，经过 `server live-handoff` 后也不变，同一会话中也不会分配给其他浮动窗口。`width` 和 `height` 是单元格数或 `"80%"` 这样的百分比字符串，使用默认尺寸时不出现。
 浮动窗口居中时不出现 `x` 和 `y`。`visibility` 为 `shown` 或 `hidden`。没有隐藏规则时不出现 `hide_while_focused`。
 `z` 是堆叠位置，0 表示最底层的浮动窗口。`float.list` 在 `floats` 数组中返回相同的对象。
 
