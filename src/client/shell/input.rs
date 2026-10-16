@@ -1107,7 +1107,13 @@ impl ClientShellState {
                 terminal_id,
             ));
         }
-        if self.popup_pending || self.overlay.is_some() || self.mode != ClientShellMode::Terminal {
+        // The frozen clipboard image target has no float variant, and the tiled pane must not
+        // receive an image pasted while a float has focus.
+        if self.popup_pending
+            || self.overlay.is_some()
+            || self.mode != ClientShellMode::Terminal
+            || self.focused_float_id().is_some()
+        {
             return None;
         }
         self.focused_pane_id()

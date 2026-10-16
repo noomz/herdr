@@ -359,3 +359,19 @@ fn pane_patches_under_a_float_recompose_instead_of_overwriting_it() {
         ClientPaneSurfacePatchOutcome::Applied(None)
     ));
 }
+
+#[test]
+fn clipboard_images_are_not_misrouted_to_the_pane_under_a_focused_float() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    assert!(state.clipboard_image_target().is_some());
+    let a = hit(&state, "term_a");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+
+    assert_eq!(state.clipboard_image_target(), None);
+}
