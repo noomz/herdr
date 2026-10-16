@@ -995,6 +995,7 @@ fn live_handoff_preserves_float_process_and_placement() {
     let plugin_root = base.join("plugins/float");
     let marker = base.join("float.pid");
     let hup_marker = base.join("float-hup");
+    let id_marker = base.join("float.id");
     fs::create_dir_all(&plugin_root).unwrap();
     fs::write(
         plugin_root.join("herdr-plugin.toml"),
@@ -1011,9 +1012,16 @@ title = "Peek"
 placement = "float"
 width = 30
 height = 8
-command = ["sh", "-c", "trap 'echo hup > {hup}' HUP; echo $$ > {pid}; while :; do sleep 1; done"]
+command = ["sh", "-c", "trap 'echo hup > {hup}' HUP; echo \"$HERDR_FLOAT_ID\" > {id}; echo $$ > {pid}; while :; do sleep 1; done"]
+
+[[panes]]
+id = "scratch"
+title = "Scratch"
+placement = "float"
+command = ["sh", "-c", "while :; do sleep 1; done"]
 "#,
             hup = hup_marker.display(),
+            id = id_marker.display(),
             pid = marker.display(),
         ),
     )
@@ -1052,6 +1060,32 @@ command = ["sh", "-c", "trap 'echo hup > {hup}' HUP; echo $$ > {pid}; while :; d
     ));
     let child_pid = wait_for_pid_marker(&marker, Duration::from_secs(5));
     assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, 0) }, 0);
+    assert_eq!(
+        fs::read_to_string(&id_marker).unwrap().trim(),
+        float_id,
+        "the float process learns its float id from HERDR_FLOAT_ID"
+    );
+    let closed = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:open-closed",
+            "method": "plugin.pane.open",
+            "params": {"plugin_id": "test.live-handoff-float", "entrypoint": "scratch"}
+        }),
+    );
+    assert_ok(closed.clone());
+    let closed_id = closed["result"]["float"]["float_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:close-before",
+            "method": "float.close",
+            "params": {"float_id": closed_id}
+        }),
+    ));
 
     assert_ok(request(
         &api_socket,
@@ -1081,13 +1115,66 @@ command = ["sh", "-c", "trap 'echo hup > {hup}' HUP; echo $$ > {pid}; while :; d
     assert_eq!(floats[0]["visibility"], "hidden");
     assert_eq!(floats[0]["width"], 30);
 
-    let restored_id = floats[0]["float_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        floats[0]["float_id"], float_id,
+        "the float keeps its id across the handoff"
+    );
+    let shown = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:show",
+            "method": "float.show",
+            "params": {"float_id": float_id}
+        }),
+    );
+    assert_ok(shown.clone());
+    assert_eq!(shown["result"]["float"]["visibility"], "shown");
+    let moved = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:move",
+            "method": "float.move",
+            "params": {"float_id": float_id, "x": 2, "y": 1}
+        }),
+    );
+    assert_ok(moved.clone());
+    assert_eq!(
+        (
+            moved["result"]["float"]["x"].as_u64(),
+            moved["result"]["float"]["y"].as_u64()
+        ),
+        (Some(2), Some(1))
+    );
+    let reopened = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:open-after",
+            "method": "plugin.pane.open",
+            "params": {"plugin_id": "test.live-handoff-float", "entrypoint": "scratch"}
+        }),
+    );
+    assert_ok(reopened.clone());
+    let reopened_id = reopened["result"]["float"]["float_id"].as_str().unwrap();
+    assert_ne!(reopened_id, float_id);
+    assert_ne!(
+        reopened_id, closed_id,
+        "a float opened after the handoff never reuses a closed float's id"
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:close-after",
+            "method": "float.close",
+            "params": {"float_id": reopened_id}
+        }),
+    ));
+
     assert_ok(request(
         &api_socket,
         serde_json::json!({
             "id": "test:float:close",
             "method": "float.close",
-            "params": {"float_id": restored_id}
+            "params": {"float_id": float_id}
         }),
     ));
     let deadline = Instant::now() + Duration::from_secs(5);

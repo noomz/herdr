@@ -1,12 +1,19 @@
 use super::*;
 
-use crate::protocol::floats::{FloatSurface, FloatsSurface, INPUT_KIND};
+use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface, INPUT_KIND};
+
+/// Fixture floats are named by terminal id; `term_a` is float `f1`, `term_b` is `f2`.
+fn fid(terminal_id: &str) -> FloatId {
+    let letter = terminal_id.bytes().last().expect("terminal id");
+    FloatId::parse(&format!("f{}", letter - b'a' + 1)).expect("fixture float id")
+}
 
 fn float(id: &str, x: u16, y: u16, text: &str) -> FloatSurface {
     let first = format!("{text:<9}");
     let buffer = Buffer::with_lines([first.as_str(), "", ""]);
     FloatSurface {
-        float_id: id.into(),
+        float_id: fid(id),
+        terminal_id: id.into(),
         title: format!("{id} title"),
         outer: SurfaceRect {
             x,
@@ -146,7 +153,7 @@ fn keys_reach_a_float_only_after_it_is_clicked() {
     let typed = state.handle_input_bytes(b"y");
     let inputs = float_inputs(&typed);
     assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].float_id, "term_a");
+    assert_eq!(inputs[0].float_id, fid("term_a"));
 
     let frame = state.compose(106, 20).expect("focused frame");
     let a = hit(&state, "term_a");
@@ -220,7 +227,8 @@ fn clicking_a_lower_float_raises_it() {
 
     assert!(matches!(
         &endpoint_methods(&down)[..],
-        [crate::api::schema::Method::FloatRaise(target)] if target.float_id == "term_a"
+        [crate::api::schema::Method::FloatRaise(target)]
+            if target.float_id == fid("term_a").to_string()
     ));
     state.compose(106, 20).expect("raised frame");
     let order: Vec<_> = state
@@ -266,7 +274,7 @@ fn dragging_the_border_previews_then_commits_a_clamped_move() {
     assert!(matches!(
         &endpoint_methods(&up)[..],
         [crate::api::schema::Method::FloatMove(params)]
-            if params.float_id == "term_a" && (params.x, params.y) == max
+            if params.float_id == fid("term_a").to_string() && (params.x, params.y) == max
     ));
     state.compose(106, 20).expect("held preview");
     assert_eq!(
@@ -540,7 +548,7 @@ fn clicking_away_from_a_float_releases_keys_it_saw_pressed() {
     let released = float_inputs(&away);
     assert!(matches!(
         &released[..],
-        [input] if input.float_id == "term_a"
+        [input] if input.float_id == fid("term_a")
             && matches!(
                 &input.events[..],
                 [ClientPaneInputEvent::Key {
@@ -573,7 +581,7 @@ fn a_key_held_across_a_server_focus_change_releases_in_the_float() {
 
     assert!(matches!(
         &float_inputs(&release)[..],
-        [input] if input.float_id == "term_a"
+        [input] if input.float_id == fid("term_a")
     ));
     let typed = state.handle_input_bytes(b"y");
     assert!(float_inputs(&typed).is_empty(), "focus left the float");
@@ -629,4 +637,171 @@ fn a_focused_float_keeps_the_cursor_while_patches_beside_it_take_the_fast_path()
         panic!("a patch beside the focused float takes the fast path");
     };
     assert_eq!(composed.cursor, float_cursor);
+}
+
+fn surface_with_float_image(
+    state: &ClientShellState,
+    float_id: &str,
+    at: (u16, u16),
+    id: u32,
+) -> PaneSurfaceFrame {
+    let mut surface = state.pane_surface.clone().expect("pane surface");
+    let (asset, placement) = super::graphics::image(
+        crate::protocol::SurfaceGraphicsTarget::Popup {
+            terminal_id: float_id.into(),
+        },
+        at.0,
+        at.1,
+        id,
+    );
+    surface.graphics.assets.push(asset);
+    surface.graphics.placements.push(placement);
+    surface
+}
+
+fn placed(state: &mut ClientShellState, point: (u16, u16)) -> bool {
+    let frame = state.compose(106, 20).expect("frame");
+    super::graphics::is_placed(&frame.graphics.into_inline_bytes(), point)
+}
+
+#[test]
+fn float_images_sit_at_the_float_inner_origin_and_follow_a_drag_preview() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let inner = hit(&state, "term_a").pane.inner_rect;
+    state.set_pane_surface(surface_with_float_image(&state, "term_a", (2, 1), 40));
+    assert!(placed(&mut state, (inner.x + 2, inner.y + 1)));
+
+    let grab = (inner.x + 3, inner.y - 1);
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        grab.0,
+        grab.1,
+    );
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        grab.0 + 5,
+        grab.1 + 2,
+    );
+    let frame = state.compose(106, 20).expect("drag preview");
+    let bytes = frame.graphics.into_inline_bytes();
+    assert!(super::graphics::is_placed(
+        &bytes,
+        (inner.x + 7, inner.y + 3)
+    ));
+    assert!(!super::graphics::is_placed(
+        &bytes,
+        (inner.x + 2, inner.y + 1)
+    ));
+}
+
+#[test]
+fn float_images_are_cropped_by_whatever_is_drawn_above_them() {
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "low"),
+        float("term_b", 14, 5, "high"),
+    ]);
+    let low = hit(&state, "term_a");
+    let high = hit(&state, "term_b");
+    let layout = state.layout(106, 20);
+    let mut surface = surface_with_float_image(&state, "term_a", (0, 0), 41);
+    let (asset, placement) = super::graphics::image(
+        crate::protocol::SurfaceGraphicsTarget::Popup {
+            terminal_id: "term_a".into(),
+        },
+        high.outer.x - low.pane.inner_rect.x,
+        high.outer.y - low.pane.inner_rect.y,
+        42,
+    );
+    surface.graphics.assets.push(asset);
+    surface.graphics.placements.push(placement);
+    let under_low = (low.pane.inner_rect.x + 1, low.pane.inner_rect.y + 1);
+    super::graphics::add_main_image(&mut surface, layout, under_low, 43);
+    let (asset, placement) = super::graphics::image(
+        crate::protocol::SurfaceGraphicsTarget::Popup {
+            terminal_id: "term_b".into(),
+        },
+        0,
+        0,
+        44,
+    );
+    surface.graphics.assets.push(asset);
+    surface.graphics.placements.push(placement);
+    state.set_pane_surface(surface);
+
+    let frame = state.compose(106, 20).expect("frame");
+    let bytes = frame.graphics.into_inline_bytes();
+    let low_origin = (low.pane.inner_rect.x, low.pane.inner_rect.y);
+    let high_origin = (high.pane.inner_rect.x, high.pane.inner_rect.y);
+    assert!(super::graphics::is_placed(&bytes, low_origin));
+    assert!(
+        !super::graphics::is_placed(&bytes, (high.outer.x, high.outer.y)),
+        "the higher float crops the lower float's image"
+    );
+    assert!(super::graphics::is_placed(&bytes, high_origin));
+    assert!(
+        !super::graphics::is_placed(&bytes, under_low),
+        "tiled images under a float stay cropped"
+    );
+}
+
+#[test]
+fn the_modal_popup_crops_float_images_under_it() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface_with_popup());
+    state.compose(106, 20).expect("popup frame");
+    let popup = state.hits.popup.clone().expect("popup hit").rect;
+    let surface = state.layout(106, 20).pane_surface;
+    let at = (popup.x - surface.x - 4, popup.y - surface.y - 2);
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", at.0, at.1, "pip")],
+    });
+    state.compose(106, 20).expect("float frame");
+    let inner = hit(&state, "term_a").pane.inner_rect;
+    let mut surface = surface_with_float_image(&state, "term_a", (0, 0), 46);
+    let (asset, placement) = super::graphics::image(
+        crate::protocol::SurfaceGraphicsTarget::Popup {
+            terminal_id: "term_a".into(),
+        },
+        popup.x - inner.x,
+        popup.y - inner.y,
+        47,
+    );
+    surface.graphics.assets.push(asset);
+    surface.graphics.placements.push(placement);
+    let mut without_popup = surface.clone();
+    state.set_pane_surface(surface);
+
+    let frame = state.compose(106, 20).expect("frame");
+    let bytes = frame.graphics.into_inline_bytes();
+    assert!(super::graphics::is_placed(&bytes, (inner.x, inner.y)));
+    assert!(!super::graphics::is_placed(&bytes, (popup.x, popup.y)));
+
+    without_popup.popup = None;
+    state.set_pane_surface(without_popup);
+    assert!(
+        placed(&mut state, (popup.x, popup.y)),
+        "uncovered once the popup closes"
+    );
+}
+
+#[test]
+fn float_images_leave_with_their_float_and_never_draw_without_one() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let inner = hit(&state, "term_a").pane.inner_rect;
+    state.set_pane_surface(surface_with_float_image(&state, "term_a", (0, 0), 45));
+    assert!(placed(&mut state, (inner.x, inner.y)));
+
+    state.set_float_layer(FloatsSurface::default());
+    let frame = state.compose(106, 20).expect("frame");
+    let bytes = frame.graphics.into_inline_bytes();
+    assert!(!super::graphics::is_placed(&bytes, (inner.x, inner.y)));
+    assert!(String::from_utf8_lossy(&bytes).contains("a=d"));
+
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+    assert!(placed(&mut state, (inner.x, inner.y)));
 }

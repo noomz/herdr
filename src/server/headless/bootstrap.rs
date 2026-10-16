@@ -172,7 +172,10 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         )?;
         app.restore_handoff_floats(
             &received.manifest.snapshot,
-            std::mem::take(&mut received.manifest.floats),
+            crate::handoff_runtime::HandoffFloats {
+                floats: std::mem::take(&mut received.manifest.floats),
+                next_float_id: received.manifest.next_float_id,
+            },
             std::mem::take(&mut received.float_fds),
         );
         crate::server::handoff::report_restored(&mut received.stream)?;

@@ -461,10 +461,10 @@ impl ClientShellState {
             }
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
-        let focused_float = self.focused_float_id().map(str::to_owned);
+        let focused_float = self.focused_float_id();
         self.hits.floats = super::floats::compose_floats(
             &self.floats,
-            focused_float.as_deref(),
+            focused_float,
             &self.config.palette,
             &mut frame,
             layout.pane_surface,
@@ -584,7 +584,11 @@ impl ClientShellState {
             if let Some(geometry) =
                 crate::popup_size::resolve_popup_geometry(width, height, layout.pane_surface)
             {
-                occlusion.start_popup(geometry.outer);
+                occlusion.start_terminal(
+                    &popup.terminal_id,
+                    geometry.outer,
+                    (geometry.inner.x, geometry.inner.y),
+                );
                 let mut composed = frame.to_ratatui_buffer()?;
                 let block = ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)

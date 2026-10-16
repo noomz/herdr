@@ -1092,7 +1092,7 @@ impl ClientShellState {
             overlay: self.overlay.as_ref().map(ClientShellOverlay::kind),
             popup_terminal_id: self.popup_terminal_id.clone(),
             popup_pending: self.popup_pending,
-            focused_float: self.focused_float_id().map(str::to_owned),
+            focused_float: self.focused_float_id(),
             retained_selection: self
                 .selection
                 .as_ref()
@@ -1203,7 +1203,7 @@ impl ClientShellState {
     /// Where typed input goes in terminal mode: the focused float, else the focused pane.
     fn terminal_input_target(&self) -> Option<ClientInputTarget> {
         self.focused_float_id()
-            .map(|float_id| ClientInputTarget::Float(float_id.to_owned()))
+            .map(ClientInputTarget::Float)
             .or_else(|| self.focused_pane_id().map(ClientInputTarget::Pane))
     }
 

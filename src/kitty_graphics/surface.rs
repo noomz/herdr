@@ -52,14 +52,23 @@ impl DeliveryCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Visibility {
     Main,
-    Popup,
     Hidden,
 }
 
+/// What the client drew over the pane surface, in draw order: covered regions, and the
+/// terminals (the modal popup and floats) whose images sit above everything drawn before them.
 #[derive(Debug, Default)]
 pub(crate) struct Occlusion {
     regions: Vec<Rect>,
-    popup_start: usize,
+    terminals: Vec<TerminalLayer>,
+}
+
+#[derive(Debug)]
+struct TerminalLayer {
+    terminal_id: String,
+    origin: (u16, u16),
+    /// Only regions drawn after this terminal cover its images.
+    covered_from: usize,
 }
 
 impl Occlusion {
@@ -69,9 +78,36 @@ impl Occlusion {
         }
     }
 
-    pub(crate) fn start_popup(&mut self, rect: Rect) {
-        self.cover(rect);
-        self.popup_start = self.regions.len();
+    /// Draws a terminal's `outer` frame over everything so far. Its images are placed at
+    /// `origin` and stay visible unless something drawn later covers them.
+    pub(crate) fn start_terminal(&mut self, terminal_id: &str, outer: Rect, origin: (u16, u16)) {
+        self.cover(outer);
+        self.terminals.push(TerminalLayer {
+            terminal_id: terminal_id.to_owned(),
+            origin,
+            covered_from: self.regions.len(),
+        });
+    }
+
+    fn terminal(&self, terminal_id: &str) -> Option<&TerminalLayer> {
+        self.terminals
+            .iter()
+            .find(|layer| layer.terminal_id == terminal_id)
+    }
+
+    /// Where a placement's cells start on screen, or `None` when its terminal is not drawn.
+    fn origin(&self, placement: &SurfaceGraphicsPlacement, main: (u16, u16)) -> Option<(u16, u16)> {
+        match &placement.asset.source {
+            SurfaceGraphicsSource::Terminal {
+                target: SurfaceGraphicsTarget::Popup { terminal_id },
+                ..
+            } => self.terminal(terminal_id).map(|layer| layer.origin),
+            SurfaceGraphicsSource::Terminal {
+                target: SurfaceGraphicsTarget::Pane { .. },
+                ..
+            }
+            | SurfaceGraphicsSource::PaneLayer { .. } => Some(main),
+        }
     }
 
     #[cfg(test)]
@@ -115,16 +151,16 @@ impl Occlusion {
         origin: (u16, u16),
         limit: usize,
     ) -> Option<Vec<GridPiece>> {
-        let regions = if matches!(
-            placement.asset.source,
+        let regions = match &placement.asset.source {
             SurfaceGraphicsSource::Terminal {
-                target: SurfaceGraphicsTarget::Popup { .. },
+                target: SurfaceGraphicsTarget::Popup { terminal_id },
                 ..
-            }
-        ) {
-            &self.regions[self.popup_start..]
-        } else {
-            &self.regions
+            } => self
+                .terminal(terminal_id)
+                .map_or(&self.regions[..], |layer| {
+                    &self.regions[layer.covered_from..]
+                }),
+            _ => &self.regions,
         };
         let mut pieces = vec![GridPiece::whole(placement)];
         // Pixel offsets shrink an image inside its cells, so cell overlap is exact.
@@ -469,11 +505,10 @@ impl ClientState {
         &mut self,
         visibility: Visibility,
         main_origin: (u16, u16),
-        popup_origin: Option<(u16, u16)>,
         cell_size: HostCellSize,
         occlusion: &Occlusion,
     ) -> Vec<u8> {
-        self.encode_output(visibility, main_origin, popup_origin, cell_size, occlusion)
+        self.encode_output(visibility, main_origin, cell_size, occlusion)
             .into_inline_bytes()
     }
 
@@ -481,7 +516,6 @@ impl ClientState {
         &mut self,
         visibility: Visibility,
         main_origin: (u16, u16),
-        popup_origin: Option<(u16, u16)>,
         cell_size: HostCellSize,
         occlusion: &Occlusion,
     ) -> GraphicsOutput {
@@ -507,8 +541,10 @@ impl ClientState {
             .display_scene
             .placements
             .iter()
+            .filter(|_| visibility == Visibility::Main)
             .filter_map(|placement| {
-                client_placement_origin(placement, visibility, main_origin, popup_origin)
+                occlusion
+                    .origin(placement, main_origin)
                     .map(|origin| (placement, origin))
             })
             .collect::<Vec<_>>();
@@ -572,10 +608,20 @@ pub(crate) fn direct_upload_control(scope: &str, key: &SurfaceGraphicsAssetKey) 
     )
 }
 
+/// A terminal drawn above the tiled layout (the modal popup or a float) whose images the
+/// viewer receives, keyed on the wire by `SurfaceGraphicsTarget::Popup { terminal_id }`.
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayTerminal<'a> {
+    pub(crate) pane_id: PaneId,
+    pub(crate) terminal_id: &'a crate::terminal::TerminalId,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+}
+
 pub(crate) fn collect_scene(
     app: &crate::app::App,
     surface: crate::ui::TabSurfaceView<'_>,
-    popup_content_size: Option<(u16, u16)>,
+    overlays: &[OverlayTerminal<'_>],
     cell_size: HostCellSize,
     delivered: &DeliveryCache,
     _client_id: u64,
@@ -598,16 +644,13 @@ pub(crate) fn collect_scene(
             }
         }
     }
-    let popup_target = app.state.popup_pane.as_ref().map(|popup| {
-        (
-            popup.pane_id,
+    for overlay in overlays {
+        targets.insert(
+            overlay.pane_id,
             SurfaceGraphicsTarget::Popup {
-                terminal_id: popup.terminal_id.to_string(),
+                terminal_id: overlay.terminal_id.to_string(),
             },
-        )
-    });
-    if let Some((pane_id, target)) = popup_target.as_ref() {
-        targets.insert(*pane_id, target.clone());
+        );
     }
 
     // Reconstruct the small source-signature index expected by the collector.
@@ -647,40 +690,40 @@ pub(crate) fn collect_scene(
         &delivered_terminal_images,
     );
 
-    if let (Some(popup), Some((width, height)), Some((_, target))) = (
-        app.state.popup_pane.as_ref(),
-        popup_content_size,
-        popup_target.as_ref(),
-    ) {
-        if let Some(runtime) = app.terminal_runtimes.get(&popup.terminal_id) {
-            let mut requested = HashSet::new();
-            for placement in runtime.kitty_image_placements_with_data_filter(|descriptor| {
-                let key = asset_key_from_descriptor(
-                    SurfaceGraphicsSource::Terminal {
-                        target: target.clone(),
-                        image_id: descriptor.image_id,
-                    },
-                    descriptor,
-                );
-                !descriptor.source_file && !delivered.assets.contains(&key) && requested.insert(key)
-            }) {
-                host_placements.push(HostPlacement {
-                    raw_data: None,
-                    pane_id: popup.pane_id,
-                    host_image_id: None,
-                    area: Rect::new(0, 0, width, height),
-                    cell_size,
-                    source_key: HostSourceKey::Terminal {
-                        pane_id: popup.pane_id,
-                        image_id: placement.image_id,
-                    },
-                    placement,
-                    scrollback_offset: runtime
-                        .scroll_metrics()
-                        .map(|metrics| metrics.offset_from_bottom as u32)
-                        .unwrap_or(0),
-                });
-            }
+    for overlay in overlays {
+        let (Some(runtime), Some(target)) = (
+            app.terminal_runtimes.get(overlay.terminal_id),
+            targets.get(&overlay.pane_id),
+        ) else {
+            continue;
+        };
+        let mut requested = HashSet::new();
+        for placement in runtime.kitty_image_placements_with_data_filter(|descriptor| {
+            let key = asset_key_from_descriptor(
+                SurfaceGraphicsSource::Terminal {
+                    target: target.clone(),
+                    image_id: descriptor.image_id,
+                },
+                descriptor,
+            );
+            !descriptor.source_file && !delivered.assets.contains(&key) && requested.insert(key)
+        }) {
+            host_placements.push(HostPlacement {
+                raw_data: None,
+                pane_id: overlay.pane_id,
+                host_image_id: None,
+                area: Rect::new(0, 0, overlay.width, overlay.height),
+                cell_size,
+                source_key: HostSourceKey::Terminal {
+                    pane_id: overlay.pane_id,
+                    image_id: placement.image_id,
+                },
+                placement,
+                scrollback_offset: runtime
+                    .scroll_metrics()
+                    .map(|metrics| metrics.offset_from_bottom as u32)
+                    .unwrap_or(0),
+            });
         }
     }
 
@@ -929,35 +972,6 @@ fn asset_key(
     }
 }
 
-fn client_placement_origin(
-    placement: &SurfaceGraphicsPlacement,
-    visibility: Visibility,
-    main_origin: (u16, u16),
-    popup_origin: Option<(u16, u16)>,
-) -> Option<(u16, u16)> {
-    let origin = match (&placement.asset.source, visibility) {
-        (
-            SurfaceGraphicsSource::Terminal {
-                target: SurfaceGraphicsTarget::Popup { .. },
-                ..
-            },
-            Visibility::Popup,
-        ) => popup_origin?,
-        (
-            SurfaceGraphicsSource::Terminal {
-                target: SurfaceGraphicsTarget::Pane { .. },
-                ..
-            },
-            Visibility::Main | Visibility::Popup,
-        )
-        | (SurfaceGraphicsSource::PaneLayer { .. }, Visibility::Main | Visibility::Popup) => {
-            main_origin
-        }
-        _ => return None,
-    };
-    Some(origin)
-}
-
 fn client_host_piece(
     scope: &str,
     placement: &SurfaceGraphicsPlacement,
@@ -1176,7 +1190,6 @@ mod tests {
         let bytes = String::from_utf8(state.encode(
             Visibility::Main,
             (10, 5),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -1208,8 +1221,7 @@ mod tests {
             let next = asset(target.clone(), revision, vec![revision as u8, 2, 3, 255]);
             assert_eq!(state.image_id(&next.key), id);
             state.set_scene(scene(next, 0, 0));
-            let output =
-                state.encode_output(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+            let output = state.encode_output(Visibility::Main, (0, 0), cell, &Occlusion::default());
             let uploads = output
                 .operations
                 .iter()
@@ -1247,7 +1259,7 @@ mod tests {
         other.data_fingerprint += 1;
         assert_ne!(state.image_id(&other), legacy_id);
         state.set_scene(SurfaceGraphicsScene::default());
-        let bytes = state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        let bytes = state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert!(String::from_utf8(bytes)
             .unwrap()
             .contains(&format!("a=d,d=I,i={id}")));
@@ -1275,16 +1287,11 @@ mod tests {
             width_px: 8,
             height_px: 16,
         };
-        state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert!(state.trust_direct_asset(&image.key, id));
-        let first = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let first =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(first.contains("a=p,"));
         assert!(!first.contains("a=t,"));
         let mut next = image.clone();
@@ -1293,27 +1300,17 @@ mod tests {
         metadata.assets.clear();
         state.set_scene(metadata);
         assert!(!state.trust_direct_asset(&image.key, id));
-        let cleanup = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let cleanup =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(!cleanup.contains("a=d,"));
         assert!(cleanup.contains(&format!("a=p,i={id},")));
         assert!(!state.accepts_direct_asset(&next.key, id));
         let replacement_id = id ^ NATIVE_SLOT_BIT;
         assert!(state.trust_direct_asset(&next.key, replacement_id));
-        let placed = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let placed =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(placed.contains(&format!("a=p,i={replacement_id},")));
         assert!(placed.contains(&format!("a=d,d=I,i={id},")));
         assert!(!placed.contains("a=t,"));
@@ -1359,7 +1356,6 @@ mod tests {
                 let pending = String::from_utf8(state.encode(
                     Visibility::Main,
                     (0, 0),
-                    None,
                     cell,
                     &Occlusion::default(),
                 ))
@@ -1374,7 +1370,6 @@ mod tests {
             let swapped = String::from_utf8(state.encode(
                 Visibility::Main,
                 (0, 0),
-                None,
                 cell,
                 &Occlusion::default(),
             ))
@@ -1392,14 +1387,9 @@ mod tests {
         }
         assert_eq!(ids.len(), 2);
         state.set_scene(SurfaceGraphicsScene::default());
-        let cleanup = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let cleanup =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(cleanup.contains(&format!("a=d,d=I,i={},", previous.unwrap())));
         assert!(state.host.images.is_empty());
         assert!(state.native_image_ids.is_empty());
@@ -1426,34 +1416,24 @@ mod tests {
         let mut metadata = scene(image.clone(), 0, 0);
         metadata.assets.clear();
         state.set_scene(metadata);
-        state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert!(state.trust_direct_asset(&image.key, active));
-        state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default());
         let mut next = image.clone();
         next.key.data_fingerprint += 1;
         let mut metadata = scene(next.clone(), 0, 0);
         metadata.assets.clear();
         state.set_scene(metadata);
         state.retire_direct_image(base);
-        let rejected = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let rejected =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(!rejected.contains(&format!("a=d,d=I,i={active},")));
         assert!(rejected.contains(&format!("a=p,i={active},")));
         state.set_scene(scene(next.clone(), 0, 0));
-        let fallback = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let fallback =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(fallback.contains("a=t,"));
         assert!(fallback.contains(&format!("a=p,i={base},")));
         assert!(fallback.contains(&format!("a=d,d=I,i={active},")));
@@ -1463,14 +1443,9 @@ mod tests {
         let mut moved = scene(next.clone(), 1, 0);
         moved.assets.clear();
         state.set_scene(moved);
-        let geometry = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            cell,
-            &Occlusion::default(),
-        ))
-        .unwrap();
+        let geometry =
+            String::from_utf8(state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default()))
+                .unwrap();
         assert!(geometry.contains(&format!("a=d,d=I,i={base},")));
         assert!(!geometry.contains("a=p,"));
         state.set_scene(SurfaceGraphicsScene::default());
@@ -1506,8 +1481,7 @@ mod tests {
             width_px: 8,
             height_px: 16,
         };
-        let output =
-            state.encode_output(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        let output = state.encode_output(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert!(
             matches!(&output.operations[0], GraphicsOperation::Bytes(bytes)
             if String::from_utf8_lossy(bytes).contains("a=d,d=I,i=4242"))
@@ -1529,8 +1503,7 @@ mod tests {
                 .count(),
             2
         );
-        let replay =
-            state.encode_output(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        let replay = state.encode_output(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert!(replay
             .operations
             .iter()
@@ -1602,22 +1575,21 @@ mod tests {
                 width_px: 8,
                 height_px: 16,
             };
-            let _ = state.encode(Visibility::Main, (10, 5), None, cell, &Occlusion::default());
+            let _ = state.encode(Visibility::Main, (10, 5), cell, &Occlusion::default());
             assert_eq!(state.host.placements.len(), 2);
             let mut cover = Occlusion::default();
             cover.cover(Rect::new(10, 5, 1, 1));
-            let hidden = state.encode(Visibility::Main, (10, 5), None, cell, &cover);
+            let hidden = state.encode(Visibility::Main, (10, 5), cell, &cover);
             let hidden = String::from_utf8_lossy(&hidden);
             assert!(hidden.contains("a=d,d=i"), "{hidden}");
             assert!(!hidden.contains("a=d,d=I"), "{hidden}");
             assert!(hidden.contains("\u{1b}[6;16H"), "{hidden}");
             assert_eq!(state.host.placements.len(), 1);
             cover.cover(Rect::new(15, 5, 1, 1));
-            let _ = state.encode(Visibility::Main, (10, 5), None, cell, &cover);
+            let _ = state.encode(Visibility::Main, (10, 5), cell, &cover);
             assert!(state.host.placements.is_empty());
             assert!(state.host.images.contains_key(&id));
-            let restored =
-                state.encode(Visibility::Main, (10, 5), None, cell, &Occlusion::default());
+            let restored = state.encode(Visibility::Main, (10, 5), cell, &Occlusion::default());
             let restored = String::from_utf8_lossy(&restored);
             assert!(restored.contains("a=p"), "{restored}");
             assert!(!restored.contains("a=t"), "{restored}");
@@ -1686,7 +1658,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -1834,14 +1805,14 @@ mod tests {
         };
         let mut cover = Occlusion::default();
         cover.cover(Rect::new(3, 2, 4, 2));
-        let _ = state.encode(Visibility::Main, (0, 0), None, cell, &cover);
+        let _ = state.encode(Visibility::Main, (0, 0), cell, &cover);
         assert_eq!(state.host.placements.len(), 4);
         let mut cover = Occlusion::default();
         cover.cover(Rect::new(6, 0, 4, 2));
-        let moved = state.encode(Visibility::Main, (0, 0), None, cell, &cover);
+        let moved = state.encode(Visibility::Main, (0, 0), cell, &cover);
         assert!(!String::from_utf8_lossy(&moved).contains("a=t"));
         assert_eq!(state.host.placements.len(), 2);
-        let restored = state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        let restored = state.encode(Visibility::Main, (0, 0), cell, &Occlusion::default());
         assert_eq!(
             placed_pieces(&restored),
             vec!["1;1 c=10,r=6,w=100,h=60".to_owned()]
@@ -1869,7 +1840,7 @@ mod tests {
         let popup = scene(image, 0, 0).placements.remove(0);
         let mut cover = Occlusion::default();
         cover.cover(Rect::new(10, 5, 3, 3));
-        cover.start_popup(Rect::new(9, 4, 5, 5));
+        cover.start_terminal("popup", Rect::new(9, 4, 5, 5), (10, 5));
         assert!(cover.covers(&main, (10, 5)));
         assert!(!cover.covers(&main, (0, 0)));
         assert!(!cover.covers(&popup, (10, 5)));
@@ -1931,7 +1902,7 @@ mod tests {
                     _ => {}
                 }
                 state.set_scene(graphics);
-                let _ = state.encode_output(Visibility::Main, (0, 0), None, cell, &cover);
+                let _ = state.encode_output(Visibility::Main, (0, 0), cell, &cover);
                 let mut samples = Vec::new();
                 for _ in 0..101 {
                     let start = std::time::Instant::now();
@@ -1939,7 +1910,6 @@ mod tests {
                         std::hint::black_box(state.encode_output(
                             Visibility::Main,
                             (0, 0),
-                            None,
                             cell,
                             &cover,
                         ));
@@ -1957,7 +1927,7 @@ mod tests {
                 let mut state = ClientState::default();
                 state.set_scope("swap-profile");
                 state.set_scene(graphics.clone());
-                state.encode_output(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+                state.encode_output(Visibility::Main, (0, 0), cell, &Occlusion::default());
                 graphics.assets.clear();
                 let mut samples = Vec::new();
                 for revision in 1..=105 {
@@ -1975,7 +1945,6 @@ mod tests {
                     std::hint::black_box(state.encode_output(
                         Visibility::Main,
                         (0, 0),
-                        None,
                         cell,
                         &Occlusion::default(),
                     ));
@@ -1984,7 +1953,6 @@ mod tests {
                     std::hint::black_box(state.encode_output(
                         Visibility::Main,
                         (0, 0),
-                        None,
                         cell,
                         &Occlusion::default(),
                     ));
@@ -2029,17 +1997,11 @@ mod tests {
                 cover.cover(Rect::new(110, 0, 40, 4));
                 cover.cover(Rect::new(60, 20, 30, 8));
             }
-            let _ = state.encode_output(Visibility::Main, (0, 0), None, cell, &cover);
+            let _ = state.encode_output(Visibility::Main, (0, 0), cell, &cover);
             let mut samples = Vec::new();
             for _ in 0..101 {
                 let start = std::time::Instant::now();
-                std::hint::black_box(state.encode_output(
-                    Visibility::Main,
-                    (0, 0),
-                    None,
-                    cell,
-                    &cover,
-                ));
+                std::hint::black_box(state.encode_output(Visibility::Main, (0, 0), cell, &cover));
                 samples.push(start.elapsed().as_nanos());
             }
             samples.sort_unstable();
@@ -2066,7 +2028,6 @@ mod tests {
         let first = state.encode(
             Visibility::Main,
             (10, 5),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2079,7 +2040,6 @@ mod tests {
         let second = state.encode(
             Visibility::Main,
             (10, 5),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2108,18 +2068,12 @@ mod tests {
             width_px: 8,
             height_px: 16,
         };
-        let _ = state.encode(Visibility::Main, (4, 2), None, cell, &Occlusion::default());
+        let _ = state.encode(Visibility::Main, (4, 2), cell, &Occlusion::default());
 
-        let hidden = state.encode(
-            Visibility::Hidden,
-            (4, 2),
-            None,
-            cell,
-            &Occlusion::default(),
-        );
+        let hidden = state.encode(Visibility::Hidden, (4, 2), cell, &Occlusion::default());
         assert!(String::from_utf8_lossy(&hidden).contains("a=d,d=i"));
 
-        let restored = state.encode(Visibility::Main, (4, 2), None, cell, &Occlusion::default());
+        let restored = state.encode(Visibility::Main, (4, 2), cell, &Occlusion::default());
         let restored = String::from_utf8_lossy(&restored);
         assert!(restored.contains("a=p"));
         assert!(!restored.contains("a=t,t=d"));
@@ -2138,15 +2092,16 @@ mod tests {
         );
         state.set_scene(scene(image, 2, 1));
 
+        let mut cover = Occlusion::default();
+        cover.start_terminal("terminal-popup", Rect::new(29, 9, 10, 5), (30, 10));
         let bytes = state.encode(
-            Visibility::Popup,
+            Visibility::Main,
             (20, 4),
-            Some((30, 10)),
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
             },
-            &Occlusion::default(),
+            &cover,
         );
         assert!(String::from_utf8_lossy(&bytes).contains("\u{1b}[12;33H"));
     }
@@ -2159,7 +2114,6 @@ mod tests {
         let _ = state.encode(
             Visibility::Hidden,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2186,7 +2140,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2220,7 +2173,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2253,7 +2205,6 @@ mod tests {
         let _ = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2268,7 +2219,6 @@ mod tests {
         let hidden = String::from_utf8(state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2283,7 +2233,6 @@ mod tests {
         let restored = String::from_utf8(state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2298,7 +2247,6 @@ mod tests {
         let removed = String::from_utf8(state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2333,15 +2281,16 @@ mod tests {
         graphics.placements.extend(popup_scene.placements);
         state.set_scene(graphics);
 
+        let mut cover = Occlusion::default();
+        cover.start_terminal("popup-1", Rect::new(19, 9, 4, 4), (20, 10));
         let bytes = String::from_utf8(state.encode(
-            Visibility::Popup,
+            Visibility::Main,
             (2, 1),
-            Some((20, 10)),
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
             },
-            &Occlusion::default(),
+            &cover,
         ))
         .unwrap();
         assert!(bytes.contains("\u{1b}[2;3H"), "{bytes}");
@@ -2383,7 +2332,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Hidden,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2409,7 +2357,6 @@ mod tests {
         let _ = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -2443,7 +2390,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,

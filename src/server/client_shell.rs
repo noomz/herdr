@@ -289,6 +289,7 @@ pub(super) fn render_pane_surface(
     area: Rect,
     resize_panes: bool,
     show_popup: bool,
+    floats: crate::server::client_shell_graphics::FloatGraphics,
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
     client_id: u64,
@@ -439,12 +440,14 @@ pub(super) fn render_pane_surface(
     let popup = show_popup
         .then(|| render_popup_surface(app, area, resize_panes, cell_size))
         .flatten();
+    let floats = crate::server::client_shell_graphics::visible_floats(app, floats, area);
     let (graphics, next_graphics_delivery, graphics_sources) =
         crate::server::client_shell_graphics::collect(
             app,
             &layout.pane_infos,
             &layout.split_borders,
             popup.as_deref(),
+            &floats,
             target,
             cell_size,
             graphics_delivery,
@@ -576,7 +579,8 @@ pub(super) fn render_float_layer(
             (0, 0)
         };
         floats.push(protocol::floats::FloatSurface {
-            float_id: float.terminal_id.to_string(),
+            float_id: float.id,
+            terminal_id: float.terminal_id.to_string(),
             title: app
                 .state
                 .terminals

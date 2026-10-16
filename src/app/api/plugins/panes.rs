@@ -75,25 +75,23 @@ impl App {
             position,
             hide_while_focused,
         };
-        let terminal_id =
+        let float_id =
             match self.spawn_float_argv_command(&pane.command, Some(cwd), extra_env, spec) {
-                Ok(terminal_id) => terminal_id,
+                Ok(float_id) => float_id,
                 Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
             };
-        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+        if let Some(terminal) = self
+            .state
+            .float(float_id)
+            .map(|float| float.terminal_id.clone())
+            .and_then(|terminal_id| self.state.terminals.get_mut(&terminal_id))
+        {
             terminal.set_manual_label(pane.title);
         }
-        let Some((z, float)) = self
-            .state
-            .floats
-            .iter()
-            .enumerate()
-            .find(|(_, float)| float.terminal_id == terminal_id)
-        else {
-            return encode_error(id, "plugin_pane_open_failed", "plugin float disappeared");
-        };
-        let float = self.float_info(z, float);
-        encode_success(id, ResponseResult::FloatOpened { float })
+        match self.float_info_by_id(float_id) {
+            Some(float) => encode_success(id, ResponseResult::FloatOpened { float }),
+            None => encode_error(id, "plugin_pane_open_failed", "plugin float disappeared"),
+        }
     }
 
     pub(super) fn open_plugin_overlay_pane(

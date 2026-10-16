@@ -218,9 +218,8 @@ impl App {
                 self.close_popup_pane();
                 return Vec::new();
             }
-            if let Some(float) = self.state.float_for_pane(*pane_id) {
-                let terminal_id = float.terminal_id.clone();
-                self.close_float(terminal_id.as_str());
+            if let Some(float_id) = self.state.float_for_pane(*pane_id).map(|float| float.id) {
+                self.close_float(float_id);
                 return Vec::new();
             }
             if worktree_restore_failed {

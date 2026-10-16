@@ -765,7 +765,7 @@ impl ClientShellState {
             }
             PendingEndpointKind::FloatMove { float_id } => {
                 return (
-                    self.complete_float_move(&float_id, result.is_ok()),
+                    self.complete_float_move(float_id, result.is_ok()),
                     Vec::new(),
                 );
             }

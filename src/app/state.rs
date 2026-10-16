@@ -877,6 +877,8 @@ pub struct AppState {
     pub(crate) popup_pane: Option<PopupPaneState>,
     /// Session-owned floating terminals, bottom to top.
     pub(crate) floats: Vec<crate::app::floats::FloatState>,
+    /// The float id the session mints next; ids are never reused.
+    pub(crate) next_float_id: crate::app::floats::FloatId,
     /// Recent plugin action/event command executions.
     pub(crate) plugin_command_logs: Vec<crate::api::schema::PluginCommandLogInfo>,
     pub(crate) next_plugin_command_log_id: u64,
@@ -1116,6 +1118,7 @@ impl AppState {
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
             floats: Vec::new(),
+            next_float_id: crate::app::floats::FloatId::FIRST,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,
@@ -1160,7 +1163,18 @@ impl AppState {
     ) {
         let mut float_terminals = std::collections::HashSet::new();
         let mut float_panes = std::collections::HashSet::new();
+        let mut float_ids = std::collections::HashSet::new();
         for float in &self.floats {
+            assert!(
+                float_ids.insert(float.id),
+                "float id {} appears more than once",
+                float.id
+            );
+            assert!(
+                float.id < self.next_float_id,
+                "float id {} would be minted again",
+                float.id
+            );
             assert!(
                 float_terminals.insert(&float.terminal_id),
                 "float terminal {} appears more than once",

@@ -272,7 +272,8 @@ injects `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ENV=1`,
 receive `HERDR_PLUGIN_ACTION_ID`; startup and event hooks receive
 `HERDR_PLUGIN_EVENT` (`startup` for startup hooks), event hooks additionally
 receive `HERDR_PLUGIN_EVENT_JSON`, and pane commands receive
-`HERDR_PLUGIN_ENTRYPOINT_ID`.
+`HERDR_PLUGIN_ENTRYPOINT_ID`. A pane command opened as a float also receives
+`HERDR_FLOAT_ID`, the float's `float_id`.
 
 `HERDR_PLUGIN_ROOT` is the installed or linked plugin directory. Do not store
 user credentials or durable state there, because GitHub-installed plugin roots
@@ -373,6 +374,11 @@ to return input to the layout. Escape goes to the program in the float, and
 prefix keybindings keep working. Drag a float by its border or title to move
 it. A modal popup appears above floats and takes input while it is open.
 
+A program in a float can draw kitty graphics images. Herdr places them inside
+the float's border, moves them with the float, and crops them where a higher
+float, the modal popup, or a menu covers the float. A hidden float shows no
+images.
+
 Hiding a float keeps its process and terminal running. The float closes when
 its command exits or when you send `float.close`. A float is not a Herdr pane:
 it has no pane ID, emits no pane lifecycle events, and does not take part in
@@ -388,7 +394,7 @@ Each client focuses floats on its own, so `plugin.pane.open` rejects
 {
   "type": "float_opened",
   "float": {
-    "float_id": "term_18f3a2c0b41",
+    "float_id": "f1",
     "title": "Peek",
     "width": 50,
     "height": 14,
@@ -401,7 +407,9 @@ Each client focuses floats on its own, so `plugin.pane.open` rejects
 }
 ```
 
-`float_id` names the float in every `float.*` method. `width` and `height` are
+`float_id` names the float in every `float.*` method. It stays the same for the
+life of the float, including across `server live-handoff`, and Herdr never gives
+it to another float in the same session. `width` and `height` are
 cells or a percentage string such as `"80%"`, and are absent when the float uses
 the default size. `x` and `y` are absent while the float is centered. `visibility`
 is `shown` or `hidden`. `hide_while_focused` is absent when no hide rule is set.

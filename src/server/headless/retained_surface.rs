@@ -448,11 +448,17 @@ impl HeadlessServer {
                     fallback!("graphics_target");
                 };
                 let client = &self.clients[&client_id];
+                let floats = crate::server::client_shell_graphics::visible_floats(
+                    &self.app,
+                    self.shell_float_graphics(client_id),
+                    Rect::new(0, 0, surface.frame.width, surface.frame.height),
+                );
                 let Some((graphics, delivery, sources)) =
                     crate::server::client_shell_graphics::collect_retained(
                         &self.app,
                         &panes,
                         target,
+                        &floats,
                         client.cell_size,
                         &client.shell_graphics_delivery,
                         client_id,
@@ -499,11 +505,8 @@ impl HeadlessServer {
                 patch,
                 mut graphics,
             } = update;
-            if graphics.as_ref().is_some_and(|(surface, _, _)| {
-                self.defer_changed_native_geometry(client_id, &surface.graphics)
-            }) {
-                deferred += 1;
-                continue;
+            if let Some((surface, _, _)) = &graphics {
+                self.supersede_changed_native_geometry(client_id, &surface.graphics);
             }
             let native_upload = graphics.as_mut().and_then(|(surface, delivery, sources)| {
                 self.prepare_native_scene(client_id, &mut surface.graphics, delivery, sources)

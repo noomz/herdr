@@ -91,6 +91,22 @@ impl HeadlessServer {
                 .is_some_and(|float| float.visible_to(self.shell_focused_tiled_pane(client_id)))
     }
 
+    pub(super) fn shell_float_graphics(
+        &self,
+        client_id: u64,
+    ) -> crate::server::client_shell_graphics::FloatGraphics {
+        let negotiated = self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.shell_floats.is_some());
+        if !negotiated || self.app.state.floats.is_empty() {
+            return crate::server::client_shell_graphics::FloatGraphics::None;
+        }
+        crate::server::client_shell_graphics::FloatGraphics::VisibleTo(
+            self.shell_focused_tiled_pane(client_id),
+        )
+    }
+
     /// Renders this client's float layer and frames it when it differs from what was last sent.
     fn prepare_float_layer(
         &mut self,
@@ -691,12 +707,14 @@ impl HeadlessServer {
                 } else {
                     crate::kitty_graphics::HostCellSize::default()
                 };
+                let floats = self.shell_float_graphics(client_id);
                 let result = render_client_shell_pane_surface(
                     &mut self.app,
                     shell_target,
                     area,
                     false,
                     shell_shows_popup,
+                    floats,
                     render_cell_size,
                     &shell_graphics_delivery,
                     client_id,
@@ -923,13 +941,8 @@ impl HeadlessServer {
                 }
             };
 
-            if surface_parts
-                .as_ref()
-                .is_some_and(|(_, _, _, graphics, _, _)| {
-                    self.defer_changed_native_geometry(client_id, graphics)
-                })
-            {
-                continue;
+            if let Some((_, _, _, graphics, _, _)) = &surface_parts {
+                self.supersede_changed_native_geometry(client_id, graphics);
             }
             let mut native_upload =
                 surface_parts

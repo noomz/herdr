@@ -60,6 +60,10 @@ pub(crate) struct HandoffManifest {
     /// Floating terminals, bottom to top. Absent from manifests written before floats existed.
     #[serde(default)]
     pub floats: Vec<crate::handoff_runtime::HandoffFloat>,
+    /// The float id the source would mint next. Absent from manifests written before floats
+    /// had stable ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_float_id: Option<crate::protocol::floats::FloatId>,
 }
 
 #[cfg(unix)]
@@ -344,7 +348,7 @@ pub(crate) fn manifest_for(
     expected_version: Option<String>,
     api_window_title: Option<String>,
     host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
-    floats: Vec<crate::handoff_runtime::HandoffFloat>,
+    floats: crate::handoff_runtime::HandoffFloats,
 ) -> HandoffManifest {
     HandoffManifest {
         version: HANDOFF_VERSION,
@@ -356,7 +360,8 @@ pub(crate) fn manifest_for(
         panes,
         api_window_title,
         host_shutdown_intent,
-        floats,
+        floats: floats.floats,
+        next_float_id: floats.next_float_id,
     }
 }
 
@@ -590,7 +595,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
-            Vec::new(),
+            Default::default(),
         );
 
         assert_eq!(manifest.api_window_title.as_deref(), Some("deploying"));
@@ -608,7 +613,7 @@ mod tests {
             None,
             None,
             Some(intent),
-            Vec::new(),
+            Default::default(),
         );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
         let decoded: HandoffManifest =
@@ -619,6 +624,7 @@ mod tests {
 
     fn test_float() -> crate::handoff_runtime::HandoffFloat {
         crate::handoff_runtime::HandoffFloat {
+            id: None,
             runtime: crate::handoff_runtime::HandoffRuntimeState {
                 pane_id: 1,
                 child_pid: 0,
@@ -654,7 +660,18 @@ mod tests {
         let socket_path = dir.join("handoff.sock");
         let listener = bind_listener(&socket_path).unwrap();
         let float_count = floats.len();
-        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, None, floats);
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            crate::handoff_runtime::HandoffFloats {
+                floats,
+                next_float_id: None,
+            },
+        );
         let importer_path = socket_path.clone();
         let importer = std::thread::spawn(move || {
             let mut received = receive(&importer_path, "token").unwrap();
@@ -694,7 +711,7 @@ mod tests {
             None,
             None,
             None,
-            Vec::new(),
+            Default::default(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
@@ -717,7 +734,7 @@ mod tests {
             None,
             None,
             None,
-            Vec::new(),
+            Default::default(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
@@ -759,7 +776,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             Some(intent),
-            Vec::new(),
+            Default::default(),
         );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
 
@@ -779,7 +796,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
-            Vec::new(),
+            Default::default(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value

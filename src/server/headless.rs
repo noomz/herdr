@@ -2562,13 +2562,13 @@ impl HeadlessServer {
             }
             ServerEvent::ClientShellFloatInput {
                 client_id,
-                terminal_id,
+                float_id,
                 events,
             } => {
                 let Some((float_terminal_id, float_pane_id)) = self
                     .app
                     .state
-                    .float(&terminal_id)
+                    .float(float_id)
                     .map(|float| (float.terminal_id.clone(), float.pane_id))
                 else {
                     return false;

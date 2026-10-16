@@ -4,7 +4,7 @@ use crate::protocol::{
     SurfaceGraphicsSource, SurfaceGraphicsTarget,
 };
 
-fn image(
+pub(super) fn image(
     target: SurfaceGraphicsTarget,
     x: u16,
     y: u16,
@@ -45,7 +45,7 @@ fn image(
     )
 }
 
-fn add_main_image(
+pub(super) fn add_main_image(
     surface: &mut PaneSurfaceFrame,
     layout: ClientShellLayout,
     point: (u16, u16),
@@ -105,7 +105,7 @@ fn failed_direct_ack_composition_restores_graphics_for_inline_retry() {
     assert!(String::from_utf8_lossy(&retry.graphics.into_inline_bytes()).contains("a=t"));
 }
 
-fn is_placed(bytes: &[u8], point: (u16, u16)) -> bool {
+pub(super) fn is_placed(bytes: &[u8], point: (u16, u16)) -> bool {
     String::from_utf8_lossy(bytes).contains(&format!("\x1b[{};{}H", point.1 + 1, point.0 + 1))
 }
 

@@ -809,124 +809,173 @@ async fn oversized_inline_trims_largest_and_sends_fitting_asset_without_retry_sp
     shutdown_test_runtimes(&mut server);
 }
 
-#[tokio::test]
-async fn quiet_native_producer_geometry_retirement_schedules_full_inline_recovery() {
-    for retained in [false, true] {
-        let (mut server, _control, _render, pane) = retained_test_server_with_control(
-            b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
-        );
-        let writer = ClientWriter::test_paused();
-        let client = server.clients.get_mut(&1).unwrap();
-        client.writer = Some(writer.clone());
-        client.mode = ClientConnectionMode::ClientShell;
-        client.render_state =
-            crate::server::render_stream::ClientRenderState::new(RenderEncoding::SemanticFrame);
-        client.cell_size = crate::kitty_graphics::HostCellSize {
-            width_px: 10,
-            height_px: 20,
-        };
-        client.direct_graphics = true;
-        client.pixel_mouse = true;
-        server.app.state.kitty_graphics_enabled = true;
-        server.app.render_dirty.take();
-        server.render_and_stream();
+fn native_render_client(server: &mut HeadlessServer) -> ClientWriter {
+    let writer = ClientWriter::test_paused();
+    let client = server.clients.get_mut(&1).unwrap();
+    client.writer = Some(writer.clone());
+    client.mode = ClientConnectionMode::ClientShell;
+    client.render_state =
+        crate::server::render_stream::ClientRenderState::new(RenderEncoding::SemanticFrame);
+    client.cell_size = crate::kitty_graphics::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };
+    client.direct_graphics = true;
+    client.pixel_mouse = true;
+    server.app.state.kitty_graphics_enabled = true;
+    server.app.render_dirty.take();
+    writer
+}
 
-        // The writer has already drained, so no future writer progress can wake
-        // the server after geometry cancellation. The native ACK is still pending.
-        let initial = drain_native_render_messages(&writer);
-        let metadata_index = initial
-            .iter()
-            .position(|message| matches!(message, ServerMessage::PaneSurface(_)))
-            .expect("native metadata scene");
-        let file_index = initial
-            .iter()
-            .position(|message| matches!(message, ServerMessage::GraphicsFile { .. }))
-            .expect("native file upload");
-        assert!(metadata_index < file_index);
-        let ServerMessage::PaneSurface(metadata) = &initial[metadata_index] else {
-            unreachable!()
-        };
-        assert!(metadata.graphics.assets.is_empty());
-        assert_eq!(metadata.graphics.placements.len(), 1);
-        assert_eq!(metadata.graphics.placements[0].cols, 1);
-        let ServerMessage::GraphicsFile {
+fn native_upload(messages: &[ServerMessage]) -> Option<(u64, u32, PathBuf)> {
+    messages.iter().find_map(|message| match message {
+        ServerMessage::GraphicsFile {
             transfer_id,
             image_id,
             path,
             ..
-        } = &initial[file_index]
-        else {
-            unreachable!()
-        };
-        let (token, image, native_path) = (*transfer_id, *image_id, PathBuf::from(path));
-        assert!(native_path.exists());
-        assert!(server.native_graphics.is_pending(1));
-        assert!(writer.test_drain().is_empty());
+        } => Some((*transfer_id, *image_id, PathBuf::from(path))),
+        _ => None,
+    })
+}
+
+fn native_surface(messages: &[ServerMessage]) -> Option<&SurfaceGraphicsScene> {
+    messages.iter().find_map(|message| match message {
+        ServerMessage::PaneSurface(surface) => Some(&surface.graphics),
+        _ => None,
+    })
+}
+
+fn render_pane(server: &mut HeadlessServer, pane: crate::layout::PaneId, retained: bool) {
+    server.app.render_dirty.take();
+    if retained {
+        assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane])));
+    } else {
+        server.render_and_stream();
+    }
+}
+
+const RED_IMAGE: &[u8] = b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\";
+
+#[tokio::test]
+async fn geometry_change_supersedes_pending_native_upload_without_disabling_native() {
+    for retained in [false, true] {
+        let (mut server, _control, _render, pane) = retained_test_server_with_control(RED_IMAGE);
+        let writer = native_render_client(&mut server);
+        server.render_and_stream();
+        let (token, image, native_path) =
+            native_upload(&drain_native_render_messages(&writer)).expect("native file upload");
         native_started(&mut server, 1, token, image);
 
-        // A single producer update moves/resizes the placement, then goes quiet.
-        // Re-upload the same pixels to replace placement p=3 with two columns.
         write_shared_test_pane(
             &mut server,
             pane,
             b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=2,r=1,q=2;/wAA/w==\x1b\\",
         );
-        server.app.render_dirty.take(); // model the main loop consuming this PTY wake
-        assert!(!server.app.render_dirty.is_pending());
-        if retained {
-            assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane])));
-        } else {
-            server.render_and_stream();
-        }
-        assert!(!server.native_graphics.is_pending(1), "retained={retained}");
-        assert!(!native_path.exists());
+        render_pane(&mut server, pane, retained);
+        let moved = drain_native_render_messages(&writer);
         assert!(
-            server.app.render_dirty.is_pending(),
-            "geometry retirement must independently wake the quiet server; retained={retained}"
+            !moved.iter().any(|message| matches!(
+                message,
+                ServerMessage::GraphicsTransmissionRetired { .. }
+            )),
+            "a superseded upload is not a native failure; retained={retained}"
         );
-        assert!(server.app.render_dirty.has_immediate_work());
-        assert_eq!(server.clients[&1].deferred_render(), DeferredRender::Full);
-        let retired = drain_native_render_messages(&writer);
-        assert!(retired.iter().any(|message| matches!(message,
-            ServerMessage::GraphicsTransmissionRetired { transfer_id, image_id }
-                if *transfer_id == token && *image_id == image
-        )));
-        assert!(!retired.iter().any(|message| matches!(
-            message,
-            ServerMessage::PaneSurface(_) | ServerMessage::GraphicsFile { .. }
-        )));
+        let surface = native_surface(&moved).expect("new geometry is not held behind the upload");
+        assert_eq!(surface.placements.len(), 1);
+        assert_eq!(surface.placements[0].cols, 2);
+        assert!(server.native_graphics.is_pending(1), "retained={retained}");
 
-        // A stale success must not restore native residency or consume the full
-        // recovery wake. No producer bytes or writer events occur after this ACK.
-        assert!(!native_result(&mut server, 1, token, image, true));
+        // The client no longer shows the held scene, so it rejects the late upload.
+        assert!(native_result(&mut server, 1, token, image, false));
         assert!(!server.native_graphics.is_pending(1));
-        let request = server.app.render_dirty.take();
-        assert!(
-            request.generic,
-            "generic full-render request must survive late ACK; retained={retained}"
-        );
+        assert!(!native_path.exists());
+        assert_eq!(server.clients[&1].deferred_render(), DeferredRender::Full);
+
         server.render_and_stream();
         let recovered = drain_native_render_messages(&writer);
-        assert!(!recovered
-            .iter()
-            .any(|message| matches!(message, ServerMessage::GraphicsFile { .. })));
-        let surface = recovered
-            .iter()
-            .find_map(|message| match message {
-                ServerMessage::PaneSurface(surface) => Some(surface),
-                _ => None,
-            })
-            .expect(
-                "next scheduled full render delivers inline fallback without new producer activity",
-            );
-        assert_eq!(surface.graphics.placements.len(), 1);
-        assert_eq!(surface.graphics.placements[0].cols, 2);
-        assert_eq!(surface.graphics.assets.len(), 1);
-        assert_eq!(surface.graphics.assets[0].data, [255, 0, 0, 255]);
-        assert!(server.clients[&1].direct_graphics);
-        assert_eq!(server.clients[&1].deferred_render(), DeferredRender::None);
+        assert!(
+            native_upload(&recovered).is_some(),
+            "native delivery stays enabled after a superseded upload; retained={retained}"
+        );
+        let surface = native_surface(&recovered).expect("recovery scene");
+        assert!(
+            surface.assets.is_empty(),
+            "no inline fallback; retained={retained}"
+        );
+        assert_eq!(surface.placements[0].cols, 2);
         shutdown_test_runtimes(&mut server);
     }
+}
+
+#[tokio::test]
+async fn placement_hidden_during_native_upload_is_redelivered_natively_when_shown() {
+    let (mut server, _control, _render, pane) = retained_test_server_with_control(RED_IMAGE);
+    let writer = native_render_client(&mut server);
+    server.render_and_stream();
+    let (token, image, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("native file upload");
+    native_started(&mut server, 1, token, image);
+
+    write_shared_test_pane(&mut server, pane, b"\x1b_Ga=d,d=i,i=7,p=3,q=2\x1b\\");
+    render_pane(&mut server, pane, false);
+    let hidden = drain_native_render_messages(&writer);
+    assert!(native_surface(&hidden).is_some_and(|scene| scene.placements.is_empty()));
+    assert!(native_result(&mut server, 1, token, image, false));
+    server.render_and_stream();
+    drain_native_render_messages(&writer);
+
+    write_shared_test_pane(&mut server, pane, b"\x1b_Ga=p,i=7,p=3,c=1,r=1,q=2\x1b\\");
+    render_pane(&mut server, pane, false);
+    let shown = drain_native_render_messages(&writer);
+    let surface = native_surface(&shown).expect("shown scene");
+    assert_eq!(surface.placements.len(), 1);
+    let (next_token, next_image, _) = native_upload(&shown).expect("shown image is redelivered");
+    assert_ne!(next_token, token);
+    assert_eq!(next_image, image, "the rejected bank is staged again");
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn late_ack_of_superseded_upload_does_not_overwrite_a_newer_inline_bank() {
+    let (mut server, _control, _render, pane) = retained_test_server_with_control(RED_IMAGE);
+    let writer = native_render_client(&mut server);
+    server.render_and_stream();
+    let (token, image, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("native file upload");
+    native_started(&mut server, 1, token, image);
+
+    // Move and repaint while the first upload is pending: the repaint goes inline to bank 0.
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=2,r=1,q=2;AP8A/w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let repainted = drain_native_render_messages(&writer);
+    assert!(native_upload(&repainted).is_none());
+    assert_eq!(
+        native_surface(&repainted)
+            .expect("inline repaint")
+            .assets
+            .len(),
+        1
+    );
+
+    native_result(&mut server, 1, token, image, true);
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=2,r=1,q=2;AAD//w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let (_, next_image, _) = native_upload(&drain_native_render_messages(&writer))
+        .expect("native delivery stays enabled");
+    assert_eq!(
+        next_image, image,
+        "stage opposite the visible inline bank 0, not the stale superseded bank"
+    );
+    shutdown_test_runtimes(&mut server);
 }
 
 #[tokio::test]
@@ -1407,5 +1456,57 @@ async fn failed_source_read_retries_after_identical_suppression_without_producer
         "successful materialization leaves the one-shot retry timer disarmed"
     );
     assert_eq!(server.clients[&1].deferred_render(), DeferredRender::None);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn rejected_superseded_upload_redelivers_the_inline_image_sharing_its_bank() {
+    let (mut server, _control, _render, pane) = retained_test_server_with_control(RED_IMAGE);
+    let writer = native_render_client(&mut server);
+    server.render_and_stream();
+    let (token, image, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("first native upload");
+    ack_native(&mut server, 1, token, image);
+
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;AP8A/w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let (token, staged, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("second native upload");
+    assert_eq!(staged, image ^ NATIVE_SLOT_BIT);
+    native_started(&mut server, 1, token, staged);
+
+    // The inline repaint addresses bank 0, the bank the pending upload is staged in.
+    // The client's rejection of that upload deletes the image there.
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=2,r=1,q=2;AAD//w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let repainted = drain_native_render_messages(&writer);
+    let inline = native_surface(&repainted).expect("inline repaint").assets[0]
+        .key
+        .clone();
+    assert!(native_result(&mut server, 1, token, staged, false));
+
+    server.render_and_stream();
+    let recovered = drain_native_render_messages(&writer);
+    let redelivered = recovered.iter().any(|message| match message {
+        ServerMessage::GraphicsFile { surface_asset, .. } => {
+            surface_asset.as_ref() == Some(&inline)
+        }
+        ServerMessage::PaneSurface(surface) => surface
+            .graphics
+            .assets
+            .iter()
+            .any(|asset| asset.key == inline),
+        _ => false,
+    });
+    assert!(redelivered, "the repainted image must be sent again");
+    assert!(native_upload(&recovered).is_some(), "native stays enabled");
     shutdown_test_runtimes(&mut server);
 }

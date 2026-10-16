@@ -6,11 +6,11 @@
 use super::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
-use crate::protocol::floats::{FloatSurface, FloatsSurface};
+use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ClientFloatDrag {
-    pub(super) float_id: String,
+    pub(super) float_id: FloatId,
     /// Pointer offset from the float's outer top-left cell.
     pub(super) grab: (u16, u16),
     /// Previewed outer top-left, relative to the pane surface.
@@ -40,6 +40,7 @@ fn outer_geometry(float: &FloatSurface) -> (u16, u16, u16, u16) {
 
 #[derive(Clone)]
 pub(super) struct FloatHit {
+    pub(super) float_id: FloatId,
     pub(super) outer: Rect,
     pub(super) pane: PaneHit,
 }
@@ -47,21 +48,21 @@ pub(super) struct FloatHit {
 #[derive(Default)]
 pub(super) struct ClientFloats {
     pub(super) layer: FloatsSurface,
-    pub(super) focused: Option<String>,
+    pub(super) focused: Option<FloatId>,
     pub(super) drag: Option<ClientFloatDrag>,
     /// A button went down on a float; its Drag and Up belong to the float.
     pub(super) pressed: bool,
 }
 
 impl ClientFloats {
-    fn get(&self, float_id: &str) -> Option<&FloatSurface> {
+    fn get(&self, float_id: FloatId) -> Option<&FloatSurface> {
         self.layer
             .floats
             .iter()
             .find(|float| float.float_id == float_id)
     }
 
-    fn is_top(&self, float_id: &str) -> bool {
+    fn is_top(&self, float_id: FloatId) -> bool {
         self.layer
             .floats
             .last()
@@ -92,7 +93,7 @@ fn clamp_drag_position(surface: Rect, size: (u16, u16), wanted: (i32, i32)) -> (
 /// Draws floats bottom to top over the tiled surface and returns their hit targets.
 pub(super) fn compose_floats(
     floats: &ClientFloats,
-    focused: Option<&str>,
+    focused: Option<FloatId>,
     palette: &Palette,
     frame: &mut FrameData,
     pane_surface: Rect,
@@ -119,8 +120,8 @@ pub(super) fn compose_floats(
             float.frame.height,
         )
         .intersection(outer);
-        let is_focused = focused == Some(float.float_id.as_str());
-        occlusion.cover(outer);
+        let is_focused = focused == Some(float.float_id);
+        occlusion.start_terminal(&float.terminal_id, outer, (inner.x, inner.y));
         let mut composed = frame.to_ratatui_buffer()?;
         let border_color = if is_focused {
             palette.accent
@@ -145,14 +146,15 @@ pub(super) fn compose_floats(
             cursor = None;
         }
         hits.push(FloatHit {
+            float_id: float.float_id,
             outer,
             pane: PaneHit {
                 rect: outer,
                 inner_rect: inner,
                 scrollbar_rect: None,
                 scroll: None,
-                pane_id: float.float_id.clone(),
-                layer: PaneHitLayer::Float,
+                pane_id: float.terminal_id.clone(),
+                layer: PaneHitLayer::Float(float.float_id),
                 mouse_reporting: float.mouse_reporting,
                 sgr_pixel_mouse: float.sgr_pixel_mouse,
                 pixel_width: float.pixel_width,
@@ -166,9 +168,9 @@ pub(super) fn compose_floats(
 
 impl ClientShellState {
     pub(crate) fn set_float_layer(&mut self, layer: FloatsSurface) {
-        let present = |id: &str| layer.floats.iter().any(|float| float.float_id == id);
-        if let Some(focused) = self.floats.focused.clone() {
-            if !present(&focused) {
+        let present = |id: FloatId| layer.floats.iter().any(|float| float.float_id == id);
+        if let Some(focused) = self.floats.focused {
+            if !present(focused) {
                 self.floats.focused = None;
                 self.input_leases
                     .remove_target(&ClientInputTarget::Float(focused));
@@ -191,7 +193,7 @@ impl ClientShellState {
             }
         }
         if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
-            gesture.hit.layer == PaneHitLayer::Float && !present(&gesture.hit.pane_id)
+            matches!(gesture.hit.layer, PaneHitLayer::Float(float_id) if !present(float_id))
         }) {
             self.pane_mouse_gesture = None;
         }
@@ -205,11 +207,11 @@ impl ClientShellState {
     }
 
     /// The float that receives typed input, unless the modal popup owns input.
-    pub(super) fn focused_float_id(&self) -> Option<&str> {
+    pub(super) fn focused_float_id(&self) -> Option<FloatId> {
         if self.popup_terminal_id.is_some() || self.popup_pending {
             return None;
         }
-        self.floats.focused.as_deref()
+        self.floats.focused
     }
 
     /// The cursor the frame shows while a float has focus. `None` when no float has focus or
@@ -221,7 +223,7 @@ impl ClientShellState {
             .hits
             .floats
             .iter()
-            .find(|hit| hit.pane.pane_id == focused)?;
+            .find(|hit| hit.pane.layer == PaneHitLayer::Float(focused))?;
         Some(super::blitted_cursor(&float.frame, hit.pane.inner_rect))
     }
 
@@ -302,12 +304,12 @@ impl ClientShellState {
         match mouse.kind {
             MouseEventKind::Down(button) => {
                 self.floats.pressed = true;
-                self.focus_float(&hit.pane.pane_id, outcome);
+                self.focus_float(hit.float_id, outcome);
                 if !in_content {
                     if button == MouseButton::Left {
                         let surface = self.float_pane_surface();
                         self.floats.drag = Some(ClientFloatDrag {
-                            float_id: hit.pane.pane_id.clone(),
+                            float_id: hit.float_id,
                             grab: (
                                 point.0.saturating_sub(hit.outer.x),
                                 point.1.saturating_sub(hit.outer.y),
@@ -360,7 +362,7 @@ impl ClientShellState {
         };
         let Some(size) = self
             .floats
-            .get(&drag.float_id)
+            .get(drag.float_id)
             .map(|float| (float.outer.width, float.outer.height))
         else {
             self.floats.drag = None;
@@ -381,7 +383,7 @@ impl ClientShellState {
         let Some(drag) = self.floats.drag.clone() else {
             return;
         };
-        let Some(origin) = self.floats.get(&drag.float_id).map(outer_geometry) else {
+        let Some(origin) = self.floats.get(drag.float_id).map(outer_geometry) else {
             self.floats.drag = None;
             return;
         };
@@ -397,7 +399,7 @@ impl ClientShellState {
         }
         let sent = self.push_endpoint_method_with_kind(
             crate::api::schema::Method::FloatMove(crate::api::schema::FloatMoveParams {
-                float_id: drag.float_id.clone(),
+                float_id: drag.float_id.to_string(),
                 x: drag.position.0,
                 y: drag.position.1,
             }),
@@ -413,7 +415,7 @@ impl ClientShellState {
 
     /// A failed move reverts the preview to the server position; a successful one lets the
     /// next layer settle it.
-    pub(super) fn complete_float_move(&mut self, float_id: &str, succeeded: bool) -> bool {
+    pub(super) fn complete_float_move(&mut self, float_id: FloatId, succeeded: bool) -> bool {
         let Some(drag) = self
             .floats
             .drag
@@ -434,10 +436,10 @@ impl ClientShellState {
         }
     }
 
-    fn focus_float(&mut self, float_id: &str, outcome: &mut ClientShellInput) {
-        if self.floats.focused.as_deref() != Some(float_id) {
+    fn focus_float(&mut self, float_id: FloatId, outcome: &mut ClientShellInput) {
+        if self.floats.focused != Some(float_id) {
             self.release_input_leases(outcome);
-            self.floats.focused = Some(float_id.to_owned());
+            self.floats.focused = Some(float_id);
             self.selection = None;
             self.stop_selection_autoscroll();
             outcome.repaint = true;
@@ -455,7 +457,7 @@ impl ClientShellState {
             }
             self.push_endpoint_method(
                 crate::api::schema::Method::FloatRaise(crate::api::schema::FloatTarget {
-                    float_id: float_id.to_owned(),
+                    float_id: float_id.to_string(),
                 }),
                 outcome,
             );

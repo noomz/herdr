@@ -28,8 +28,14 @@ pub(super) struct Pending {
     refresh_needed: bool,
     scene: SurfaceGraphicsScene,
     delivery: DeliveryCache,
+    // The client was sent a scene other than `scene`, so it may reject the upload.
+    superseded: bool,
+    // The bank addressed for `source` when the upload was queued. An ACK commits
+    // only if no later scene readdressed the source.
+    resident: Option<AcknowledgedSlot>,
 }
 
+#[derive(Clone, PartialEq)]
 struct AcknowledgedSlot {
     asset: SurfaceGraphicsAssetKey,
     slot: bool,
@@ -108,6 +114,7 @@ impl NativeGraphics {
     pub(super) fn hold(&self, client: u64) -> Option<(SurfaceGraphicsScene, DeliveryCache)> {
         self.pending
             .get(&client)
+            .filter(|p| !p.superseded)
             .map(|p| (p.scene.clone(), p.delivery.clone()))
     }
     /// Records bank state only after the scene metadata has been queued.
@@ -240,11 +247,18 @@ impl NativeGraphics {
                 refresh_needed: delivery.has_pending(),
                 scene: held,
                 delivery: delivery.clone(),
+                superseded: false,
+                resident: None,
             },
             message,
         ))
     }
-    pub(super) fn commit(&mut self, client: u64, pending: Pending) {
+    pub(super) fn commit(&mut self, client: u64, mut pending: Pending) {
+        pending.resident = self
+            .acknowledged_slots
+            .get(&client)
+            .and_then(|slots| slots.get(&pending.source))
+            .cloned();
         self.pending.insert(client, pending);
     }
     fn matches(&self, client: u64, transfer: u64, image: u32) -> bool {
@@ -295,20 +309,19 @@ fn eligible(asset: &SurfaceGraphicsAsset, sources: &SourceFiles) -> bool {
             == Some(asset.key.data_len)
 }
 impl HeadlessServer {
-    pub(super) fn defer_changed_native_geometry(
+    /// Stops holding the pending upload's scene once the scene changes shape.
+    /// The upload stays live: the client acknowledges it if the asset is still
+    /// in its scene and rejects it otherwise. Neither outcome is a native failure.
+    pub(super) fn supersede_changed_native_geometry(
         &mut self,
         client: u64,
         scene: &SurfaceGraphicsScene,
-    ) -> bool {
-        if self.native_graphics.can_hold(client, scene) {
-            return false;
+    ) {
+        if !self.native_graphics.can_hold(client, scene) {
+            if let Some(pending) = self.native_graphics.pending.get_mut(&client) {
+                pending.superseded = true;
+            }
         }
-        self.retire_native_graphics_for_client(client);
-        self.app.render_dirty.request_generic();
-        if let Some(client) = self.clients.get_mut(&client) {
-            client.defer_full_render();
-        }
-        true
     }
 
     fn materialize_native_sources(
@@ -407,17 +420,22 @@ impl HeadlessServer {
                 .pending
                 .remove(&client)
                 .expect("matched");
-            self.native_graphics
+            let slots = self
+                .native_graphics
                 .acknowledged_slots
                 .entry(client)
-                .or_default()
-                .insert(
+                .or_default();
+            if slots.get(&pending.source) == pending.resident.as_ref() {
+                slots.insert(
                     pending.source,
                     AcknowledgedSlot {
                         asset: pending.asset,
                         slot: pending.slot,
                     },
                 );
+            } else if slots.is_empty() {
+                self.native_graphics.acknowledged_slots.remove(&client);
+            }
             let refresh = pending.refresh_needed;
             if refresh {
                 if let Some(c) = self.clients.get_mut(&client) {
@@ -425,6 +443,16 @@ impl HeadlessServer {
                 }
             }
             return Some(refresh);
+        }
+        if self.native_graphics.pending[&client].superseded {
+            self.native_graphics.pending.remove(&client);
+            // The client deletes the rejected bank, which a later inline scene may
+            // have reused for another asset. Resend everything it still shows.
+            if let Some(c) = self.clients.get_mut(&client) {
+                c.shell_graphics_delivery = DeliveryCache::default();
+                c.defer_full_render();
+            }
+            return Some(true);
         }
         self.native_graphics.disabled.insert(client);
         self.native_graphics

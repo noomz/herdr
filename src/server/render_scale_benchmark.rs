@@ -88,6 +88,7 @@ impl RenderPipeline {
             Rect::new(0, 0, surface_size.cols, surface_size.rows),
             true,
             true,
+            crate::server::client_shell_graphics::FloatGraphics::None,
             HostCellSize {
                 width_px: 1,
                 height_px: 1,
@@ -493,6 +494,7 @@ fn print_surface_damage_profiles() {
             Rect::new(0, 0, COLS, ROWS),
             true,
             false,
+            crate::server::client_shell_graphics::FloatGraphics::None,
             HostCellSize::default(),
             &pipeline.graphics_delivery,
             1,
@@ -545,6 +547,7 @@ fn print_surface_reuse_profiles() {
                 Rect::new(0, 0, COLS, ROWS),
                 true,
                 false,
+                crate::server::client_shell_graphics::FloatGraphics::None,
                 HostCellSize::default(),
                 &pipeline.graphics_delivery,
                 1,
