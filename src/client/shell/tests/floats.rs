@@ -506,3 +506,75 @@ fn an_answered_move_settles_on_the_next_layer_even_when_the_server_placed_it_els
 
     assert_eq!(float_origin(&mut state), (10, 3));
 }
+
+#[test]
+fn clicking_away_from_a_float_releases_keys_it_saw_pressed() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+    let press = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('x'),
+        KeyModifiers::empty(),
+    ))]);
+    assert_eq!(float_inputs(&press).len(), 1);
+    let pane = state.hits.panes[0].clone();
+
+    let away = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        pane.inner_rect.x,
+        pane.inner_rect.y,
+    );
+
+    let released = float_inputs(&away);
+    assert!(matches!(
+        &released[..],
+        [input] if input.float_id == "term_a"
+            && matches!(
+                &input.events[..],
+                [ClientPaneInputEvent::Key {
+                    kind: crate::protocol::ClientKeyKind::Release,
+                    ..
+                }]
+            )
+    ));
+}
+
+#[test]
+fn a_key_held_across_a_server_focus_change_releases_in_the_float() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+    let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty());
+    state.handle_raw_events(vec![RawInputEvent::Key(key.clone())]);
+    let mut moved = snapshot();
+    moved.focused_pane_id = Some("pane_2".into());
+    state.set_snapshot(Box::new(moved));
+
+    let release = state.handle_raw_events(vec![RawInputEvent::Key(
+        key.with_kind(crossterm::event::KeyEventKind::Release),
+    )]);
+
+    assert!(matches!(
+        &float_inputs(&release)[..],
+        [input] if input.float_id == "term_a"
+    ));
+    let typed = state.handle_input_bytes(b"y");
+    assert!(float_inputs(&typed).is_empty(), "focus left the float");
+}

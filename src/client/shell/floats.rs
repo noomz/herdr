@@ -280,7 +280,7 @@ impl ClientShellState {
             .cloned()
         else {
             if matches!(mouse.kind, MouseEventKind::Down(_)) && self.floats.focused.is_some() {
-                self.blur_float();
+                self.blur_float(outcome);
                 outcome.repaint = true;
             }
             return false;
@@ -451,11 +451,21 @@ impl ClientShellState {
         self.reconcile_input_source();
     }
 
-    /// Returns typed input to the tiled layout.
-    pub(super) fn blur_float(&mut self) {
+    /// Returns typed input to the tiled layout and releases keys the float saw pressed.
+    pub(super) fn blur_float(&mut self, outcome: &mut ClientShellInput) {
         if let Some(focused) = self.floats.focused.take() {
-            self.input_leases
+            let leases = self
+                .input_leases
                 .remove_target(&ClientInputTarget::Float(focused));
+            self.push_lease_releases(leases, outcome);
+            self.reconcile_input_source();
+        }
+    }
+
+    /// Returns typed input to the tiled layout when the server moves pane focus. Held keys keep
+    /// their lease, so the host's own release still reaches the float that saw the press.
+    pub(super) fn yield_float_focus(&mut self) {
+        if self.floats.focused.take().is_some() {
             self.reconcile_input_source();
         }
     }

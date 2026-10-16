@@ -446,26 +446,8 @@ impl ClientShellState {
     }
 
     pub(super) fn release_input_leases(&mut self, outcome: &mut ClientShellInput) {
-        for lease in self.input_leases.remove_source(LOCAL_INPUT_SOURCE) {
-            // A press that arrived as plain text (IME commits, and printable keys
-            // the host sends as text) reached the pane as text, not as a key
-            // event. IME commits never get a host release, so inventing one per
-            // character is noise. Key reports, with or without text, still get
-            // their release.
-            let plain_text_press = lease.key.generated_text.is_some()
-                && lease
-                    .key
-                    .vt_bytes()
-                    .is_some_and(|bytes| bytes.first().is_some_and(|byte| *byte != 0x1b));
-            if plain_text_press {
-                continue;
-            }
-            self.push_pane_key(
-                lease.target,
-                lease.key.with_kind(KeyEventKind::Release),
-                outcome,
-            );
-        }
+        let leases = self.input_leases.remove_source(LOCAL_INPUT_SOURCE);
+        self.push_lease_releases(leases, outcome);
         if let Some(gesture) = self.pane_mouse_gesture.take() {
             let modifiers = gesture
                 .last_event
@@ -497,6 +479,34 @@ impl ClientShellState {
             );
         }
         self.copy_input_queue.clear();
+    }
+
+    /// Sends the release for each key a target saw pressed.
+    pub(super) fn push_lease_releases(
+        &self,
+        leases: Vec<crate::input::ForwardedInputLease<ClientInputTarget>>,
+        outcome: &mut ClientShellInput,
+    ) {
+        for lease in leases {
+            // A press that arrived as plain text (IME commits, and printable keys
+            // the host sends as text) reached the pane as text, not as a key
+            // event. IME commits never get a host release, so inventing one per
+            // character is noise. Key reports, with or without text, still get
+            // their release.
+            let plain_text_press = lease.key.generated_text.is_some()
+                && lease
+                    .key
+                    .vt_bytes()
+                    .is_some_and(|bytes| bytes.first().is_some_and(|byte| *byte != 0x1b));
+            if plain_text_press {
+                continue;
+            }
+            self.push_pane_key(
+                lease.target,
+                lease.key.with_kind(KeyEventKind::Release),
+                outcome,
+            );
+        }
     }
 
     fn execute_repeat_plan(

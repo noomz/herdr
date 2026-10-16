@@ -1619,7 +1619,7 @@ impl ClientShellState {
             .as_ref()
             .is_some_and(|previous| previous.focused_pane_id != snapshot.focused_pane_id);
         if focused_pane_changed {
-            self.blur_float();
+            self.yield_float_focus();
         }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
