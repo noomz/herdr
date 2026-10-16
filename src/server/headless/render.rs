@@ -941,13 +941,8 @@ impl HeadlessServer {
                 }
             };
 
-            if surface_parts
-                .as_ref()
-                .is_some_and(|(_, _, _, graphics, _, _)| {
-                    self.defer_changed_native_geometry(client_id, graphics)
-                })
-            {
-                continue;
+            if let Some((_, _, _, graphics, _, _)) = &surface_parts {
+                self.supersede_changed_native_geometry(client_id, graphics);
             }
             let mut native_upload =
                 surface_parts
