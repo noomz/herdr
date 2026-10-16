@@ -257,6 +257,7 @@ impl App {
                 self.event_tx.clone(),
                 self.render_notify.clone(),
                 self.render_dirty.clone(),
+                crate::pane::AgentDetection::Disabled,
             ) {
                 Ok(runtime) => runtime,
                 Err(err) => {
@@ -675,6 +676,30 @@ mod tests {
             .map(|float| float.hide_while_focused)
             .collect();
         assert_eq!(rules, vec![Some(carried), None]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_restored_float_runs_no_agent_detection() {
+        let (mut app, _pane_id, terminal_id) = app_with_float();
+        app.close_float(terminal_id.as_str());
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let (fd, _slave) = handoff_pty();
+
+        app.restore_handoff_floats(&snapshot, vec![handoff_float(None)], vec![fd]);
+
+        let restored = &app.state.floats[0].terminal_id;
+        let runtime = app
+            .terminal_runtimes
+            .get(restored)
+            .expect("restored runtime");
+        assert!(!runtime.test_runs_agent_detection());
     }
 
     #[test]

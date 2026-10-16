@@ -652,6 +652,7 @@ fn restore_tab(
                     runtime_context.events.clone(),
                     runtime_context.render_notify.clone(),
                     runtime_context.render_dirty.clone(),
+                    crate::pane::AgentDetection::Enabled,
                 )
             } else {
                 TerminalRuntime::spawn_with_initial_history(
