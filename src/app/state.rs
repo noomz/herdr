@@ -1188,6 +1188,15 @@ impl AppState {
                 "float terminal {} must not also be the popup",
                 float.terminal_id
             );
+            if let Some(pane_id) = float.hide_while_focused {
+                assert!(
+                    self.workspaces
+                        .iter()
+                        .any(|ws| ws.find_tab_index_for_pane(pane_id).is_some()),
+                    "float {} hides while missing pane {pane_id:?} is focused",
+                    float.terminal_id
+                );
+            }
         }
     }
 

@@ -123,19 +123,26 @@ pub fn handoff_pane_aliases(
     snapshot: &SessionSnapshot,
     workspaces: &[Workspace],
 ) -> HashMap<u32, PaneId> {
-    let mut aliases = HashMap::new();
+    handoff_pane_ids(snapshot, workspaces)
+        .into_iter()
+        .filter(|(old_id, new_id)| *old_id != new_id.raw())
+        .collect()
+}
+
+/// Every pane carried by a handoff, keyed by its raw id in the exporting server.
+#[cfg(unix)]
+pub fn handoff_pane_ids(
+    snapshot: &SessionSnapshot,
+    workspaces: &[Workspace],
+) -> HashMap<u32, PaneId> {
+    let mut ids = HashMap::new();
     for (ws_snap, workspace) in snapshot.workspaces.iter().zip(workspaces) {
         for (tab_snap, tab) in ws_snap.tabs.iter().zip(&workspace.tabs) {
             let old_ids = collect_snapshot_pane_ids(&tab_snap.layout);
-            let new_ids = tab.layout.pane_ids();
-            for (old_id, new_id) in old_ids.into_iter().zip(new_ids) {
-                if old_id != new_id.raw() {
-                    aliases.insert(old_id, new_id);
-                }
-            }
+            ids.extend(old_ids.into_iter().zip(tab.layout.pane_ids()));
         }
     }
-    aliases
+    ids
 }
 
 #[cfg(unix)]

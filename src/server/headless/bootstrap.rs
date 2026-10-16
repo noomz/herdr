@@ -171,6 +171,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &mut imports,
         )?;
         app.restore_handoff_floats(
+            &received.manifest.snapshot,
             std::mem::take(&mut received.manifest.floats),
             std::mem::take(&mut received.float_fds),
         );

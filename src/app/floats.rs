@@ -225,7 +225,10 @@ impl App {
                             FloatPosition::At { x, y } => Some((x, y)),
                         },
                         hidden: float.visibility == FloatVisibility::Hidden,
-                        hide_while_focused: float.hide_while_focused.map(PaneId::raw),
+                        hide_while_focused: float
+                            .hide_while_focused
+                            .filter(|pane_id| self.find_pane(*pane_id).is_some())
+                            .map(PaneId::raw),
                     },
                 ))
             })
@@ -236,9 +239,11 @@ impl App {
     /// and its fd closed; the panes it floated over are unaffected.
     pub(crate) fn restore_handoff_floats(
         &mut self,
+        snapshot: &crate::persist::SessionSnapshot,
         floats: Vec<crate::handoff_runtime::HandoffFloat>,
         fds: Vec<std::os::fd::RawFd>,
     ) {
+        let handoff_panes = crate::persist::handoff_pane_ids(snapshot, &self.state.workspaces);
         for (float, fd) in floats.into_iter().zip(fds) {
             let pane_id = PaneId::alloc();
             let runtime = match TerminalRuntime::from_handoff_fd(
@@ -267,12 +272,10 @@ impl App {
             if let Some(title) = float.title {
                 terminal.set_manual_label(title);
             }
-            let hide_while_focused = float.hide_while_focused.and_then(|raw| {
-                self.state.pane_id_aliases.get(&raw).copied().or_else(|| {
-                    let pane_id = PaneId::from_raw(raw);
-                    self.find_pane(pane_id).map(|_| pane_id)
-                })
-            });
+            let hide_while_focused = float
+                .hide_while_focused
+                .and_then(|raw| handoff_panes.get(&raw).copied())
+                .filter(|pane_id| self.find_pane(*pane_id).is_some());
             self.terminal_runtimes.insert(terminal_id.clone(), runtime);
             self.state.terminals.insert(terminal_id.clone(), terminal);
             self.state.floats.push(FloatState {
@@ -560,6 +563,118 @@ mod tests {
         assert!(app.close_float(terminal_id.as_str()));
         assert!(!app.close_float(terminal_id.as_str()));
         assert!(app.state.floats.is_empty());
+    }
+
+    #[test]
+    fn a_hide_rule_ends_when_its_pane_dies() {
+        let (mut app, _pane_id, _terminal_id) = app_with_float();
+        let tiled_pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.floats[0].hide_while_focused = Some(tiled_pane);
+
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id: tiled_pane,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
+
+        assert_eq!(app.state.floats[0].hide_while_focused, None);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn a_hide_rule_ends_when_its_workspace_closes() {
+        let (mut state, _ids) = state_with_floats(1);
+        state.floats[0].hide_while_focused = Some(state.workspaces[0].tabs[0].root_pane);
+
+        state.close_selected_workspace();
+
+        assert_eq!(state.floats[0].hide_while_focused, None);
+        state.assert_invariants_for_test();
+    }
+
+    #[cfg(unix)]
+    fn handoff_pty() -> (std::os::fd::RawFd, std::fs::File) {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let mut master = -1;
+        let mut slave = -1;
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        (
+            master,
+            std::fs::File::from(unsafe { OwnedFd::from_raw_fd(slave) }),
+        )
+    }
+
+    #[cfg(unix)]
+    fn handoff_float(hide_while_focused: Option<u32>) -> crate::handoff_runtime::HandoffFloat {
+        crate::handoff_runtime::HandoffFloat {
+            runtime: crate::handoff_runtime::HandoffRuntimeState {
+                pane_id: 0,
+                child_pid: 0,
+                rows: 6,
+                cols: 18,
+                cell_width_px: 0,
+                cell_height_px: 0,
+                keyboard_protocol_flags: 0,
+                keyboard_protocol_ansi: None,
+                input_state: None,
+                terminal_title: None,
+                initial_history_ansi: None,
+                agent_state: None,
+            },
+            cwd: PathBuf::from("/float"),
+            title: None,
+            launch_argv: None,
+            width: spec().width,
+            height: spec().height,
+            position: Some((2, 3)),
+            hidden: false,
+            hide_while_focused,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_restored_hide_rule_binds_only_to_a_pane_the_handoff_carried() {
+        let (mut app, _pane_id, terminal_id) = app_with_float();
+        app.close_float(terminal_id.as_str());
+        let carried = app.state.workspaces[0].tabs[0].root_pane;
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let unrelated = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        let (carried_fd, _carried_slave) = handoff_pty();
+        let (dangling_fd, _dangling_slave) = handoff_pty();
+
+        app.restore_handoff_floats(
+            &snapshot,
+            vec![
+                handoff_float(Some(carried.raw())),
+                handoff_float(Some(unrelated.raw())),
+            ],
+            vec![carried_fd, dangling_fd],
+        );
+
+        let rules: Vec<_> = app
+            .state
+            .floats
+            .iter()
+            .map(|float| float.hide_while_focused)
+            .collect();
+        assert_eq!(rules, vec![Some(carried), None]);
     }
 
     #[test]
