@@ -265,7 +265,7 @@ shell 插件可以从各个环境变量读取常用 id,或解析上下文 JSON �
 
 清单中窗格的 `placement` 默认为 `overlay`,它在活动窗格上方打开一个
 临时的缩放覆盖层,关闭时恢复之前的焦点和缩放。`plugin.pane.open` 请求
-可以用 `overlay`、`popup`、`split`、`tab` 或 `zoomed` 覆盖清单的 placement。
+可以用 `overlay`、`popup`、`split`、`tab`、`zoomed` 或 `float` 覆盖清单的 placement。
 
 `placement = "popup"` 会打开一个会话级模态终端弹窗,而不改变平铺布局。
 可以在清单或 open 请求中指定可选的 `width` 和 `height`;省略时默认为终端大小的一半,数字表示外层终端单元格数,`"80%"` 这样的字符串表示终端区域的百分比。
@@ -291,6 +291,41 @@ split、tab、zoomed 和 overlay 插件窗格打开后就是普通的 Herdr 窗�
 弹窗不是 Herdr 窗格,而是会话级单例资源:它没有窗格 id,不会改变插件焦点上下文,不会发出窗格生命周期事件,也不参与 pane、layout、持久化或智能体 API。
 其进程不会收到 `HERDR_PANE_ID`;底层平铺窗格仍可通过 `HERDR_PLUGIN_CONTEXT_JSON` 获取。
 在 Settings、复制模式或其他 Herdr 模态界面打开时尝试打开弹窗会返回 `ui_busy`;启动成功后,`plugin.pane.open` 返回 `ok`。
+
+### 浮动窗口
+
+`placement = "float"` 会在平铺布局上方打开一个非模态的浮动终端。
+它适合画中画视图、监视器，以及在窗格中继续工作时保持打开的临时终端。
+一个会话可以有任意数量的浮动窗口，所有工作区和标签页都会显示它们。
+
+浮动窗口与弹出窗口一样接受 `width` 和 `height`。open 请求还可以设置：
+
+- `x` 和 `y`：外框左上角的单元格，相对于窗格区域。两者都省略时居中。Herdr 会限制位置，使整个浮动窗口留在屏幕内。
+- `hide_while_focused`：一个窗格 ID。当该窗格是你正在查看的标签页中的焦点窗格时隐藏浮动窗口，焦点离开后再显示。
+
+```toml
+[[panes]]
+id = "peek"
+title = "Peek"
+platforms = ["linux", "macos"]
+placement = "float"
+width = 50
+height = 14
+command = ["sh", "peek.sh"]
+```
+
+浮动窗口只在拥有焦点时接收输入。点击浮动窗口会使其获得焦点并移到最前面。
+点击平铺窗格，或用按键绑定移动窗格焦点，会把输入交还给布局。
+Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
+拖动边框或标题可以移动浮动窗口。模态弹出窗口显示在浮动窗口上方，并在打开期间接收输入。
+
+隐藏浮动窗口不会停止其进程和终端。命令退出或发送 `float.close` 时浮动窗口关闭。
+浮动窗口不是 Herdr 窗格：它没有窗格 ID，不发出窗格生命周期事件，也不参与 pane、layout、持久化或代理 API。
+浮动窗口在客户端分离和 `server live-handoff` 后仍会保留。
+
+`plugin.pane.open` 返回新的浮动窗口，其中包含 `float_id`。通过套接字 API 控制浮动窗口：
+`float.list`、`float.move`、`float.resize`、`float.hide`、`float.show`、`float.raise`、`float.set_hide_rule`、`float.close`。
+未知的 `float_id` 返回 `float_not_found`。
 
 在 Windows 上,构建命令、动作命令和事件命令会在裸命令位于 `PATH` 上时
 解析常见的 `PATHEXT` shim,比如 `npm.cmd`、`bun.cmd` 和 `pnpm.cmd`。
