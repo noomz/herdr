@@ -41,6 +41,61 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn open_plugin_float(
+        &mut self,
+        id: String,
+        params: PluginPaneOpenParams,
+        plugin: &InstalledPluginInfo,
+        pane: PluginManifestPane,
+    ) -> String {
+        let hide_while_focused = match params.hide_while_focused.as_deref() {
+            None => None,
+            Some(public_id) => match self.parse_pane_id(public_id) {
+                Some((_, pane_id)) => Some(pane_id),
+                None => return encode_error(id, "pane_not_found", "pane not found"),
+            },
+        };
+        let position = match (params.x, params.y) {
+            (None, None) => crate::popup_size::FloatPosition::Centered,
+            (x, y) => crate::popup_size::FloatPosition::At {
+                x: x.unwrap_or(0),
+                y: y.unwrap_or(0),
+            },
+        };
+        let context = self.current_plugin_context("plugin-pane");
+        let cwd = self.plugin_pane_cwd(plugin, params.cwd);
+        let extra_env =
+            match self.plugin_pane_launch_env(plugin, &pane.id, &cwd, params.env, &context) {
+                Ok(env) => env,
+                Err((code, message)) => return encode_error(id, &code, message),
+            };
+        let spec = crate::app::floats::FloatSpec {
+            width: params.width.or(pane.width),
+            height: params.height.or(pane.height),
+            position,
+            hide_while_focused,
+        };
+        let terminal_id =
+            match self.spawn_float_argv_command(&pane.command, Some(cwd), extra_env, spec) {
+                Ok(terminal_id) => terminal_id,
+                Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
+            };
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.set_manual_label(pane.title);
+        }
+        let Some((z, float)) = self
+            .state
+            .floats
+            .iter()
+            .enumerate()
+            .find(|(_, float)| float.terminal_id == terminal_id)
+        else {
+            return encode_error(id, "plugin_pane_open_failed", "plugin float disappeared");
+        };
+        let float = self.float_info(z, float);
+        encode_success(id, ResponseResult::FloatOpened { float })
+    }
+
     pub(super) fn open_plugin_overlay_pane(
         &mut self,
         id: String,

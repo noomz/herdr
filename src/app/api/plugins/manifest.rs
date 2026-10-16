@@ -429,12 +429,14 @@ fn normalize_manifest_pane(
         .filter(|description| !description.is_empty());
     let platforms = normalize_platforms(pane.platforms)?;
     let command = normalize_command(pane.command)?;
-    if pane.placement != PluginPanePlacement::Popup
-        && (pane.width.is_some() || pane.height.is_some())
+    if !matches!(
+        pane.placement,
+        PluginPanePlacement::Popup | PluginPanePlacement::Float
+    ) && (pane.width.is_some() || pane.height.is_some())
     {
         return Err((
             "invalid_plugin_pane_size",
-            "pane width and height are only supported when placement is popup".to_string(),
+            "pane width and height are only supported when placement is popup or float".to_string(),
         ));
     }
     Ok(PluginManifestPane {

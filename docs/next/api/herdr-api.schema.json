@@ -2151,6 +2151,94 @@
           ],
           "type": "object"
         },
+        "FloatMoveParams": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            },
+            "x": {
+              "description": "Outer left edge in cells from the pane surface's left edge. Clamped to stay on screen.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "description": "Outer top edge in cells from the pane surface's top edge. Clamped to stay on screen.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "float_id",
+            "x",
+            "y"
+          ],
+          "type": "object"
+        },
+        "FloatResizeParams": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "float_id"
+          ],
+          "type": "object"
+        },
+        "FloatSetHideRuleParams": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "default": null,
+              "description": "Hide the float while this pane is focused. `null` removes the rule.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "float_id"
+          ],
+          "type": "object"
+        },
+        "FloatTarget": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "float_id"
+          ],
+          "type": "object"
+        },
         "IntegrationInstallParams": {
           "properties": {
             "target": {
@@ -3665,6 +3753,13 @@
                 }
               ]
             },
+            "hide_while_focused": {
+              "description": "Float only: hide the float while this pane is focused.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "placement": {
               "anyOf": [
                 {
@@ -3699,6 +3794,25 @@
                 "string",
                 "null"
               ]
+            },
+            "x": {
+              "description": "Float only: outer left edge in cells; centered when `x` and `y` are absent.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
           "required": [
@@ -3708,14 +3822,23 @@
           "type": "object"
         },
         "PluginPanePlacement": {
-          "enum": [
-            "overlay",
-            "popup",
-            "split",
-            "tab",
-            "zoomed"
-          ],
-          "type": "string"
+          "oneOf": [
+            {
+              "enum": [
+                "overlay",
+                "popup",
+                "split",
+                "tab",
+                "zoomed"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "float",
+              "description": "Non-modal floating terminal above the tiled layout.",
+              "type": "string"
+            }
+          ]
         },
         "PluginSetEnabledParams": {
           "properties": {
@@ -6312,6 +6435,134 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.move",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatMoveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.resize",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatResizeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.hide",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.show",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.raise",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.set_hide_rule",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatSetHideRuleParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.close",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -7482,6 +7733,86 @@
             "pane_agent_detected",
             "pane_agent_status_changed",
             "layout_updated"
+          ],
+          "type": "string"
+        },
+        "FloatInfo": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hide_while_focused": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "visibility": {
+              "$ref": "#/schemas/success_response/$defs/FloatVisibilityInfo"
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PopupSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "x": {
+              "description": "Requested outer position; absent while the float is centered.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "z": {
+              "description": "Position in the stacking order; 0 is the bottom float.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "float_id",
+            "visibility",
+            "z"
+          ],
+          "type": "object"
+        },
+        "FloatVisibilityInfo": {
+          "enum": [
+            "shown",
+            "hidden"
           ],
           "type": "string"
         },
@@ -9057,14 +9388,23 @@
           "type": "object"
         },
         "PluginPanePlacement": {
-          "enum": [
-            "overlay",
-            "popup",
-            "split",
-            "tab",
-            "zoomed"
-          ],
-          "type": "string"
+          "oneOf": [
+            {
+              "enum": [
+                "overlay",
+                "popup",
+                "split",
+                "tab",
+                "zoomed"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "float",
+              "description": "Non-modal floating terminal above the tiled layout.",
+              "type": "string"
+            }
+          ]
         },
         "PluginPlatform": {
           "enum": [
@@ -10355,6 +10695,73 @@
               "required": [
                 "type",
                 "pane_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "float": {
+                  "$ref": "#/schemas/success_response/$defs/FloatInfo"
+                },
+                "type": {
+                  "const": "float_opened",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "float"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "floats": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/FloatInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "float_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "floats"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "float": {
+                  "$ref": "#/schemas/success_response/$defs/FloatInfo"
+                },
+                "type": {
+                  "const": "float_info",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "float"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "float_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "float_closed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "float_id"
               ],
               "type": "object"
             },

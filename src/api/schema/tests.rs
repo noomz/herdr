@@ -1410,6 +1410,9 @@ fn plugin_pane_open_request_round_trips() {
             cwd: Some("/tmp".into()),
             focus: true,
             env: [("HERDR_ROLE".to_string(), "board".to_string())].into(),
+            x: None,
+            y: None,
+            hide_while_focused: None,
         }),
     };
 

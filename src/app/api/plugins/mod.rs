@@ -489,20 +489,33 @@ impl App {
         .display()
         .to_string();
         let placement = params.placement.unwrap_or(pane.placement);
-        if placement != PluginPanePlacement::Popup
-            && (params.width.is_some() || params.height.is_some())
+        let sized = matches!(
+            placement,
+            PluginPanePlacement::Popup | PluginPanePlacement::Float
+        );
+        if !sized && (params.width.is_some() || params.height.is_some()) {
+            return encode_error(
+                id,
+                "invalid_params",
+                "width and height are only supported when placement is popup or float",
+            );
+        }
+        if placement != PluginPanePlacement::Float
+            && (params.x.is_some() || params.y.is_some() || params.hide_while_focused.is_some())
         {
             return encode_error(
                 id,
                 "invalid_params",
-                "width and height are only supported when placement is popup",
+                "x, y, and hide_while_focused are only supported when placement is float",
             );
         }
         if placement == PluginPanePlacement::Popup && self.state.popup_pane.is_some() {
             return encode_error(id, "ui_busy", "a popup pane is already open");
         }
         match placement {
-            PluginPanePlacement::Overlay | PluginPanePlacement::Popup => {
+            PluginPanePlacement::Overlay
+            | PluginPanePlacement::Popup
+            | PluginPanePlacement::Float => {
                 if params.workspace_id.is_some()
                     || params.target_pane_id.is_some()
                     || params.direction.is_some()
@@ -510,7 +523,7 @@ impl App {
                     return encode_error(
                         id,
                         "invalid_params",
-                        "overlay and popup plugin panes target the active pane",
+                        "overlay, popup, and float plugin panes target the active pane",
                     );
                 }
             }
@@ -539,6 +552,7 @@ impl App {
                 self.open_plugin_overlay_pane(id, params, &plugin, pane)
             }
             PluginPanePlacement::Popup => self.open_plugin_popup_pane(id, params, &plugin, pane),
+            PluginPanePlacement::Float => self.open_plugin_float(id, params, &plugin, pane),
             PluginPanePlacement::Split | PluginPanePlacement::Zoomed => {
                 self.open_plugin_split_pane(id, params, &plugin, pane, placement)
             }
@@ -1600,6 +1614,9 @@ platforms = ["linux", "macos"]
                 cwd: None,
                 focus: false,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1627,6 +1644,9 @@ platforms = ["linux", "macos"]
                 cwd: None,
                 focus: false,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
 
@@ -1743,6 +1763,9 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
                     cwd: cwd.map(|path| path.display().to_string()),
                     focus: false,
                     env: std::collections::HashMap::new(),
+                    x: None,
+                    y: None,
+                    hide_while_focused: None,
                 }),
             });
             let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
@@ -1863,6 +1886,9 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
                     cwd: None,
                     focus: true,
                     env: std::collections::HashMap::new(),
+                    x: None,
+                    y: None,
+                    hide_while_focused: None,
                 }),
             });
             assert!(matches!(
@@ -1981,6 +2007,9 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
                         "/tmp/spoofed-herdr".to_string(),
                     ),
                 ]),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
@@ -2087,6 +2116,9 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
                         "/tmp/spoofed-state".to_string(),
                     ),
                 ]),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2177,6 +2209,9 @@ command = ["sh", "-c", "sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2260,6 +2295,9 @@ command = ["sh", "-c", "sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2339,6 +2377,9 @@ command = ["sh", "-c", "sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2424,6 +2465,9 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         };
         app.state.mode = crate::app::Mode::Navigate;
@@ -2474,6 +2518,122 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert!(app.state.popup_pane.is_none());
+        assert!(event_hub.events_after(0).is_empty());
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plugin_pane_open_float_is_non_modal_and_layout_neutral() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-float")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 100, 30);
+        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let root_public = app.public_pane_id(0, root_pane).unwrap();
+
+        let root = unique_temp_path("plugin-pane-float");
+        let manifest = r#"
+id = "example.float"
+name = "Float Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "float"
+width = 30
+height = 10
+command = ["sh", "-c", "sleep 5"]
+"#;
+        write_manifest_content(&root, manifest);
+        link_manifest(&mut app, &root);
+
+        let float_request = |id: &str, x: Option<u16>, hide: Option<String>| Request {
+            id: id.into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.float".into(),
+                entrypoint: "peek".into(),
+                placement: None,
+                width: None,
+                height: None,
+                workspace_id: None,
+                target_pane_id: None,
+                direction: None,
+                cwd: None,
+                focus: true,
+                env: std::collections::HashMap::new(),
+                x,
+                y: x,
+                hide_while_focused: hide,
+            }),
+        };
+        let first = app.handle_api_request(float_request(
+            "float-open",
+            Some(5),
+            Some(root_public.clone()),
+        ));
+        let ResponseResult::FloatOpened { float: first } = response_result(&first) else {
+            panic!("expected float opened: {first}");
+        };
+        assert_eq!(first.title.as_deref(), Some("Peek"));
+        assert_eq!((first.x, first.y), (Some(5), Some(5)));
+        assert_eq!(
+            first.hide_while_focused.as_deref(),
+            Some(root_public.as_str())
+        );
+        assert_eq!(first.z, 0);
+
+        let second = app.handle_api_request(float_request("float-open-second", None, None));
+        let ResponseResult::FloatOpened { float: second } = response_result(&second) else {
+            panic!("a second float must not be ui_busy: {second}");
+        };
+        assert_eq!((second.x, second.z), (None, 1));
+
+        assert_eq!(app.state.mode, crate::app::Mode::Terminal);
+        assert!(app.state.popup_pane.is_none());
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
+        assert_eq!(app.state.floats.len(), 2);
+        let float_pane = app.state.floats[0].pane_id;
+        assert!(!app.state.plugin_panes.contains_key(&float_pane));
+        app.state.assert_invariants_for_test();
+
+        let rejected = app.handle_api_request(Request {
+            id: "float-xy-on-popup".into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                placement: Some(PluginPanePlacement::Popup),
+                ..match float_request("unused", Some(1), None).method {
+                    Method::PluginPaneOpen(params) => params,
+                    _ => unreachable!(),
+                }
+            }),
+        });
+        let rejected: crate::api::schema::ErrorResponse = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected.error.code, "invalid_params");
+
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id: float_pane,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
+        assert_eq!(app.state.floats.len(), 1);
+        assert_eq!(app.state.floats[0].terminal_id.as_str(), second.float_id);
         assert!(event_hub.events_after(0).is_empty());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
@@ -2621,6 +2781,9 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let value: serde_json::Value = serde_json::from_str(&pane).unwrap();
@@ -2688,6 +2851,9 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::new(),
+                x: None,
+                y: None,
+                hide_while_focused: None,
             }),
         });
         let pane: serde_json::Value = serde_json::from_str(&pane).unwrap();
