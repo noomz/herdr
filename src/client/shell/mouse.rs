@@ -885,11 +885,11 @@ impl ClientShellState {
                         .as_ref()
                         .filter(|hit| hit.pane_id == gesture.hit.pane_id)
                         .cloned(),
-                    PaneHitLayer::Float => self
+                    PaneHitLayer::Float(float_id) => self
                         .hits
                         .floats
                         .iter()
-                        .find(|float| float.pane.pane_id == gesture.hit.pane_id)
+                        .find(|float| float.pane.layer == PaneHitLayer::Float(float_id))
                         .map(|float| float.pane.clone()),
                     PaneHitLayer::Tiled => self
                         .hits

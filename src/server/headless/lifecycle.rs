@@ -121,7 +121,10 @@ impl HeadlessServer {
             params.expected_version,
             self.api_window_title.clone(),
             self.host_shutdown_intent.get(),
-            floats,
+            crate::handoff_runtime::HandoffFloats {
+                floats,
+                next_float_id: Some(self.app.state.next_float_id),
+            },
         );
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),

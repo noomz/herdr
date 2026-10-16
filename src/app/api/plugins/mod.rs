@@ -2655,7 +2655,7 @@ command = ["sh", "-c", "sleep 5"]
             exit_reason: crate::platform::ChildExitReason::Exited,
         });
         assert_eq!(app.state.floats.len(), 1);
-        assert_eq!(app.state.floats[0].terminal_id.as_str(), second.float_id);
+        assert_eq!(app.state.floats[0].id.to_string(), second.float_id);
         assert!(event_hub.events_after(0).is_empty());
 
         for (_, runtime) in app.terminal_runtimes.drain() {

@@ -13,6 +13,47 @@ pub(crate) const CAPABILITY: &str = "floats";
 pub(crate) const SURFACE_KIND: &str = "endpoint.floats.v1";
 pub(crate) const INPUT_KIND: &str = "endpoint.float-input.v1";
 
+/// A float's public id, written `f<n>`. The server mints each id once per session and keeps it
+/// across live handoff, unlike the float's terminal id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FloatId(u32);
+
+impl FloatId {
+    pub(crate) const FIRST: Self = Self(1);
+
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        let digits = text.strip_prefix('f')?;
+        if digits.starts_with('0') || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse().ok().map(Self)
+    }
+
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
+impl std::fmt::Display for FloatId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "f{}", self.0)
+    }
+}
+
+impl Serialize for FloatId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for FloatId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid float id: {text}")))
+    }
+}
+
 /// Every float visible to one client, bottom to top. An empty list clears the layer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FloatsSurface {
@@ -21,7 +62,9 @@ pub struct FloatsSurface {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FloatSurface {
-    pub float_id: String,
+    pub float_id: FloatId,
+    /// Keys the float's kitty graphics placements, which target its terminal.
+    pub terminal_id: String,
     pub title: String,
     /// Bordered rect relative to the pane surface's top-left cell.
     pub outer: SurfaceRect,
@@ -36,7 +79,7 @@ pub struct FloatSurface {
 /// Client-classified input for one float, the float counterpart of `ClientShellPopupInput`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FloatInput {
-    pub float_id: String,
+    pub float_id: FloatId,
     pub events: Vec<ClientPaneInputEvent>,
 }
 
@@ -90,11 +133,12 @@ mod tests {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
     use ratatui::{buffer::Buffer, layout::Rect};
 
-    fn float(id: &str, x: u16) -> FloatSurface {
+    fn float(id: u32, x: u16) -> FloatSurface {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 2));
         buffer[(1, 1)].set_symbol("x");
         FloatSurface {
-            float_id: id.into(),
+            float_id: FloatId(id),
+            terminal_id: format!("term_{id}"),
             title: "peek".into(),
             outer: SurfaceRect {
                 x,
@@ -113,7 +157,7 @@ mod tests {
     #[test]
     fn surface_round_trips_through_its_named_control() {
         let surface = FloatsSurface {
-            floats: vec![float("term_a", 1), float("term_b", 9)],
+            floats: vec![float(1, 1), float(2, 9)],
         };
 
         let ServerMessage::EndpointControl { kind, data } = surface_message(&surface).unwrap()
@@ -138,7 +182,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_frames_whose_cells_do_not_match_their_size() {
-        let mut bad = float("term_a", 1);
+        let mut bad = float(1, 1);
         bad.frame.width = 9;
         let ServerMessage::EndpointControl { data, .. } =
             surface_message(&FloatsSurface { floats: vec![bad] }).unwrap()
@@ -153,7 +197,7 @@ mod tests {
     #[test]
     fn input_round_trips_as_json_control() {
         let input = FloatInput {
-            float_id: "term_a".into(),
+            float_id: FloatId(1),
             events: vec![ClientPaneInputEvent::Key {
                 code: ClientKeyCode::Char('q'),
                 modifiers: 0,
@@ -173,5 +217,23 @@ mod tests {
 
         assert_eq!(kind, INPUT_KIND);
         assert_eq!(decode_input(&data).unwrap(), input);
+    }
+
+    #[test]
+    fn float_ids_parse_only_their_canonical_form() {
+        assert_eq!(FloatId::parse("f12"), Some(FloatId(12)));
+        assert_eq!(FloatId(12).to_string(), "f12");
+        for bad in [
+            "",
+            "f",
+            "12",
+            "f012",
+            "f+1",
+            "f-1",
+            "term_a",
+            "f99999999999",
+        ] {
+            assert_eq!(FloatId::parse(bad), None, "{bad}");
+        }
     }
 }

@@ -161,7 +161,7 @@ pub(super) struct PaneHit {
 pub(super) enum PaneHitLayer {
     Tiled,
     Popup,
-    Float,
+    Float(crate::protocol::floats::FloatId),
 }
 
 impl PaneHit {
@@ -170,7 +170,7 @@ impl PaneHit {
         match self.layer {
             PaneHitLayer::Tiled => ClientInputTarget::Pane(id),
             PaneHitLayer::Popup => ClientInputTarget::Popup(id),
-            PaneHitLayer::Float => ClientInputTarget::Float(id),
+            PaneHitLayer::Float(float_id) => ClientInputTarget::Float(float_id),
         }
     }
 }
@@ -687,7 +687,7 @@ pub(super) enum PendingEndpointKind {
         session_generation: u64,
     },
     FloatMove {
-        float_id: String,
+        float_id: crate::protocol::floats::FloatId,
     },
     CopySearch {
         pane_id: String,
@@ -777,7 +777,7 @@ pub(super) struct ClientVisibleNotification {
 pub(super) enum ClientInputTarget {
     Pane(String),
     Popup(String),
-    Float(String),
+    Float(crate::protocol::floats::FloatId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -786,7 +786,7 @@ pub(super) struct ClientInputContext {
     pub(super) overlay: Option<ClientShellOverlayKind>,
     pub(super) popup_terminal_id: Option<String>,
     pub(super) popup_pending: bool,
-    pub(super) focused_float: Option<String>,
+    pub(super) focused_float: Option<crate::protocol::floats::FloatId>,
     pub(super) retained_selection: bool,
 }
 

@@ -69,7 +69,7 @@ use crate::protocol::{
 use crate::raw_input::RawInputEvent;
 
 fn float_input_message(
-    float_id: String,
+    float_id: crate::protocol::floats::FloatId,
     events: Vec<ClientPaneInputEvent>,
 ) -> Option<ClientMessage> {
     let input = crate::protocol::floats::FloatInput { float_id, events };

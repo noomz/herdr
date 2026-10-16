@@ -1,12 +1,19 @@
 use super::*;
 
-use crate::protocol::floats::{FloatSurface, FloatsSurface, INPUT_KIND};
+use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface, INPUT_KIND};
+
+/// Fixture floats are named by terminal id; `term_a` is float `f1`, `term_b` is `f2`.
+fn fid(terminal_id: &str) -> FloatId {
+    let letter = terminal_id.bytes().last().expect("terminal id");
+    FloatId::parse(&format!("f{}", letter - b'a' + 1)).expect("fixture float id")
+}
 
 fn float(id: &str, x: u16, y: u16, text: &str) -> FloatSurface {
     let first = format!("{text:<9}");
     let buffer = Buffer::with_lines([first.as_str(), "", ""]);
     FloatSurface {
-        float_id: id.into(),
+        float_id: fid(id),
+        terminal_id: id.into(),
         title: format!("{id} title"),
         outer: SurfaceRect {
             x,
@@ -146,7 +153,7 @@ fn keys_reach_a_float_only_after_it_is_clicked() {
     let typed = state.handle_input_bytes(b"y");
     let inputs = float_inputs(&typed);
     assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].float_id, "term_a");
+    assert_eq!(inputs[0].float_id, fid("term_a"));
 
     let frame = state.compose(106, 20).expect("focused frame");
     let a = hit(&state, "term_a");
@@ -220,7 +227,8 @@ fn clicking_a_lower_float_raises_it() {
 
     assert!(matches!(
         &endpoint_methods(&down)[..],
-        [crate::api::schema::Method::FloatRaise(target)] if target.float_id == "term_a"
+        [crate::api::schema::Method::FloatRaise(target)]
+            if target.float_id == fid("term_a").to_string()
     ));
     state.compose(106, 20).expect("raised frame");
     let order: Vec<_> = state
@@ -266,7 +274,7 @@ fn dragging_the_border_previews_then_commits_a_clamped_move() {
     assert!(matches!(
         &endpoint_methods(&up)[..],
         [crate::api::schema::Method::FloatMove(params)]
-            if params.float_id == "term_a" && (params.x, params.y) == max
+            if params.float_id == fid("term_a").to_string() && (params.x, params.y) == max
     ));
     state.compose(106, 20).expect("held preview");
     assert_eq!(
@@ -540,7 +548,7 @@ fn clicking_away_from_a_float_releases_keys_it_saw_pressed() {
     let released = float_inputs(&away);
     assert!(matches!(
         &released[..],
-        [input] if input.float_id == "term_a"
+        [input] if input.float_id == fid("term_a")
             && matches!(
                 &input.events[..],
                 [ClientPaneInputEvent::Key {
@@ -573,7 +581,7 @@ fn a_key_held_across_a_server_focus_change_releases_in_the_float() {
 
     assert!(matches!(
         &float_inputs(&release)[..],
-        [input] if input.float_id == "term_a"
+        [input] if input.float_id == fid("term_a")
     ));
     let typed = state.handle_input_bytes(b"y");
     assert!(float_inputs(&typed).is_empty(), "focus left the float");

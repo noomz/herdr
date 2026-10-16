@@ -52,6 +52,9 @@ pub(crate) struct ImportedHandoffRuntime {
 #[cfg(unix)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HandoffFloat {
+    /// Absent from manifests written before floats had stable ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<crate::protocol::floats::FloatId>,
     pub runtime: HandoffRuntimeState,
     pub cwd: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,4 +73,13 @@ pub(crate) struct HandoffFloat {
     /// Raw id of the source server's pane that hides this float while focused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_while_focused: Option<u32>,
+}
+
+/// Every float a live handoff carries, plus the id the source would have minted next, so the
+/// importer never hands out the id of a float the source already closed.
+#[cfg(unix)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HandoffFloats {
+    pub floats: Vec<HandoffFloat>,
+    pub next_float_id: Option<crate::protocol::floats::FloatId>,
 }

@@ -579,7 +579,8 @@ pub(super) fn render_float_layer(
             (0, 0)
         };
         floats.push(protocol::floats::FloatSurface {
-            float_id: float.terminal_id.to_string(),
+            float_id: float.id,
+            terminal_id: float.terminal_id.to_string(),
             title: app
                 .state
                 .terminals

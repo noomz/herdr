@@ -451,10 +451,10 @@ impl ClientShellState {
             }
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
-        let focused_float = self.focused_float_id().map(str::to_owned);
+        let focused_float = self.focused_float_id();
         self.hits.floats = super::floats::compose_floats(
             &self.floats,
-            focused_float.as_deref(),
+            focused_float,
             &self.config.palette,
             &mut frame,
             layout.pane_surface,

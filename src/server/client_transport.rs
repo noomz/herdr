@@ -515,7 +515,7 @@ pub(crate) enum ServerEvent {
     /// A client-owned shell delivered semantic input to one float terminal.
     ClientShellFloatInput {
         client_id: u64,
-        terminal_id: String,
+        float_id: crate::protocol::floats::FloatId,
         events: Vec<ClientPaneInputEvent>,
     },
     /// A client-owned shell published one host terminal theme observation.
@@ -1318,12 +1318,12 @@ fn client_read_loop_with_endpoint_controls(
                         continue;
                     }
                 };
-                let terminal_id = input.float_id;
+                let float_id = input.float_id;
                 let Some(event) =
                     terminal_input_event(client_id, input.events, "float", |events| {
                         ServerEvent::ClientShellFloatInput {
                             client_id,
-                            terminal_id,
+                            float_id,
                             events,
                         }
                     })

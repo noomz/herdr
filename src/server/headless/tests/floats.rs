@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::app::floats::{FloatEdit, FloatSpec, FloatVisibility};
+use crate::app::floats::{FloatEdit, FloatId, FloatSpec, FloatVisibility};
 use crate::popup_size::{FloatPosition, PopupSize};
 
 fn read_server_messages(bytes: Vec<u8>) -> Vec<ServerMessage> {
@@ -61,13 +61,14 @@ fn install_float(
     bytes: &[u8],
     hide_while_focused: Option<crate::layout::PaneId>,
 ) -> (
+    FloatId,
     crate::terminal::TerminalId,
     tokio::sync::mpsc::Receiver<Bytes>,
 ) {
     let (runtime, input) = crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
         17, 6, 0, bytes, 4,
     );
-    let (_, terminal_id) = server.app.install_test_float_runtime(
+    let (_, terminal_id, float_id) = server.app.install_test_float_runtime(
         runtime,
         FloatSpec {
             width: Some(PopupSize::Cells(20)),
@@ -76,13 +77,13 @@ fn install_float(
             hide_while_focused,
         },
     );
-    (terminal_id, input)
+    (float_id, terminal_id, input)
 }
 
-fn type_into_float(server: &mut HeadlessServer, client_id: u64, terminal_id: &str, text: &str) {
+fn type_into_float(server: &mut HeadlessServer, client_id: u64, float_id: FloatId, text: &str) {
     server.handle_server_event(ServerEvent::ClientShellFloatInput {
         client_id,
-        terminal_id: terminal_id.into(),
+        float_id,
         events: vec![protocol::ClientPaneInputEvent::TextCommit(text.into())],
     });
 }
@@ -91,7 +92,7 @@ fn type_into_float(server: &mut HeadlessServer, client_id: u64, terminal_id: &st
 async fn negotiated_client_receives_positioned_float_layer_beside_the_pane_surface() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (terminal_id, _input) = install_float(&mut server, b"FLOAT_LIVE", None);
+    let (float_id, terminal_id, _input) = install_float(&mut server, b"FLOAT_LIVE", None);
     let render_rx = connect_shell(&mut server, 7, true);
 
     server.render_and_stream();
@@ -107,7 +108,8 @@ async fn negotiated_client_receives_positioned_float_layer_beside_the_pane_surfa
     let layers = float_layers(&messages);
     assert_eq!(layers.len(), 1);
     let float = &layers[0].floats[0];
-    assert_eq!(float.float_id, terminal_id.as_str());
+    assert_eq!(float.float_id, float_id);
+    assert_eq!(float.terminal_id, terminal_id.as_str());
     assert_eq!(
         float.outer,
         protocol::SurfaceRect {
@@ -132,7 +134,7 @@ async fn negotiated_client_receives_positioned_float_layer_beside_the_pane_surfa
 async fn clients_without_the_capability_never_receive_floats() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (_terminal_id, _input) = install_float(&mut server, b"FLOAT_LIVE", None);
+    let (_float_id, _terminal_id, _input) = install_float(&mut server, b"FLOAT_LIVE", None);
     let render_rx = connect_shell(&mut server, 7, false);
 
     server.render_and_stream();
@@ -147,48 +149,46 @@ async fn hiding_or_focusing_the_rule_pane_clears_the_layer_and_blocks_input() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
     let source = server.app.state.workspaces[0].tabs[0].root_pane;
-    let (terminal_id, mut float_input) = install_float(&mut server, b"PIP", None);
+    let (float_id, terminal_id, mut float_input) = install_float(&mut server, b"PIP", None);
     let render_rx = connect_shell(&mut server, 7, true);
     server.render_and_stream();
     let _ = render_rx.recv().expect("first render");
 
-    type_into_float(&mut server, 7, terminal_id.as_str(), "shown");
+    type_into_float(&mut server, 7, float_id, "shown");
     assert_eq!(
         float_input.try_recv().expect("shown input"),
         Bytes::from_static(b"shown")
     );
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::HideWhileFocused(Some(source)),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::HideWhileFocused(Some(source)));
     server.render_and_stream();
     let layers = float_layers(&read_server_messages(
         render_rx.recv().expect("rule render"),
     ));
     assert_eq!(layers, vec![protocol::floats::FloatsSurface::default()]);
-    type_into_float(&mut server, 7, terminal_id.as_str(), "hidden-by-rule");
+    type_into_float(&mut server, 7, float_id, "hidden-by-rule");
     assert!(float_input.try_recv().is_err());
 
     server
         .app
-        .edit_float(terminal_id.as_str(), FloatEdit::HideWhileFocused(None));
+        .edit_float(float_id, FloatEdit::HideWhileFocused(None));
     server.render_and_stream();
     let layers = float_layers(&read_server_messages(
         render_rx.recv().expect("rule cleared"),
     ));
     assert_eq!(layers[0].floats.len(), 1);
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::Visibility(FloatVisibility::Hidden),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Hidden));
     server.render_and_stream();
     let layers = float_layers(&read_server_messages(
         render_rx.recv().expect("hide render"),
     ));
     assert_eq!(layers, vec![protocol::floats::FloatsSurface::default()]);
-    type_into_float(&mut server, 7, terminal_id.as_str(), "hidden");
+    type_into_float(&mut server, 7, float_id, "hidden");
     assert!(float_input.try_recv().is_err());
     assert!(
         server.app.terminal_runtimes.get(&terminal_id).is_some(),
@@ -201,17 +201,16 @@ async fn hiding_or_focusing_the_rule_pane_clears_the_layer_and_blocks_input() {
 async fn hidden_float_output_does_not_count_as_visible_presentation_work() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (terminal_id, _input) = install_float(&mut server, b"PIP", None);
+    let (float_id, _terminal_id, _input) = install_float(&mut server, b"PIP", None);
     let _render_rx = connect_shell(&mut server, 7, true);
     let float_pane = server.app.state.floats[0].pane_id;
     let sources = std::collections::HashSet::from([float_pane]);
 
     assert!(server.pty_sources_visible_to_any_render_target(&sources));
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::Visibility(FloatVisibility::Hidden),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Hidden));
 
     assert!(!server.pty_sources_visible_to_any_render_target(&sources));
     shutdown_test_runtimes(&mut server);
@@ -221,7 +220,7 @@ async fn hidden_float_output_does_not_count_as_visible_presentation_work() {
 async fn modal_popup_blocks_float_input() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (terminal_id, mut float_input) = install_float(&mut server, b"PIP", None);
+    let (float_id, _terminal_id, mut float_input) = install_float(&mut server, b"PIP", None);
     let (popup_runtime, _popup_input) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
             40, 12, 0, b"POPUP", 4,
@@ -231,7 +230,7 @@ async fn modal_popup_blocks_float_input() {
     server.render_and_stream();
     let _ = render_rx.recv().expect("first render");
 
-    type_into_float(&mut server, 7, terminal_id.as_str(), "under-popup");
+    type_into_float(&mut server, 7, float_id, "under-popup");
 
     assert!(float_input.try_recv().is_err());
     shutdown_test_runtimes(&mut server);
@@ -268,7 +267,7 @@ fn next_pane_surface(render_rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> protocol
 async fn float_images_reach_only_clients_that_negotiated_floats() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    let (_float_id, terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
     let with_floats = connect_shell(&mut server, 7, true);
     let without_floats = connect_shell(&mut server, 8, false);
 
@@ -288,22 +287,20 @@ async fn hidden_or_closed_floats_deliver_no_images() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
     let source = server.app.state.workspaces[0].tabs[0].root_pane;
-    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    let (float_id, _terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
     let render_rx = connect_shell(&mut server, 7, true);
     server.render_and_stream();
     assert_eq!(float_image_targets(&next_pane_surface(&render_rx)).len(), 1);
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::Visibility(FloatVisibility::Hidden),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Hidden));
     server.render_and_stream();
     assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::Visibility(FloatVisibility::Shown),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Shown));
     server.render_and_stream();
     let shown = next_pane_surface(&render_rx);
     assert_eq!(float_image_targets(&shown).len(), 1);
@@ -313,19 +310,18 @@ async fn hidden_or_closed_floats_deliver_no_images() {
         "pixels are resent after show"
     );
 
-    server.app.edit_float(
-        terminal_id.as_str(),
-        FloatEdit::HideWhileFocused(Some(source)),
-    );
+    server
+        .app
+        .edit_float(float_id, FloatEdit::HideWhileFocused(Some(source)));
     server.render_and_stream();
     assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
     server
         .app
-        .edit_float(terminal_id.as_str(), FloatEdit::HideWhileFocused(None));
+        .edit_float(float_id, FloatEdit::HideWhileFocused(None));
     server.render_and_stream();
     assert_eq!(float_image_targets(&next_pane_surface(&render_rx)).len(), 1);
 
-    assert!(server.app.close_float(terminal_id.as_str()));
+    assert!(server.app.close_float(float_id));
     server.render_and_stream();
     assert!(float_image_targets(&next_pane_surface(&render_rx)).is_empty());
     shutdown_test_runtimes(&mut server);
@@ -342,7 +338,7 @@ async fn retained_tiled_patches_keep_float_images() {
         width_px: 10,
         height_px: 20,
     };
-    let (terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
+    let (_float_id, terminal_id, _input) = install_float(&mut server, FLOAT_IMAGE, None);
     server.render_and_stream();
     assert_eq!(
         float_image_targets(&next_pane_surface(&render_rx)),

@@ -3,7 +3,7 @@ use crate::api::schema::{
     FloatInfo, FloatMoveParams, FloatResizeParams, FloatSetHideRuleParams, FloatTarget,
     FloatVisibilityInfo, ResponseResult,
 };
-use crate::app::floats::{FloatEdit, FloatState, FloatVisibility};
+use crate::app::floats::{FloatEdit, FloatId, FloatState, FloatVisibility};
 use crate::app::App;
 use crate::popup_size::FloatPosition;
 
@@ -14,7 +14,7 @@ impl App {
             FloatPosition::At { x, y } => (Some(x), Some(y)),
         };
         FloatInfo {
-            float_id: float.terminal_id.to_string(),
+            float_id: float.id.to_string(),
             title: self
                 .state
                 .terminals
@@ -36,12 +36,12 @@ impl App {
         }
     }
 
-    fn float_info_by_id(&self, float_id: &str) -> Option<FloatInfo> {
+    pub(super) fn float_info_by_id(&self, float_id: FloatId) -> Option<FloatInfo> {
         self.state
             .floats
             .iter()
             .enumerate()
-            .find(|(_, float)| float.terminal_id.as_str() == float_id)
+            .find(|(_, float)| float.id == float_id)
             .map(|(z, float)| self.float_info(z, float))
     }
 
@@ -101,7 +101,8 @@ impl App {
     }
 
     pub(super) fn handle_float_close(&mut self, id: String, target: FloatTarget) -> String {
-        if !self.close_float(&target.float_id) {
+        let closed = FloatId::parse(&target.float_id).is_some_and(|float| self.close_float(float));
+        if !closed {
             return float_not_found(id);
         }
         encode_success(
@@ -113,6 +114,9 @@ impl App {
     }
 
     fn handle_float_edit(&mut self, id: String, float_id: &str, edit: FloatEdit) -> String {
+        let Some(float_id) = FloatId::parse(float_id) else {
+            return float_not_found(id);
+        };
         if self.edit_float(float_id, edit).is_none() {
             return float_not_found(id);
         }
@@ -156,16 +160,18 @@ mod tests {
                     terminal_id.clone(),
                     crate::terminal::TerminalState::new(terminal_id.clone(), "/float".into()),
                 );
+                let id = app.state.mint_float_id();
                 app.state.floats.push(crate::app::floats::FloatState {
+                    id,
                     pane_id: crate::layout::PaneId::alloc(),
-                    terminal_id: terminal_id.clone(),
+                    terminal_id,
                     width: Some(PopupSize::Cells(20)),
                     height: Some(PopupSize::Cells(8)),
                     position: FloatPosition::Centered,
                     visibility: FloatVisibility::Shown,
                     hide_while_focused: None,
                 });
-                terminal_id.to_string()
+                id.to_string()
             })
             .collect();
         (app, ids)
