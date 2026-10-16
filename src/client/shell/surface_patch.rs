@@ -188,15 +188,17 @@ impl ClientShellState {
                     cells: row.cells.clone(),
                 })
                 .collect(),
-            cursor: patch
-                .cursor
-                .clone()
-                .map(|cursor| crate::protocol::CursorState {
-                    x: area.x.saturating_add(cursor.x),
-                    y: area.y.saturating_add(cursor.y),
-                    visible: cursor.visible,
-                    shape: cursor.shape,
-                }),
+            cursor: self.focused_float_cursor().unwrap_or_else(|| {
+                patch
+                    .cursor
+                    .clone()
+                    .map(|cursor| crate::protocol::CursorState {
+                        x: area.x.saturating_add(cursor.x),
+                        y: area.y.saturating_add(cursor.y),
+                        visible: cursor.visible,
+                        shape: cursor.shape,
+                    })
+            }),
         });
         if let Some(area) = fast_path_area {
             let applied = self

@@ -578,3 +578,55 @@ fn a_key_held_across_a_server_focus_change_releases_in_the_float() {
     let typed = state.handle_input_bytes(b"y");
     assert!(float_inputs(&typed).is_empty(), "focus left the float");
 }
+
+#[test]
+fn a_focused_float_keeps_the_cursor_while_patches_beside_it_take_the_fast_path() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+    let frame = state.compose(106, 20).expect("focused frame");
+    let float_cursor = frame.cursor.clone();
+    assert!(float_cursor.is_some());
+    let mut updated_pane = surface().panes[0].clone();
+    updated_pane.content_revision = 2;
+    let patch = crate::protocol::PaneSurfacePatch {
+        boot_id: "boot-1".into(),
+        projection_revision: 1,
+        base_surface_revision: 1,
+        surface_revision: 2,
+        rows: vec![crate::protocol::PaneSurfacePatchRow {
+            x: 0,
+            y: 1,
+            cells: vec![
+                crate::protocol::CellData {
+                    symbol: "N".into(),
+                    fg: 0,
+                    bg: 0,
+                    modifier: 0,
+                    skip: false,
+                    hyperlink: None,
+                };
+                4
+            ],
+        }],
+        panes: vec![updated_pane],
+        cursor: Some(crate::protocol::CursorState {
+            x: 2,
+            y: 1,
+            visible: true,
+            shape: 1,
+        }),
+    };
+
+    let ClientPaneSurfacePatchOutcome::Applied(Some(composed)) =
+        state.apply_pane_surface_patch(patch)
+    else {
+        panic!("a patch beside the focused float takes the fast path");
+    };
+    assert_eq!(composed.cursor, float_cursor);
+}

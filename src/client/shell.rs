@@ -271,15 +271,22 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
         }
     }
 
-    target.cursor = source.cursor.as_ref().and_then(|cursor| {
+    target.cursor = blitted_cursor(source, area);
+    target.graphics.clear();
+}
+
+/// Where `source`'s cursor lands once `source` is blitted into `area`.
+fn blitted_cursor(source: &FrameData, area: Rect) -> Option<crate::protocol::CursorState> {
+    let copy_width = source.width.min(area.width);
+    let copy_height = source.height.min(area.height);
+    source.cursor.as_ref().and_then(|cursor| {
         (cursor.x < copy_width && cursor.y < copy_height).then(|| crate::protocol::CursorState {
             x: area.x + cursor.x,
             y: area.y + cursor.y,
             visible: cursor.visible,
             shape: cursor.shape,
         })
-    });
-    target.graphics.clear();
+    })
 }
 
 #[cfg(test)]

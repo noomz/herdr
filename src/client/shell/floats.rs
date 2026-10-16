@@ -212,9 +212,22 @@ impl ClientShellState {
         self.floats.focused.as_deref()
     }
 
+    /// The cursor the frame shows while a float has focus. `None` when no float has focus or
+    /// the focused float has not been composed yet.
+    pub(super) fn focused_float_cursor(&self) -> Option<Option<crate::protocol::CursorState>> {
+        let focused = self.focused_float_id()?;
+        let float = self.floats.get(focused)?;
+        let hit = self
+            .hits
+            .floats
+            .iter()
+            .find(|hit| hit.pane.pane_id == focused)?;
+        Some(super::blitted_cursor(&float.frame, hit.pane.inner_rect))
+    }
+
     /// Whether a pane patch can be presented without recomposing floats over it.
     pub(super) fn floats_block_patch(&self, patch: &crate::protocol::PaneSurfacePatch) -> bool {
-        if self.focused_float_id().is_some() {
+        if self.focused_float_id().is_some() && self.focused_float_cursor().is_none() {
             return true;
         }
         self.floats.layer.floats.iter().any(|float| {

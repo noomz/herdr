@@ -99,6 +99,9 @@ impl HeadlessServer {
         cell_size: crate::kitty_graphics::HostCellSize,
     ) -> Option<(crate::protocol::floats::FloatsSurface, Vec<u8>)> {
         let last = self.clients.get(&client_id)?.shell_floats.as_ref()?;
+        if self.app.state.floats.is_empty() && last.floats.is_empty() {
+            return None;
+        }
         let focused_pane = self.shell_focused_tiled_pane(client_id);
         let layer = match crate::server::client_shell::render_float_layer(
             &self.app,
