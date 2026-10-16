@@ -2418,6 +2418,11 @@ impl HeadlessServer {
                 client.host_mouse_capture_active = None;
                 client.host_sgr_pixels_active = None;
                 client.host_keyboard_report_all_active = None;
+                // A frozen activation drops float layers, so resend the current one after commit.
+                if client.shell_floats.is_some() {
+                    client.shell_floats = Some(Default::default());
+                    self.app.render_dirty.request_generic();
+                }
                 self.sent_window_title = None;
                 self.stream_host_mouse_capture_mode();
                 self.stream_direct_terminal_keyboard_mode();

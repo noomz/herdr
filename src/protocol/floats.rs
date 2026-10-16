@@ -33,17 +33,6 @@ pub struct FloatSurface {
     pub pixel_height: u32,
 }
 
-impl FloatSurface {
-    pub(crate) fn inner(&self) -> SurfaceRect {
-        SurfaceRect {
-            x: self.outer.x.saturating_add(1),
-            y: self.outer.y.saturating_add(1),
-            width: self.frame.width,
-            height: self.frame.height,
-        }
-    }
-}
-
 /// Client-classified input for one float, the float counterpart of `ClientShellPopupInput`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FloatInput {
@@ -159,21 +148,6 @@ mod tests {
 
         assert!(decode_surface(&data).is_err());
         assert!(decode_surface("!!not base64").is_err());
-    }
-
-    #[test]
-    fn inner_rect_sits_inside_the_border() {
-        let float = float("term_a", 1);
-
-        assert_eq!(
-            float.inner(),
-            SurfaceRect {
-                x: 2,
-                y: 4,
-                width: 4,
-                height: 2
-            }
-        );
     }
 
     #[test]

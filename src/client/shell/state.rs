@@ -92,6 +92,8 @@ pub(super) struct ShellHitMap {
     pub(super) tabs: Vec<(Rect, String)>,
     pub(super) panes: Vec<PaneHit>,
     pub(super) popup: Option<PaneHit>,
+    /// Bottom to top, in draw order.
+    pub(super) floats: Vec<super::floats::FloatHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
     pub(super) agents: Vec<(Rect, String)>,
     pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
@@ -147,11 +149,30 @@ pub(super) struct PaneHit {
     pub(super) scrollbar_rect: Option<Rect>,
     pub(super) scroll: Option<crate::pane::ScrollMetrics>,
     pub(super) pane_id: String,
-    pub(super) popup: bool,
+    pub(super) layer: PaneHitLayer,
     pub(super) mouse_reporting: bool,
     pub(super) sgr_pixel_mouse: bool,
     pub(super) pixel_width: u32,
     pub(super) pixel_height: u32,
+}
+
+/// Which terminal surface a hit belongs to; `pane_id` holds a terminal id for pane-less layers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneHitLayer {
+    Tiled,
+    Popup,
+    Float,
+}
+
+impl PaneHit {
+    pub(super) fn input_target(&self) -> ClientInputTarget {
+        let id = self.pane_id.clone();
+        match self.layer {
+            PaneHitLayer::Tiled => ClientInputTarget::Pane(id),
+            PaneHitLayer::Popup => ClientInputTarget::Popup(id),
+            PaneHitLayer::Float => ClientInputTarget::Float(id),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -753,6 +774,7 @@ pub(super) struct ClientVisibleNotification {
 pub(super) enum ClientInputTarget {
     Pane(String),
     Popup(String),
+    Float(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -761,6 +783,7 @@ pub(super) struct ClientInputContext {
     pub(super) overlay: Option<ClientShellOverlayKind>,
     pub(super) popup_terminal_id: Option<String>,
     pub(super) popup_pending: bool,
+    pub(super) focused_float: Option<String>,
     pub(super) retained_selection: bool,
 }
 
@@ -869,6 +892,7 @@ pub(crate) struct ClientShellState {
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
+    pub(super) floats: super::floats::ClientFloats,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
@@ -1043,6 +1067,7 @@ impl ClientShellState {
                 height_px: 1,
             },
             popup_terminal_id: None,
+            floats: Default::default(),
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1242,6 +1267,7 @@ impl ClientShellState {
         self.pending_pane_surface = None;
         self.input_leases = ClientInputLeases::default();
         self.popup_terminal_id = None;
+        self.clear_float_projection();
         self.chrome_drag = None;
         self.workspace_press = None;
         self.tab_press = None;
@@ -1585,6 +1611,13 @@ impl ClientShellState {
                 Some(_) => {}
             }
         }
+        let focused_pane_changed = self
+            .snapshot
+            .as_ref()
+            .is_some_and(|previous| previous.focused_pane_id != snapshot.focused_pane_id);
+        if focused_pane_changed {
+            self.blur_float();
+        }
         self.snapshot = Some(snapshot);
         self.reconcile_pending_workspace_highlight();
         let pending_surface = self.pending_pane_surface.take();
@@ -1699,7 +1732,8 @@ impl ClientShellState {
             self.workspace_press = None;
             self.tab_press = None;
             if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
-                gesture.hit.popup && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
+                gesture.hit.layer == PaneHitLayer::Popup
+                    && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
             }) {
                 self.pane_mouse_gesture = None;
             }

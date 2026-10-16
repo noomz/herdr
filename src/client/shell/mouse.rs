@@ -878,18 +878,25 @@ impl ClientShellState {
             if gesture_event {
                 let button = gesture.button;
                 let modifiers = mouse.modifiers.difference(gesture.stripped_modifiers);
-                let hit = if gesture.hit.popup {
-                    self.hits
+                let hit = match gesture.hit.layer {
+                    PaneHitLayer::Popup => self
+                        .hits
                         .popup
                         .as_ref()
                         .filter(|hit| hit.pane_id == gesture.hit.pane_id)
-                        .cloned()
-                } else {
-                    self.hits
+                        .cloned(),
+                    PaneHitLayer::Float => self
+                        .hits
+                        .floats
+                        .iter()
+                        .find(|float| float.pane.pane_id == gesture.hit.pane_id)
+                        .map(|float| float.pane.clone()),
+                    PaneHitLayer::Tiled => self
+                        .hits
                         .panes
                         .iter()
                         .find(|hit| hit.pane_id == gesture.hit.pane_id)
-                        .cloned()
+                        .cloned(),
                 }
                 .unwrap_or_else(|| gesture.hit.clone());
                 let position = self.pane_mouse_position(&hit, mouse);
@@ -943,6 +950,11 @@ impl ClientShellState {
             return;
         }
         if self.popup_terminal_id.is_some() {
+            return;
+        }
+        if !super::contains(self.hits.notification_toast, point)
+            && self.handle_float_mouse(mouse, outcome)
+        {
             return;
         }
         if self.config.mouse_capture
@@ -2335,7 +2347,11 @@ impl ClientShellState {
         }
     }
 
-    fn pane_mouse_position(&self, hit: &PaneHit, mouse: MouseEvent) -> ClientMousePosition {
+    pub(super) fn pane_mouse_position(
+        &self,
+        hit: &PaneHit,
+        mouse: MouseEvent,
+    ) -> ClientMousePosition {
         let cell = ClientMousePosition::Cell {
             column: mouse.column.saturating_sub(hit.inner_rect.x),
             row: mouse.row.saturating_sub(hit.inner_rect.y),
@@ -2382,13 +2398,8 @@ impl ClientShellState {
                 height_px: hit.pixel_height,
             },
         );
-        let target = if hit.popup {
-            ClientInputTarget::Popup(hit.pane_id.clone())
-        } else {
-            ClientInputTarget::Pane(hit.pane_id.clone())
-        };
         push_target_event(
-            target,
+            hit.input_target(),
             ClientPaneInputEvent::Mouse {
                 kind,
                 position,

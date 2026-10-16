@@ -39,6 +39,9 @@ impl HeadlessServer {
                 client.host_mouse_capture_active = None;
                 client.host_sgr_pixels_active = None;
                 client.host_keyboard_report_all_active = None;
+                if client.shell_floats.is_some() {
+                    client.shell_floats = Some(Default::default());
+                }
             }
             client.clear_deferred_render();
             if !active {

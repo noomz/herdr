@@ -2136,6 +2136,23 @@ async fn run_client_loop(
                                 }
                                 continue;
                             }
+                            Ok(endpoint::EndpointControlMessage::Floats(layer)) => {
+                                if activation_message || !endpoint_active {
+                                    continue;
+                                }
+                                let composed = state.shell.as_mut().and_then(|shell| {
+                                    shell.set_float_layer(layer);
+                                    shell.compose(state.reported_size.0, state.reported_size.1)
+                                });
+                                apply_client_shell_input_source_changes(
+                                    &mut state,
+                                    &mut prefix_input_source,
+                                );
+                                if let Some(frame) = composed {
+                                    state.present_frame(frame);
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::Ignored) => {
                                 debug!(%kind, "ignoring unknown endpoint control message");
                                 continue;

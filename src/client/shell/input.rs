@@ -445,7 +445,7 @@ impl ClientShellState {
         }
     }
 
-    fn release_input_leases(&mut self, outcome: &mut ClientShellInput) {
+    pub(super) fn release_input_leases(&mut self, outcome: &mut ClientShellInput) {
         for lease in self.input_leases.remove_source(LOCAL_INPUT_SOURCE) {
             // A press that arrived as plain text (IME commits, and printable keys
             // the host sends as text) reached the pane as text, not as a key
@@ -481,11 +481,7 @@ impl ClientShellState {
                 width_px: gesture.hit.pixel_width,
                 height_px: gesture.hit.pixel_height,
             });
-            let target = if gesture.hit.popup {
-                ClientInputTarget::Popup(gesture.hit.pane_id)
-            } else {
-                ClientInputTarget::Pane(gesture.hit.pane_id)
-            };
+            let target = gesture.hit.input_target();
             super::push_target_event(
                 target,
                 ClientPaneInputEvent::Mouse {
@@ -512,7 +508,7 @@ impl ClientShellState {
     ) {
         match plan {
             crate::input::RepeatPlan::Forwarded(target) => {
-                let pane_blocked_by_popup = matches!(&target, ClientInputTarget::Pane(_))
+                let pane_blocked_by_popup = !matches!(&target, ClientInputTarget::Popup(_))
                     && (self.popup_pending || self.popup_terminal_id.is_some());
                 if !pane_blocked_by_popup {
                     self.push_pane_key(target, key, outcome);
@@ -681,7 +677,7 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return None;
                 }
-                self.focused_pane_id().map(ClientInputTarget::Pane)
+                self.terminal_input_target()
             }
             ClientShellMode::Prefix => {
                 let return_mode = if self.copy_mode.as_ref().is_some_and(|copy_mode| {
@@ -694,7 +690,7 @@ impl ClientShellState {
                 if self.config.keybinds.matches_prefix(key) {
                     self.mode = return_mode;
                     outcome.repaint = true;
-                    return self.focused_pane_id().map(ClientInputTarget::Pane);
+                    return self.terminal_input_target();
                 }
                 if key.code == KeyCode::Esc {
                     self.mode = return_mode;
@@ -1073,11 +1069,9 @@ impl ClientShellState {
         ClientInputContext {
             mode: self.mode,
             overlay: self.overlay.as_ref().map(ClientShellOverlay::kind),
-            popup_terminal_id: self.popup_input_target().and_then(|target| match target {
-                ClientInputTarget::Popup(terminal_id) => Some(terminal_id),
-                ClientInputTarget::Pane(_) => None,
-            }),
+            popup_terminal_id: self.popup_terminal_id.clone(),
             popup_pending: self.popup_pending,
+            focused_float: self.focused_float_id().map(str::to_owned),
             retained_selection: self
                 .selection
                 .as_ref()
@@ -1108,10 +1102,7 @@ impl ClientShellState {
         {
             return None;
         }
-        if let Some(terminal_id) = self.popup_input_target().and_then(|target| match target {
-            ClientInputTarget::Popup(terminal_id) => Some(terminal_id),
-            ClientInputTarget::Pane(_) => None,
-        }) {
+        if let Some(terminal_id) = self.popup_terminal_id.clone() {
             return Some(crate::protocol::ClientClipboardImageTarget::Popup(
                 terminal_id,
             ));
@@ -1182,9 +1173,16 @@ impl ClientShellState {
         }
     }
 
+    /// Where typed input goes in terminal mode: the focused float, else the focused pane.
+    fn terminal_input_target(&self) -> Option<ClientInputTarget> {
+        self.focused_float_id()
+            .map(|float_id| ClientInputTarget::Float(float_id.to_owned()))
+            .or_else(|| self.focused_pane_id().map(ClientInputTarget::Pane))
+    }
+
     fn push_focused_pane_event(&self, event: ClientPaneInputEvent, outcome: &mut ClientShellInput) {
-        if let Some(pane_id) = self.focused_pane_id() {
-            super::push_target_event(ClientInputTarget::Pane(pane_id), event, outcome);
+        if let Some(target) = self.terminal_input_target() {
+            super::push_target_event(target, event, outcome);
         }
     }
 }

@@ -17,6 +17,7 @@ mod endpoint_notices;
 mod endpoint_sidebar;
 mod endpoints;
 pub(super) use endpoints::*;
+mod floats;
 mod global_menu;
 mod graphics;
 mod input;
@@ -67,17 +68,14 @@ use crate::protocol::{
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
 
-fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
-    match target {
-        ClientInputTarget::Pane(pane_id) => ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events: vec![event],
-        },
-        ClientInputTarget::Popup(terminal_id) => ClientMessage::ClientShellPopupInput {
-            terminal_id,
-            events: vec![event],
-        },
-    }
+fn float_input_message(
+    float_id: String,
+    events: Vec<ClientPaneInputEvent>,
+) -> Option<ClientMessage> {
+    let input = crate::protocol::floats::FloatInput { float_id, events };
+    crate::protocol::floats::input_message(&input)
+        .map_err(|error| tracing::warn!(%error, "failed to encode float input"))
+        .ok()
 }
 
 fn push_target_event(
@@ -97,10 +95,10 @@ fn push_target_event(
                     return;
                 }
             }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Pane(pane_id),
-                event,
-            ));
+            outcome.requests.push(ClientMessage::ClientShellPaneInput {
+                pane_id,
+                events: vec![event],
+            });
         }
         ClientInputTarget::Popup(terminal_id) => {
             if let Some(ClientMessage::ClientShellPopupInput {
@@ -113,10 +111,15 @@ fn push_target_event(
                     return;
                 }
             }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Popup(terminal_id),
-                event,
-            ));
+            outcome.requests.push(ClientMessage::ClientShellPopupInput {
+                terminal_id,
+                events: vec![event],
+            });
+        }
+        ClientInputTarget::Float(float_id) => {
+            outcome
+                .requests
+                .extend(float_input_message(float_id, vec![event]));
         }
     }
 }

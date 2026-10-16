@@ -11,6 +11,7 @@ pub(crate) enum EndpointControlMessage {
     AgentViewProjection(DecodedAgentViewProjection),
     AgentCompletions(crate::protocol::endpoint::EndpointAgentCompletions),
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
+    Floats(crate::protocol::floats::FloatsSurface),
     Ignored,
 }
 
@@ -52,6 +53,14 @@ pub(crate) fn decode_endpoint_control(
                 view,
             },
         ));
+    }
+    if kind == crate::protocol::floats::SURFACE_KIND {
+        return Ok(crate::protocol::floats::decode_surface(data)
+            .map(EndpointControlMessage::Floats)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "ignoring invalid float layer");
+                EndpointControlMessage::Ignored
+            }));
     }
     if kind == crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
         let snapshot = serde_json::from_str(data)
