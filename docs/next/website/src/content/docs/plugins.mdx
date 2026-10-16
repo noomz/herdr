@@ -373,6 +373,11 @@ to return input to the layout. Escape goes to the program in the float, and
 prefix keybindings keep working. Drag a float by its border or title to move
 it. A modal popup appears above floats and takes input while it is open.
 
+A program in a float can draw kitty graphics images. Herdr places them inside
+the float's border, moves them with the float, and crops them where a higher
+float, the modal popup, or a menu covers the float. A hidden float shows no
+images.
+
 Hiding a float keeps its process and terminal running. The float closes when
 its command exits or when you send `float.close`. A float is not a Herdr pane:
 it has no pane ID, emits no pane lifecycle events, and does not take part in
