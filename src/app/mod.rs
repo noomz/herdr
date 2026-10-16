@@ -17,6 +17,7 @@ mod api_helpers;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod creation;
 mod custom_commands;
+pub(crate) mod floats;
 mod git_refresh;
 mod ids;
 mod popup;
@@ -568,6 +569,7 @@ impl App {
             ),
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
+            floats: Vec::new(),
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,

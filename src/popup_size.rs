@@ -47,9 +47,30 @@ pub(crate) struct PopupResolvedGeometry {
     pub inner: Rect,
 }
 
+/// Where a floating terminal's outer rect sits, in cells relative to the pane surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum FloatPosition {
+    #[default]
+    Centered,
+    At {
+        x: u16,
+        y: u16,
+    },
+}
+
 pub(crate) fn resolve_popup_geometry(
     width: Option<PopupSize>,
     height: Option<PopupSize>,
+    area: Rect,
+) -> Option<PopupResolvedGeometry> {
+    resolve_float_geometry(width, height, FloatPosition::Centered, area)
+}
+
+/// Sizes like a popup, then clamps the requested position so the whole outer rect stays in `area`.
+pub(crate) fn resolve_float_geometry(
+    width: Option<PopupSize>,
+    height: Option<PopupSize>,
+    position: FloatPosition,
     area: Rect,
 ) -> Option<PopupResolvedGeometry> {
     let default_width = area.width.saturating_div(2).max(6);
@@ -68,8 +89,14 @@ pub(crate) fn resolve_popup_geometry(
         return None;
     }
 
-    let outer_x = area.x + (area.width.saturating_sub(outer_width)) / 2;
-    let outer_y = area.y + (area.height.saturating_sub(outer_height)) / 2;
+    let free_width = area.width.saturating_sub(outer_width);
+    let free_height = area.height.saturating_sub(outer_height);
+    let (offset_x, offset_y) = match position {
+        FloatPosition::Centered => (free_width / 2, free_height / 2),
+        FloatPosition::At { x, y } => (x.min(free_width), y.min(free_height)),
+    };
+    let outer_x = area.x + offset_x;
+    let outer_y = area.y + offset_y;
     let pane_inner_width = outer_width.saturating_sub(2);
     let pane_inner_height = outer_height.saturating_sub(2);
     let terminal_cols = if pane_inner_width <= 4 {
@@ -231,6 +258,49 @@ mod tests {
 
         assert_eq!(resolved.outer, ratatui::layout::Rect::new(4, 2, 100, 30));
         assert_eq!(resolved.inner, ratatui::layout::Rect::new(5, 3, 97, 28));
+    }
+
+    #[test]
+    fn float_position_places_outer_rect_relative_to_area() {
+        let resolved = super::resolve_float_geometry(
+            Some(PopupSize::Cells(20)),
+            Some(PopupSize::Cells(10)),
+            super::FloatPosition::At { x: 3, y: 4 },
+            ratatui::layout::Rect::new(2, 1, 100, 30),
+        )
+        .unwrap();
+        assert_eq!(resolved.outer, ratatui::layout::Rect::new(5, 5, 20, 10));
+        assert_eq!(resolved.inner, ratatui::layout::Rect::new(6, 6, 17, 8));
+    }
+
+    #[test]
+    fn float_position_clamps_so_the_whole_float_stays_inside_the_area() {
+        let resolved = super::resolve_float_geometry(
+            Some(PopupSize::Cells(20)),
+            Some(PopupSize::Cells(10)),
+            super::FloatPosition::At { x: 500, y: 500 },
+            ratatui::layout::Rect::new(0, 0, 100, 30),
+        )
+        .unwrap();
+        assert_eq!(resolved.outer, ratatui::layout::Rect::new(80, 20, 20, 10));
+    }
+
+    #[test]
+    fn centered_float_matches_popup_geometry() {
+        let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+        assert_eq!(
+            super::resolve_float_geometry(
+                Some(PopupSize::Percent(80)),
+                Some(PopupSize::Percent(40)),
+                super::FloatPosition::Centered,
+                area,
+            ),
+            super::resolve_popup_geometry(
+                Some(PopupSize::Percent(80)),
+                Some(PopupSize::Percent(40)),
+                area,
+            )
+        );
     }
 
     #[test]
