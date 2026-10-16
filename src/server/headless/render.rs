@@ -65,6 +65,72 @@ impl HeadlessServer {
             .map(|runtime| (runtime, pane_id))
     }
 
+    pub(super) fn shell_focused_tiled_pane(&self, client_id: u64) -> Option<crate::layout::PaneId> {
+        let target = self.shell_target_for_client(client_id)?;
+        self.app
+            .state
+            .workspaces
+            .get(target.workspace_index)?
+            .tabs
+            .get(target.tab_index)
+            .map(|tab| tab.layout.focused())
+    }
+
+    pub(super) fn shell_client_sees_float(
+        &self,
+        client_id: u64,
+        pane_id: crate::layout::PaneId,
+    ) -> bool {
+        self.clients
+            .get(&client_id)
+            .is_some_and(|client| client.shell_floats.is_some())
+            && self
+                .app
+                .state
+                .float_for_pane(pane_id)
+                .is_some_and(|float| float.visible_to(self.shell_focused_tiled_pane(client_id)))
+    }
+
+    /// Renders this client's float layer and frames it when it differs from what was last sent.
+    fn prepare_float_layer(
+        &mut self,
+        client_id: u64,
+        area: Rect,
+        cell_size: crate::kitty_graphics::HostCellSize,
+    ) -> Option<(crate::protocol::floats::FloatsSurface, Vec<u8>)> {
+        let last = self.clients.get(&client_id)?.shell_floats.as_ref()?;
+        let focused_pane = self.shell_focused_tiled_pane(client_id);
+        let layer = match crate::server::client_shell::render_float_layer(
+            &self.app,
+            focused_pane,
+            area,
+            cell_size,
+        ) {
+            Ok(layer) => layer,
+            Err(reason) => {
+                if matches!(
+                    reason,
+                    crate::server::client_shell::SurfaceRenderDeferred::Changed
+                ) {
+                    self.app.render_dirty.request_generic();
+                }
+                return None;
+            }
+        };
+        if &layer == last {
+            return None;
+        }
+        let framed = crate::protocol::floats::surface_message(&layer)
+            .map_err(|err| warn!(client_id, err = %err, "failed to encode float layer"))
+            .ok()
+            .and_then(|message| {
+                Self::frame_server_message(&message)
+                    .map_err(|err| warn!(client_id, err = %err, "failed to frame float layer"))
+                    .ok()
+            })?;
+        Some((layer, framed))
+    }
+
     /// Whether a pane the client shows asked for SGR pixel mouse reports. Host
     /// reports go to whichever pane is under the pointer, so an unfocused pane
     /// needs pixels from the host too (#4750); others get them as cells.
@@ -73,6 +139,16 @@ impl HeadlessServer {
             .shell_focused_runtime(client_id)
             .is_some_and(|(runtime, _)| runtime.sgr_pixel_mouse_enabled())
         {
+            return true;
+        }
+        if self.app.state.floats.iter().any(|float| {
+            self.shell_client_sees_float(client_id, float.pane_id)
+                && self
+                    .app
+                    .terminal_runtimes
+                    .get(&float.terminal_id)
+                    .is_some_and(crate::terminal::TerminalRuntime::sgr_pixel_mouse_enabled)
+        }) {
             return true;
         }
         let Some(target) = self.shell_target_for_client(client_id) else {
@@ -321,6 +397,14 @@ impl HeadlessServer {
                         pane_ids.insert(popup.pane_id);
                     }
                 }
+                pane_ids.extend(
+                    self.app
+                        .state
+                        .floats
+                        .iter()
+                        .filter(|float| self.shell_client_sees_float(client_id, float.pane_id))
+                        .map(|float| float.pane_id),
+                );
             }
         }
         if !direct_terminal_targets.is_empty() {
@@ -338,6 +422,14 @@ impl HeadlessServer {
                     pane_ids.insert(popup.pane_id);
                 }
             }
+            pane_ids.extend(
+                self.app
+                    .state
+                    .floats
+                    .iter()
+                    .filter(|float| direct_terminal_targets.contains(float.terminal_id.as_str()))
+                    .map(|float| float.pane_id),
+            );
         }
         self.app.render_dirty.set_immediate_pty_sources(pane_ids);
     }
@@ -407,6 +499,9 @@ impl HeadlessServer {
         {
             return Some(&popup.terminal_id);
         }
+        if let Some(float) = self.app.state.float_for_pane(pane_id) {
+            return Some(&float.terminal_id);
+        }
         self.app
             .find_pane(pane_id)
             .map(|(_, pane)| &pane.attached_terminal_id)
@@ -425,6 +520,9 @@ impl HeadlessServer {
                 .is_some_and(|popup| popup.pane_id == pane_id)
             {
                 return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+            }
+            if self.app.state.float_for_pane(pane_id).is_some() {
+                return self.shell_client_sees_float(client_id, pane_id);
             }
             let Some(target) = self.shell_target_for_client(client_id) else {
                 return false;
@@ -605,7 +703,10 @@ impl HeadlessServer {
                     render_started,
                 );
                 match result {
-                    Ok(surface) => Some(surface),
+                    Ok(surface) => Some((
+                        surface,
+                        self.prepare_float_layer(client_id, area, render_cell_size),
+                    )),
                     Err(reason) => {
                         if let Some(client) = self.clients.get_mut(&client_id) {
                             client.render_state.request_recompute();
@@ -735,6 +836,7 @@ impl HeadlessServer {
                 }
             }
             let mut surface_parts = None;
+            let mut float_layer = None;
             let frame = match mode {
                 ClientConnectionMode::ClientShell => {
                     let crate::server::client_shell::RenderedPaneSurface {
@@ -745,7 +847,13 @@ impl HeadlessServer {
                         graphics,
                         graphics_delivery: next_graphics_delivery,
                         graphics_sources,
-                    } = shell_render.expect("active shell surface");
+                    } = match shell_render {
+                        Some((surface, floats)) => {
+                            float_layer = floats;
+                            surface
+                        }
+                        None => continue,
+                    };
                     surface_parts = Some((
                         panes,
                         splits,
@@ -863,6 +971,15 @@ impl HeadlessServer {
             let Some(mut prepared) = prepared else {
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
+                if let Some((layer, framed)) = float_layer {
+                    match writer.render.try_send(framed) {
+                        Ok(()) => client.shell_floats = Some(layer),
+                        Err(std::sync::mpsc::TrySendError::Full(_)) => client.defer_full_render(),
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                            broken_clients.push(client_id);
+                        }
+                    }
+                }
                 continue;
             };
             let max = if has_graphics {
@@ -960,6 +1077,9 @@ impl HeadlessServer {
                 };
                 serialized.extend_from_slice(&file_frame);
             }
+            if let Some((_, framed)) = &float_layer {
+                serialized.extend_from_slice(framed);
+            }
             let send = if native_upload.is_some() || self.native_graphics.is_pending(client_id) {
                 writer.render.send_ordered(serialized)
             } else {
@@ -978,6 +1098,9 @@ impl HeadlessServer {
                         client.shell_graphics_delivery = delivery;
                     }
                     client.render_state.commit_sent_frame(prepared);
+                    if let Some((layer, _)) = float_layer {
+                        client.shell_floats = Some(layer);
+                    }
                     if shell_graphics_pending || shell_assets_deferred {
                         client.defer_full_render();
                     } else {

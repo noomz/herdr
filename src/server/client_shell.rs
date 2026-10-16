@@ -538,6 +538,62 @@ fn render_popup_surface(
     }))
 }
 
+/// Renders every float visible to a viewer whose tab focuses `focused_pane`, bottom to top.
+pub(super) fn render_float_layer(
+    app: &app::App,
+    focused_pane: Option<crate::layout::PaneId>,
+    area: Rect,
+    cell_size: crate::kitty_graphics::HostCellSize,
+) -> Result<protocol::floats::FloatsSurface, SurfaceRenderDeferred> {
+    let mut floats = Vec::new();
+    for float in &app.state.floats {
+        if !float.visible_to(focused_pane) {
+            continue;
+        }
+        let Some(geometry) = float.geometry(area) else {
+            continue;
+        };
+        let Some(runtime) = app.terminal_runtimes.get(&float.terminal_id) else {
+            continue;
+        };
+        let (synchronized, epoch) = runtime.synchronized_output_state();
+        if synchronized {
+            return Err(SurfaceRenderDeferred::Synchronized);
+        }
+        let content_area = Rect::new(0, 0, geometry.inner.width, geometry.inner.height);
+        let (buffer, cursor) =
+            crate::server::render_stream::render_terminal_virtual(runtime, content_area);
+        let hyperlinks = runtime.visible_hyperlinks(content_area);
+        if runtime.synchronized_output_state() != (false, epoch) {
+            return Err(SurfaceRenderDeferred::Changed);
+        }
+        let (pixel_width, pixel_height) = if cell_size.is_known() {
+            (
+                u32::from(content_area.width) * cell_size.width_px,
+                u32::from(content_area.height) * cell_size.height_px,
+            )
+        } else {
+            (0, 0)
+        };
+        floats.push(protocol::floats::FloatSurface {
+            float_id: float.terminal_id.to_string(),
+            title: app
+                .state
+                .terminals
+                .get(&float.terminal_id)
+                .and_then(|terminal| terminal.manual_label.clone())
+                .unwrap_or_else(|| "float".to_owned()),
+            outer: geometry.outer.into(),
+            frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
+            mouse_reporting: runtime.mouse_reporting_enabled(),
+            sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
+            pixel_width,
+            pixel_height,
+        });
+    }
+    Ok(protocol::floats::FloatsSurface { floats })
+}
+
 pub(super) fn resize_popup_runtime(
     app: &app::App,
     area: Rect,

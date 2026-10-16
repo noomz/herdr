@@ -607,6 +607,15 @@ impl HeadlessServer {
         {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
         }
+        for float in &self.app.state.floats {
+            crate::app::floats::resize_float_runtime(
+                &self.app.state,
+                &self.app.terminal_runtimes,
+                float,
+                Rect::new(0, 0, cols, rows),
+                cell_size,
+            );
+        }
         true
     }
 

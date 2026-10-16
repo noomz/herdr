@@ -27,7 +27,8 @@ pub(crate) type RenderTarget = (
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientShellInputTarget {
     Pane(String),
-    Popup(String),
+    /// A pane-less terminal (the popup or a float), addressed by terminal id.
+    Terminal(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -163,6 +164,8 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_surface_active: bool,
     /// Whether this shell wants host mouse capture without pane demand.
     pub(crate) shell_mouse_capture: bool,
+    /// Float layer last sent to a client that negotiated floats; `None` when not negotiated.
+    pub(crate) shell_floats: Option<crate::protocol::floats::FloatsSurface>,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
@@ -240,6 +243,7 @@ impl ClientConnection {
             render_pending: false,
             shell_surface_active: true,
             shell_mouse_capture: false,
+            shell_floats: None,
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
             host_keyboard_protocol_active: None,
