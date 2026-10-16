@@ -1458,3 +1458,55 @@ async fn failed_source_read_retries_after_identical_suppression_without_producer
     assert_eq!(server.clients[&1].deferred_render(), DeferredRender::None);
     shutdown_test_runtimes(&mut server);
 }
+
+#[tokio::test]
+async fn rejected_superseded_upload_redelivers_the_inline_image_sharing_its_bank() {
+    let (mut server, _control, _render, pane) = retained_test_server_with_control(RED_IMAGE);
+    let writer = native_render_client(&mut server);
+    server.render_and_stream();
+    let (token, image, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("first native upload");
+    ack_native(&mut server, 1, token, image);
+
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;AP8A/w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let (token, staged, _) =
+        native_upload(&drain_native_render_messages(&writer)).expect("second native upload");
+    assert_eq!(staged, image ^ NATIVE_SLOT_BIT);
+    native_started(&mut server, 1, token, staged);
+
+    // The inline repaint addresses bank 0, the bank the pending upload is staged in.
+    // The client's rejection of that upload deletes the image there.
+    write_shared_test_pane(
+        &mut server,
+        pane,
+        b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=2,r=1,q=2;AAD//w==\x1b\\",
+    );
+    render_pane(&mut server, pane, false);
+    let repainted = drain_native_render_messages(&writer);
+    let inline = native_surface(&repainted).expect("inline repaint").assets[0]
+        .key
+        .clone();
+    assert!(native_result(&mut server, 1, token, staged, false));
+
+    server.render_and_stream();
+    let recovered = drain_native_render_messages(&writer);
+    let redelivered = recovered.iter().any(|message| match message {
+        ServerMessage::GraphicsFile { surface_asset, .. } => {
+            surface_asset.as_ref() == Some(&inline)
+        }
+        ServerMessage::PaneSurface(surface) => surface
+            .graphics
+            .assets
+            .iter()
+            .any(|asset| asset.key == inline),
+        _ => false,
+    });
+    assert!(redelivered, "the repainted image must be sent again");
+    assert!(native_upload(&recovered).is_some(), "native stays enabled");
+    shutdown_test_runtimes(&mut server);
+}
