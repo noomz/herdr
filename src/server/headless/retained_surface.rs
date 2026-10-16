@@ -505,11 +505,8 @@ impl HeadlessServer {
                 patch,
                 mut graphics,
             } = update;
-            if graphics.as_ref().is_some_and(|(surface, _, _)| {
-                self.defer_changed_native_geometry(client_id, &surface.graphics)
-            }) {
-                deferred += 1;
-                continue;
+            if let Some((surface, _, _)) = &graphics {
+                self.supersede_changed_native_geometry(client_id, &surface.graphics);
             }
             let native_upload = graphics.as_mut().and_then(|(surface, delivery, sources)| {
                 self.prepare_native_scene(client_id, &mut surface.graphics, delivery, sources)
