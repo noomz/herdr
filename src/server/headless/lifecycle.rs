@@ -163,7 +163,7 @@ impl HeadlessServer {
             return Err(err);
         }
 
-        let mut stream = match crate::server::handoff::accept_and_validate_on(
+        let (mut stream, floats_accepted) = match crate::server::handoff::accept_and_validate_on(
             listener,
             &socket_path,
             &token,
@@ -180,6 +180,12 @@ impl HeadlessServer {
             }
         };
 
+        if !floats_accepted && !float_fds.is_empty() {
+            warn!("handoff importer predates floats; floats end with this server");
+            for fd in std::mem::take(&mut float_fds) {
+                let _ = unsafe { libc::close(fd) };
+            }
+        }
         let send_result =
             crate::server::handoff::send_fds_and_wait_restored(&mut stream, &fds, &float_fds);
         for fd in fds.into_iter().chain(float_fds) {
@@ -231,8 +237,9 @@ impl HeadlessServer {
         }
 
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
-            if !pane_by_terminal.contains_key(&terminal_id) && !float_entries.contains(&terminal_id)
-            {
+            let preserved = pane_by_terminal.contains_key(&terminal_id)
+                || (floats_accepted && float_entries.contains(&terminal_id));
+            if !preserved {
                 continue;
             }
             debug!(terminal = %terminal_id, "preserving pane runtime for handoff");
