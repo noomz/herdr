@@ -986,6 +986,128 @@ fn live_handoff_preserves_installed_plugins() {
 }
 
 #[test]
+fn live_handoff_preserves_float_process_and_placement() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let plugin_root = base.join("plugins/float");
+    let marker = base.join("float.pid");
+    let hup_marker = base.join("float-hup");
+    fs::create_dir_all(&plugin_root).unwrap();
+    fs::write(
+        plugin_root.join("herdr-plugin.toml"),
+        format!(
+            r#"id = "test.live-handoff-float"
+name = "Live handoff float"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "float"
+width = 30
+height = 8
+command = ["sh", "-c", "trap 'echo hup > {hup}' HUP; echo $$ > {pid}; while :; do sleep 1; done"]
+"#,
+            hup = hup_marker.display(),
+            pid = marker.display(),
+        ),
+    )
+    .unwrap();
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    link_plugin(&api_socket, &plugin_root);
+
+    let opened = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:open",
+            "method": "plugin.pane.open",
+            "params": {
+                "plugin_id": "test.live-handoff-float",
+                "entrypoint": "peek",
+                "x": 7,
+                "y": 3
+            }
+        }),
+    );
+    assert_ok(opened.clone());
+    let float_id = opened["result"]["float"]["float_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:hide",
+            "method": "float.hide",
+            "params": {"float_id": float_id}
+        }),
+    ));
+    let child_pid = wait_for_pid_marker(&marker, Duration::from_secs(5));
+    assert_eq!(unsafe { libc::kill(child_pid as libc::pid_t, 0) }, 0);
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    assert_eq!(
+        unsafe { libc::kill(child_pid as libc::pid_t, 0) },
+        0,
+        "the float process survives the handoff"
+    );
+    assert!(!hup_marker.exists(), "the float process was hung up");
+    let listed = request(
+        &api_socket,
+        serde_json::json!({"id":"test:float:list","method":"float.list","params":{}}),
+    );
+    assert_ok(listed.clone());
+    let floats = listed["result"]["floats"].as_array().unwrap();
+    assert_eq!(floats.len(), 1);
+    assert_eq!(floats[0]["title"], "Peek");
+    assert_eq!(
+        (floats[0]["x"].as_u64(), floats[0]["y"].as_u64()),
+        (Some(7), Some(3))
+    );
+    assert_eq!(floats[0]["visibility"], "hidden");
+    assert_eq!(floats[0]["width"], 30);
+
+    let restored_id = floats[0]["float_id"].as_str().unwrap().to_owned();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:float:close",
+            "method": "float.close",
+            "params": {"float_id": restored_id}
+        }),
+    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(child_pid as libc::pid_t, 0) } == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_ne!(
+        unsafe { libc::kill(child_pid as libc::pid_t, 0) },
+        0,
+        "closing the restored float still ends its process"
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn live_handoff_preserves_pane_process_io() {
     let _lock = test_lock();
     let base = unique_test_dir();

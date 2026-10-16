@@ -11,6 +11,8 @@ use crate::app::state::AppState;
 use crate::app::App;
 use crate::layout::PaneId;
 use crate::popup_size::{resolve_float_geometry, FloatPosition, PopupResolvedGeometry, PopupSize};
+#[cfg(unix)]
+use crate::terminal::TerminalRuntime;
 use crate::terminal::{TerminalId, TerminalRuntimeRegistry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -194,6 +196,101 @@ impl App {
     fn request_float_render(&self) {
         self.render_dirty.request_generic();
         self.render_notify.notify_one();
+    }
+}
+
+#[cfg(unix)]
+impl App {
+    /// Float state for a live handoff, bottom to top, with the terminal each entry came from.
+    pub(crate) fn handoff_floats(&self) -> Vec<(TerminalId, crate::handoff_runtime::HandoffFloat)> {
+        self.state
+            .floats
+            .iter()
+            .filter_map(|float| {
+                let runtime = self.terminal_runtimes.get(&float.terminal_id)?;
+                let terminal = self.state.terminals.get(&float.terminal_id)?;
+                let mut handoff_runtime = runtime.handoff_runtime_state(float.pane_id.raw());
+                handoff_runtime.initial_history_ansi = runtime.handoff_history_ansi();
+                Some((
+                    float.terminal_id.clone(),
+                    crate::handoff_runtime::HandoffFloat {
+                        runtime: handoff_runtime,
+                        cwd: terminal.cwd.clone(),
+                        title: terminal.manual_label.clone(),
+                        launch_argv: terminal.launch_argv.clone(),
+                        width: float.width,
+                        height: float.height,
+                        position: match float.position {
+                            FloatPosition::Centered => None,
+                            FloatPosition::At { x, y } => Some((x, y)),
+                        },
+                        hidden: float.visibility == FloatVisibility::Hidden,
+                        hide_while_focused: float.hide_while_focused.map(PaneId::raw),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Rebuilds floats from a handoff. A float whose runtime cannot be restored is dropped
+    /// and its fd closed; the panes it floated over are unaffected.
+    pub(crate) fn restore_handoff_floats(
+        &mut self,
+        floats: Vec<crate::handoff_runtime::HandoffFloat>,
+        fds: Vec<std::os::fd::RawFd>,
+    ) {
+        for (float, fd) in floats.into_iter().zip(fds) {
+            let pane_id = PaneId::alloc();
+            let runtime = match TerminalRuntime::from_handoff_fd(
+                crate::handoff_runtime::ImportedHandoffRuntime {
+                    master_fd: fd,
+                    state: float.runtime.with_pane_id(pane_id),
+                },
+                self.state.pane_scrollback_limit_bytes,
+                self.state.host_terminal_theme,
+                self.state.host_terminal_appearance,
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+            ) {
+                Ok(runtime) => runtime,
+                Err(err) => {
+                    tracing::warn!(err = %err, "dropping float that failed to restore after handoff");
+                    continue;
+                }
+            };
+            let terminal_id = TerminalId::alloc();
+            let mut terminal = crate::terminal::TerminalState::new(terminal_id.clone(), float.cwd);
+            if let Some(argv) = float.launch_argv {
+                terminal = terminal.with_launch_argv(argv);
+            }
+            if let Some(title) = float.title {
+                terminal.set_manual_label(title);
+            }
+            let hide_while_focused = float.hide_while_focused.and_then(|raw| {
+                self.state.pane_id_aliases.get(&raw).copied().or_else(|| {
+                    let pane_id = PaneId::from_raw(raw);
+                    self.find_pane(pane_id).map(|_| pane_id)
+                })
+            });
+            self.terminal_runtimes.insert(terminal_id.clone(), runtime);
+            self.state.terminals.insert(terminal_id.clone(), terminal);
+            self.state.floats.push(FloatState {
+                pane_id,
+                terminal_id,
+                width: float.width,
+                height: float.height,
+                position: float
+                    .position
+                    .map_or(FloatPosition::Centered, |(x, y)| FloatPosition::At { x, y }),
+                visibility: if float.hidden {
+                    FloatVisibility::Hidden
+                } else {
+                    FloatVisibility::Shown
+                },
+                hide_while_focused,
+            });
+        }
     }
 }
 

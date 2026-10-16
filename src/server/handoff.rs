@@ -51,12 +51,16 @@ pub(crate) struct HandoffManifest {
     /// committed. Absent from manifests written before this field existed.
     #[serde(default)]
     pub host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
+    /// Floating terminals, bottom to top. Absent from manifests written before floats existed.
+    #[serde(default)]
+    pub floats: Vec<crate::handoff_runtime::HandoffFloat>,
 }
 
 #[cfg(unix)]
 pub(crate) struct ReceivedHandoff {
     pub manifest: HandoffManifest,
     pub fds: Vec<RawFd>,
+    pub float_fds: Vec<RawFd>,
     pub stream: UnixStream,
 }
 
@@ -180,8 +184,13 @@ pub(crate) fn accept_and_validate_on(
 }
 
 #[cfg(unix)]
-pub(crate) fn send_fds_and_wait_restored(stream: &mut UnixStream, fds: &[RawFd]) -> io::Result<()> {
+pub(crate) fn send_fds_and_wait_restored(
+    stream: &mut UnixStream,
+    fds: &[RawFd],
+    float_fds: &[RawFd],
+) -> io::Result<()> {
     send_fds(stream, fds)?;
+    send_fds(stream, float_fds)?;
 
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
     let restored = read_line_unbuffered(&mut *stream)?;
@@ -269,9 +278,17 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
     stream.write_all(b"validated\n")?;
     stream.flush()?;
     let fds = recv_fds(&stream, manifest.panes.len())?;
+    let float_fds = match recv_fds(&stream, manifest.floats.len()) {
+        Ok(float_fds) => float_fds,
+        Err(err) => {
+            close_raw_fds(&fds);
+            return Err(err);
+        }
+    };
     Ok(ReceivedHandoff {
         manifest,
         fds,
+        float_fds,
         stream,
     })
 }
@@ -312,6 +329,7 @@ pub(crate) fn manifest_for(
     expected_version: Option<String>,
     api_window_title: Option<String>,
     host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
+    floats: Vec<crate::handoff_runtime::HandoffFloat>,
 ) -> HandoffManifest {
     HandoffManifest {
         version: HANDOFF_VERSION,
@@ -323,6 +341,7 @@ pub(crate) fn manifest_for(
         panes,
         api_window_title,
         host_shutdown_intent,
+        floats,
     }
 }
 
@@ -556,6 +575,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
+            Vec::new(),
         );
 
         assert_eq!(manifest.api_window_title.as_deref(), Some("deploying"));
@@ -566,7 +586,15 @@ mod tests {
         let intent: crate::platform::HostShutdownIntent =
             serde_json::from_value(serde_json::json!({ "announced_at_ns": 42 }))
                 .expect("intent should deserialize");
-        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, Some(intent));
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Some(intent),
+            Vec::new(),
+        );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
         let decoded: HandoffManifest =
             serde_json::from_slice(&encoded).expect("manifest should deserialize");
@@ -575,8 +603,39 @@ mod tests {
     }
 
     #[test]
+    fn a_manifest_written_before_floats_existed_still_loads_without_floats() {
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
+        value
+            .as_object_mut()
+            .expect("manifest should be a json object")
+            .remove("floats");
+
+        let older: HandoffManifest =
+            serde_json::from_value(value).expect("an older manifest should still load");
+
+        assert!(older.floats.is_empty());
+    }
+
+    #[test]
     fn a_manifest_written_before_the_host_shutdown_field_still_loads() {
-        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, None);
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
             .as_object_mut()
@@ -617,6 +676,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             Some(intent),
+            Vec::new(),
         );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
 
@@ -636,6 +696,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
+            Vec::new(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
