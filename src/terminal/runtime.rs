@@ -17,6 +17,11 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
+    #[cfg(test)]
+    pub(crate) fn test_runs_agent_detection(&self) -> bool {
+        self.0.test_runs_agent_detection()
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
     }
@@ -59,6 +64,8 @@ impl TerminalRuntime {
         self.0.handoff_history_ansi()
     }
 
+    // Mirrors the pane runtime handoff import arguments.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(unix)]
     pub fn from_handoff_fd(
         import: crate::handoff_runtime::ImportedHandoffRuntime,
@@ -68,6 +75,7 @@ impl TerminalRuntime {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
+        agent_detection: crate::pane::AgentDetection,
     ) -> std::io::Result<Self> {
         crate::pane::PaneRuntime::from_handoff_fd(
             import,
@@ -77,6 +85,7 @@ impl TerminalRuntime {
             events,
             render_notify,
             render_dirty,
+            agent_detection,
         )
         .map(Self)
     }

@@ -2498,6 +2498,8 @@ impl PaneRuntime {
         )
     }
 
+    // Handoff import threads the PTY, theme, render hooks, and detection policy together.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(unix)]
     pub fn from_handoff_fd(
         import: crate::handoff_runtime::ImportedHandoffRuntime,
@@ -2507,6 +2509,7 @@ impl PaneRuntime {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
+        agent_detection: AgentDetection,
     ) -> std::io::Result<Self> {
         let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
         let crate::handoff_runtime::HandoffRuntimeState {
@@ -2591,7 +2594,9 @@ impl PaneRuntime {
                 drop(_content_write_guard);
                 compression_wake.wake();
                 publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
-                observe_detection_content_change(bytes, &detection_content_seq);
+                if agent_detection == AgentDetection::Enabled {
+                    observe_detection_content_change(bytes, &detection_content_seq);
+                }
                 let title_requested =
                     result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
                 let render_requested = result.request_render && render_dirty.request_pty(pane_id);
@@ -2647,16 +2652,22 @@ impl PaneRuntime {
 
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         let self_reported_agent_active = Arc::new(AtomicBool::new(false));
-        let (detect_handle, detect_reset_notify, pending_release) = spawn_basic_detection_task(
-            pane_id,
-            child_pid.clone(),
-            terminal.clone(),
-            content_seq.clone(),
-            detection_content_seq.clone(),
-            full_lifecycle_authority_active.clone(),
-            self_reported_agent_active.clone(),
-            events,
-        );
+        let (detect_handle, detect_reset_notify, pending_release) =
+            if agent_detection == AgentDetection::Enabled {
+                let (handle, reset, release) = spawn_basic_detection_task(
+                    pane_id,
+                    child_pid.clone(),
+                    terminal.clone(),
+                    content_seq.clone(),
+                    detection_content_seq.clone(),
+                    full_lifecycle_authority_active.clone(),
+                    self_reported_agent_active.clone(),
+                    events,
+                );
+                (Some(handle), reset, release)
+            } else {
+                (None, Arc::new(Notify::new()), Arc::new(Mutex::new(None)))
+            };
 
         Ok(Self {
             pane_id,
@@ -2678,7 +2689,7 @@ impl PaneRuntime {
             pending_release,
             preserve_processes_on_drop: true,
             compression,
-            detect_handle: Some(detect_handle),
+            detect_handle,
         })
     }
 
@@ -3917,6 +3928,10 @@ impl PaneRuntime {
 
     pub(crate) fn test_with_screen_bytes(cols: u16, rows: u16, bytes: &[u8]) -> Self {
         Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
+    }
+
+    pub(crate) fn test_runs_agent_detection(&self) -> bool {
+        self.detect_handle.is_some()
     }
 
     #[cfg(unix)]

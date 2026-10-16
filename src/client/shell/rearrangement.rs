@@ -1204,7 +1204,7 @@ mod tests {
             scrollbar_rect: None,
             scroll: None,
             pane_id: id.to_owned(),
-            popup: false,
+            layer: crate::client::shell::state::PaneHitLayer::Tiled,
             mouse_reporting: false,
             sgr_pixel_mouse: false,
             pixel_width: 0,

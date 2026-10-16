@@ -67,13 +67,14 @@ pub(crate) fn limit() -> Input<Option<usize>> {
     })
 }
 
-const PLACEMENTS: [(&str, PluginPanePlacement, bool); 6] = [
+const PLACEMENTS: [(&str, PluginPanePlacement, bool); 7] = [
     ("overlay", PluginPanePlacement::Overlay, false),
     ("popup", PluginPanePlacement::Popup, true),
     ("split", PluginPanePlacement::Split, false),
     ("tab", PluginPanePlacement::Tab, false),
     ("zoomed", PluginPanePlacement::Zoomed, false),
     ("fullscreen", PluginPanePlacement::Zoomed, true),
+    ("float", PluginPanePlacement::Float, true),
 ];
 
 const DIRECTIONS: [(&str, SplitDirection); 2] = [

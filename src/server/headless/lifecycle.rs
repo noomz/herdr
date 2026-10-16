@@ -58,8 +58,15 @@ impl HeadlessServer {
         self.disconnect_all_clients_for_handoff();
         let _ = reject_pending_client_connections(&self.client_listener);
 
+        let float_terminal_ids = self
+            .app
+            .state
+            .floats
+            .iter()
+            .map(|float| float.terminal_id.clone())
+            .collect::<Vec<_>>();
         let mut paused_terminal_ids = Vec::new();
-        for terminal_id in pane_by_terminal.keys() {
+        for terminal_id in pane_by_terminal.keys().chain(&float_terminal_ids) {
             if let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) {
                 if let Err(err) = runtime.pause_handoff_reader(Duration::from_secs(2)) {
                     self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
@@ -105,6 +112,8 @@ impl HeadlessServer {
             .iter()
             .map(|(_, runtime)| runtime.clone())
             .collect();
+        let (float_entries, floats): (Vec<_>, Vec<_>) =
+            self.app.handoff_floats().into_iter().unzip();
         let manifest = crate::server::handoff::manifest_for(
             snapshot,
             panes,
@@ -112,6 +121,7 @@ impl HeadlessServer {
             params.expected_version,
             self.api_window_title.clone(),
             self.host_shutdown_intent.get(),
+            floats,
         );
         let mut import_child = match crate::server::handoff::spawn_handoff_import(
             import_exe.as_deref(),
@@ -128,6 +138,7 @@ impl HeadlessServer {
         info!(pid = child_pid, socket = %socket_path.display(), "spawned handoff import server");
 
         let mut fds = Vec::new();
+        let mut float_fds = Vec::new();
         let duplicate_result = (|| {
             for (terminal_id, _) in &handoff_entries {
                 let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
@@ -135,10 +146,16 @@ impl HeadlessServer {
                 };
                 fds.push(runtime.duplicate_handoff_fd()?);
             }
+            for terminal_id in &float_entries {
+                let runtime = self.app.terminal_runtimes.get(terminal_id).ok_or_else(|| {
+                    io::Error::other(format!("float runtime {terminal_id} disappeared"))
+                })?;
+                float_fds.push(runtime.duplicate_handoff_fd()?);
+            }
             Ok::<(), io::Error>(())
         })();
         if let Err(err) = duplicate_result {
-            for fd in fds {
+            for fd in fds.into_iter().chain(float_fds) {
                 let _ = unsafe { libc::close(fd) };
             }
             crate::server::handoff::cleanup_failed_import_child(&mut import_child);
@@ -146,7 +163,7 @@ impl HeadlessServer {
             return Err(err);
         }
 
-        let mut stream = match crate::server::handoff::accept_and_validate_on(
+        let (mut stream, floats_accepted) = match crate::server::handoff::accept_and_validate_on(
             listener,
             &socket_path,
             &token,
@@ -154,7 +171,7 @@ impl HeadlessServer {
         ) {
             Ok(stream) => stream,
             Err(err) => {
-                for fd in fds {
+                for fd in fds.into_iter().chain(float_fds) {
                     let _ = unsafe { libc::close(fd) };
                 }
                 crate::server::handoff::cleanup_failed_import_child(&mut import_child);
@@ -163,8 +180,15 @@ impl HeadlessServer {
             }
         };
 
-        let send_result = crate::server::handoff::send_fds_and_wait_restored(&mut stream, &fds);
-        for fd in fds {
+        if !floats_accepted && !float_fds.is_empty() {
+            warn!("handoff importer predates floats; floats end with this server");
+            for fd in std::mem::take(&mut float_fds) {
+                let _ = unsafe { libc::close(fd) };
+            }
+        }
+        let send_result =
+            crate::server::handoff::send_fds_and_wait_restored(&mut stream, &fds, &float_fds);
+        for fd in fds.into_iter().chain(float_fds) {
             let _ = unsafe { libc::close(fd) };
         }
         if let Err(err) = send_result {
@@ -213,7 +237,9 @@ impl HeadlessServer {
         }
 
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
-            if !pane_by_terminal.contains_key(&terminal_id) {
+            let preserved = pane_by_terminal.contains_key(&terminal_id)
+                || (floats_accepted && float_entries.contains(&terminal_id));
+            if !preserved {
                 continue;
             }
             debug!(terminal = %terminal_id, "preserving pane runtime for handoff");

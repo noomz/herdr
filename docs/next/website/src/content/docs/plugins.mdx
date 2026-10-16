@@ -301,7 +301,7 @@ while Windows clients connect to a named pipe. CLI calls through
 Manifest pane `placement` defaults to `overlay`, which opens a temporary zoomed
 overlay over the active pane and restores the previous focus and zoom when it
 closes. A `plugin.pane.open` request can override the manifest placement with
-`overlay`, `popup`, `split`, `tab`, or `zoomed`.
+`overlay`, `popup`, `split`, `tab`, `zoomed`, or `float`.
 
 `placement = "popup"` opens a session-modal terminal popup without changing the
 tiled layout. It accepts optional `width` and `height` fields in the manifest or
@@ -336,6 +336,92 @@ Its process does not receive `HERDR_PANE_ID`; the underlying tiled pane remains
 available through `HERDR_PLUGIN_CONTEXT_JSON`.
 Opening a popup returns `ui_busy` while Settings, Copy mode, or another Herdr
 modal is active, and `plugin.pane.open` returns an `ok` result after launch.
+
+### Floats
+
+`placement = "float"` opens a non-modal floating terminal above the tiled
+layout. Floats suit picture-in-picture views, monitors, and scratch terminals
+that stay open while you keep working in your panes. A session can hold any
+number of floats, and every workspace and tab shows them.
+
+A float takes `width` and `height` like a popup. An open request can also set:
+
+- `x` and `y`: the outer top-left cell, relative to the pane area. Omit both to
+  center the float. Herdr clamps the position so the whole float stays on
+  screen.
+- `hide_while_focused`: a pane ID. The float hides while that pane is the
+  focused pane of the tab you view, and comes back when focus leaves it.
+
+```toml
+[[panes]]
+id = "peek"
+title = "Peek"
+platforms = ["linux", "macos"]
+placement = "float"
+width = 50
+height = 14
+command = ["sh", "peek.sh"]
+```
+
+```bash
+"$HERDR_BIN_PATH" plugin pane open --plugin example.peek --entrypoint peek --placement float
+```
+
+A float receives input only while it has focus. Click a float to focus it and
+bring it to the front. Click a tiled pane, or move pane focus with a keybinding,
+to return input to the layout. Escape goes to the program in the float, and
+prefix keybindings keep working. Drag a float by its border or title to move
+it. A modal popup appears above floats and takes input while it is open.
+
+Hiding a float keeps its process and terminal running. The float closes when
+its command exits or when you send `float.close`. A float is not a Herdr pane:
+it has no pane ID, emits no pane lifecycle events, and does not take part in
+pane, layout, persistence, or agent APIs. Floats survive client detach and
+`server live-handoff`.
+
+Each client focuses floats on its own, so `plugin.pane.open` rejects
+`focus: true` for a float with `invalid_params`. Omit `focus` or send `false`.
+
+`plugin.pane.open` returns a `float_opened` result that describes the new float:
+
+```json
+{
+  "type": "float_opened",
+  "float": {
+    "float_id": "term_18f3a2c0b41",
+    "title": "Peek",
+    "width": 50,
+    "height": 14,
+    "x": 5,
+    "y": 2,
+    "visibility": "shown",
+    "hide_while_focused": "w1:p1",
+    "z": 0
+  }
+}
+```
+
+`float_id` names the float in every `float.*` method. `width` and `height` are
+cells or a percentage string such as `"80%"`, and are absent when the float uses
+the default size. `x` and `y` are absent while the float is centered. `visibility`
+is `shown` or `hidden`. `hide_while_focused` is absent when no hide rule is set.
+`z` is the stacking position, and 0 is the bottom float. `float.list` returns the
+same objects in a `floats` array.
+
+Control a float through the socket API:
+
+| Method | Params | Effect |
+| --- | --- | --- |
+| `float.list` | none | Lists floats from bottom to top. |
+| `float.move` | `float_id`, `x`, `y` | Moves the outer top-left cell. |
+| `float.resize` | `float_id`, `width`, `height` | Sets the size. An omitted dimension returns to the default. |
+| `float.hide` | `float_id` | Hides the float. Its process keeps running. |
+| `float.show` | `float_id` | Shows a hidden float. |
+| `float.raise` | `float_id` | Brings the float to the front. |
+| `float.set_hide_rule` | `float_id`, `pane_id` | Hides the float while `pane_id` is focused. Send `null` to remove the rule. |
+| `float.close` | `float_id` | Closes the float and ends its process. |
+
+An unknown `float_id` returns `float_not_found`.
 
 On Windows, build commands, action commands, and event commands resolve common
 `PATHEXT` shims such as `npm.cmd`, `bun.cmd`, and `pnpm.cmd` when the bare

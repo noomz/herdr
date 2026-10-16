@@ -17,6 +17,7 @@ mod endpoint_notices;
 mod endpoint_sidebar;
 mod endpoints;
 pub(super) use endpoints::*;
+mod floats;
 mod global_menu;
 mod graphics;
 mod input;
@@ -68,17 +69,14 @@ use crate::protocol::{
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
 
-fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
-    match target {
-        ClientInputTarget::Pane(pane_id) => ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events: vec![event],
-        },
-        ClientInputTarget::Popup(terminal_id) => ClientMessage::ClientShellPopupInput {
-            terminal_id,
-            events: vec![event],
-        },
-    }
+fn float_input_message(
+    float_id: String,
+    events: Vec<ClientPaneInputEvent>,
+) -> Option<ClientMessage> {
+    let input = crate::protocol::floats::FloatInput { float_id, events };
+    crate::protocol::floats::input_message(&input)
+        .map_err(|error| tracing::warn!(%error, "failed to encode float input"))
+        .ok()
 }
 
 fn push_target_event(
@@ -98,10 +96,10 @@ fn push_target_event(
                     return;
                 }
             }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Pane(pane_id),
-                event,
-            ));
+            outcome.requests.push(ClientMessage::ClientShellPaneInput {
+                pane_id,
+                events: vec![event],
+            });
         }
         ClientInputTarget::Popup(terminal_id) => {
             if let Some(ClientMessage::ClientShellPopupInput {
@@ -114,10 +112,15 @@ fn push_target_event(
                     return;
                 }
             }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Popup(terminal_id),
-                event,
-            ));
+            outcome.requests.push(ClientMessage::ClientShellPopupInput {
+                terminal_id,
+                events: vec![event],
+            });
+        }
+        ClientInputTarget::Float(float_id) => {
+            outcome
+                .requests
+                .extend(float_input_message(float_id, vec![event]));
         }
     }
 }
@@ -269,15 +272,22 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
         }
     }
 
-    target.cursor = source.cursor.as_ref().and_then(|cursor| {
+    target.cursor = blitted_cursor(source, area);
+    target.graphics.clear();
+}
+
+/// Where `source`'s cursor lands once `source` is blitted into `area`.
+fn blitted_cursor(source: &FrameData, area: Rect) -> Option<crate::protocol::CursorState> {
+    let copy_width = source.width.min(area.width);
+    let copy_height = source.height.min(area.height);
+    source.cursor.as_ref().and_then(|cursor| {
         (cursor.x < copy_width && cursor.y < copy_height).then(|| crate::protocol::CursorState {
             x: area.x + cursor.x,
             y: area.y + cursor.y,
             visible: cursor.visible,
             shape: cursor.shape,
         })
-    });
-    target.graphics.clear();
+    })
 }
 
 #[cfg(test)]

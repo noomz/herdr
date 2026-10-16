@@ -875,6 +875,8 @@ pub struct AppState {
     pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
     /// Session-modal terminal popup. This is intentionally outside workspace layouts.
     pub(crate) popup_pane: Option<PopupPaneState>,
+    /// Session-owned floating terminals, bottom to top.
+    pub(crate) floats: Vec<crate::app::floats::FloatState>,
     /// Recent plugin action/event command executions.
     pub(crate) plugin_command_logs: Vec<crate::api::schema::PluginCommandLogInfo>,
     pub(crate) next_plugin_command_log_id: u64,
@@ -1113,6 +1115,7 @@ impl AppState {
             installed_plugins: std::collections::HashMap::new(),
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
+            floats: Vec::new(),
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,
@@ -1151,8 +1154,55 @@ impl AppState {
         state
     }
 
+    fn assert_float_invariants_for_test(
+        &self,
+        attached_terminal_ids: &std::collections::HashSet<crate::terminal::TerminalId>,
+    ) {
+        let mut float_terminals = std::collections::HashSet::new();
+        let mut float_panes = std::collections::HashSet::new();
+        for float in &self.floats {
+            assert!(
+                float_terminals.insert(&float.terminal_id),
+                "float terminal {} appears more than once",
+                float.terminal_id
+            );
+            assert!(
+                float_panes.insert(float.pane_id),
+                "float pane id {:?} appears more than once",
+                float.pane_id
+            );
+            assert!(
+                self.terminals.contains_key(&float.terminal_id),
+                "float {} references a missing terminal",
+                float.terminal_id
+            );
+            assert!(
+                !attached_terminal_ids.contains(&float.terminal_id),
+                "float terminal {} must not be attached to a tiled pane",
+                float.terminal_id
+            );
+            assert!(
+                self.popup_pane
+                    .as_ref()
+                    .is_none_or(|popup| popup.terminal_id != float.terminal_id),
+                "float terminal {} must not also be the popup",
+                float.terminal_id
+            );
+            if let Some(pane_id) = float.hide_while_focused {
+                assert!(
+                    self.workspaces
+                        .iter()
+                        .any(|ws| ws.find_tab_index_for_pane(pane_id).is_some()),
+                    "float {} hides while missing pane {pane_id:?} is focused",
+                    float.terminal_id
+                );
+            }
+        }
+    }
+
     pub fn assert_invariants_for_test(&self) {
         if self.workspaces.is_empty() {
+            self.assert_float_invariants_for_test(&std::collections::HashSet::new());
             assert!(
                 self.active.is_none(),
                 "empty app state must not have active workspace {:?}",
@@ -1303,6 +1353,7 @@ impl AppState {
         for &pane_id in self.plugin_panes.keys() {
             assert_live_pane(pane_id, "plugin pane record");
         }
+        self.assert_float_invariants_for_test(&attached_terminal_ids);
     }
 
     pub fn insert_test_runtime(

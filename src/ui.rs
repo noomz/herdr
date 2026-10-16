@@ -99,6 +99,15 @@ fn compute_view_internal(
     if resize_panes {
         resize_background_tab_panes(app, terminal_runtimes, area, cell_size);
         resize_popup_pane(app, terminal_runtimes, area, cell_size);
+        for float in &app.floats {
+            crate::app::floats::resize_float_runtime(
+                app,
+                terminal_runtimes,
+                float,
+                area,
+                cell_size,
+            );
+        }
     }
 
     app.view = crate::app::ViewState {

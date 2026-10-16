@@ -206,6 +206,13 @@ mod tests {
             "plugin.pane.open",
             "plugin.pane.focus",
             "plugin.pane.close",
+            "float.move",
+            "float.resize",
+            "float.hide",
+            "float.show",
+            "float.raise",
+            "float.set_hide_rule",
+            "float.close",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

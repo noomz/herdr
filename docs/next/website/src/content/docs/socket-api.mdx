@@ -105,6 +105,7 @@ Raw socket method names use dot notation:
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
 | Pane | `pane.split`, `pane.swap`, `pane.reposition`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
+| Float | `float.list`, `float.move`, `float.resize`, `float.hide`, `float.show`, `float.raise`, `float.set_hide_rule`, `float.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
 | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
 | Events | `events.subscribe`, `events.wait` |
@@ -610,8 +611,8 @@ Open a managed terminal UI:
 `plugin.pane.open` requires an installed, enabled, platform-compatible plugin,
 then launches the requested manifest `[[panes]]` entrypoint as an argv-backed
 terminal pane. Manifest pane `placement` defaults to `overlay`; request
-`placement` overrides the manifest with `overlay`, `popup`, `split`, `tab`, or
-`zoomed`. Overlay and popup placements use the active tiled pane as launch
+`placement` overrides the manifest with `overlay`, `popup`, `split`, `tab`,
+`zoomed`, or `float`. Overlay and popup placements use the active tiled pane as launch
 context. Popup terminals are session-modal and do not change the tab layout;
 optional `width` and `height` fields set their outer size as terminal cells or
 percentages such as `"80%"`. Omitted dimensions default to half the terminal
@@ -620,7 +621,10 @@ ID, remains outside all `pane.*` and agent APIs, emits no pane lifecycle events,
 leaves plugin focus context on the underlying tiled pane, and does not export
 `HERDR_PANE_ID` to its process. Popup launch returns `ok`; `popup.close` closes
 the active popup and returns
-`popup_not_open` when none exists. Split and zoomed panes target an existing
+`popup_not_open` when none exists. `placement = "float"` opens a non-modal
+floating terminal instead; it also accepts `x`, `y`, and `hide_while_focused`,
+returns a `float_opened` result with a `float_id`, and is controlled through the
+`float.*` methods described in [Plugins](/docs/plugins/#floats). Split and zoomed panes target an existing
 pane; tab panes can target a workspace. Split, tab, zoomed, and overlay panes
 behave like normal Herdr panes, and `plugin.pane.focus` and `plugin.pane.close`
 continue to operate on those panes.

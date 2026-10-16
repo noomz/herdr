@@ -991,6 +991,77 @@ impl HeadlessServer {
         }
     }
 
+    /// Delivers client input to a pane-less terminal. A terminal that does not accept input
+    /// from this client still receives releases for presses it already saw.
+    fn apply_shell_terminal_input(
+        &mut self,
+        client_id: u64,
+        terminal_id: crate::terminal::TerminalId,
+        pane_id: crate::layout::PaneId,
+        mut events: Vec<protocol::ClientPaneInputEvent>,
+        accepts_input: bool,
+    ) -> bool {
+        if self.handoff_in_progress
+            || !self
+                .clients
+                .get(&client_id)
+                .is_some_and(ClientConnection::is_active_shell_client)
+        {
+            return false;
+        }
+        let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
+            client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
+        });
+        let Some(runtime) = self.app.terminal_runtimes.get(&terminal_id) else {
+            return false;
+        };
+        super::pane_input::downgrade_ineligible_pixel_mouse(
+            &mut events,
+            pixel_mouse,
+            runtime.current_size(),
+            runtime.pixel_size(),
+        );
+        let target = ClientShellInputTarget::Terminal(terminal_id.to_string());
+        if !accepts_input {
+            let releases = events
+                .into_iter()
+                .filter(client_pane_input_releases_press)
+                .collect::<Vec<_>>();
+            if releases.is_empty() {
+                return false;
+            }
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.track_shell_input(target, &releases);
+            }
+            let scroll_before = runtime.scroll_metrics();
+            if let Err(err) = apply_client_popup_input_events(runtime, &releases) {
+                warn!(client_id, %terminal_id, err = %err, "targeted terminal release failed");
+            }
+            return runtime.scroll_metrics() != scroll_before;
+        }
+        let interaction = client_pane_input_has_interaction(&events);
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.track_shell_input(target, &events);
+        }
+        let foreground_changed = interaction && self.promote_client_to_foreground(client_id);
+        let geometry_changed = interaction && self.claim_shell_tab_geometry(client_id, false);
+        let Some(runtime) = self.app.terminal_runtimes.get(&terminal_id) else {
+            return foreground_changed | geometry_changed;
+        };
+        let scroll_before = runtime.scroll_metrics();
+        let mut keyboard_forwarded = false;
+        let input_result =
+            apply_client_terminal_input_events(runtime, &events, false, &mut keyboard_forwarded);
+        let scroll_changed = runtime.scroll_metrics() != scroll_before;
+        if keyboard_forwarded {
+            self.note_interactive_input(pane_id, Instant::now());
+        }
+        if let Err(err) = input_result {
+            warn!(client_id, %terminal_id, err = %err, "targeted terminal input failed");
+        }
+        foreground_changed | geometry_changed || scroll_changed
+    }
+
     fn release_client_shell_inputs(
         &mut self,
         client_id: u64,
@@ -1012,7 +1083,7 @@ impl HeadlessServer {
                     };
                     apply_client_pane_input_events(runtime, &[held.release])
                 }
-                ClientShellInputTarget::Popup(terminal_id) => {
+                ClientShellInputTarget::Terminal(terminal_id) => {
                     let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
                         continue;
                     };
@@ -1910,6 +1981,7 @@ impl HeadlessServer {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                floats,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1960,6 +2032,7 @@ impl HeadlessServer {
                 connection
                     .render_state
                     .enable_surface_scroll(surface_scroll);
+                connection.shell_floats = floats.then(Default::default);
                 connection.shell_projection_revision = 1;
                 let config_diagnostic = if endpoint_keybindings {
                     self.server_config_diagnostic.as_deref()
@@ -2345,6 +2418,11 @@ impl HeadlessServer {
                 client.host_mouse_capture_active = None;
                 client.host_sgr_pixels_active = None;
                 client.host_keyboard_report_all_active = None;
+                // A frozen activation drops float layers, so resend the current one after commit.
+                if client.shell_floats.is_some() {
+                    client.shell_floats = Some(Default::default());
+                    self.app.render_dirty.request_generic();
+                }
                 self.sent_window_title = None;
                 self.stream_host_mouse_capture_mode();
                 self.stream_direct_terminal_keyboard_mode();
@@ -2460,18 +2538,6 @@ impl HeadlessServer {
                 terminal_id,
                 events,
             } => {
-                if self.handoff_in_progress
-                    || !self
-                        .clients
-                        .get(&client_id)
-                        .is_some_and(ClientConnection::is_active_shell_client)
-                {
-                    return false;
-                }
-                let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
-                    client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
-                });
-                let mut events = events;
                 let Some((popup_terminal_id, popup_pane_id)) = self
                     .app
                     .state
@@ -2484,65 +2550,40 @@ impl HeadlessServer {
                 if popup_terminal_id.as_str() != terminal_id {
                     return false;
                 }
-                let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
+                let accepts_input =
+                    self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                self.apply_shell_terminal_input(
+                    client_id,
+                    popup_terminal_id,
+                    popup_pane_id,
+                    events,
+                    accepts_input,
+                )
+            }
+            ServerEvent::ClientShellFloatInput {
+                client_id,
+                terminal_id,
+                events,
+            } => {
+                let Some((float_terminal_id, float_pane_id)) = self
+                    .app
+                    .state
+                    .float(&terminal_id)
+                    .map(|float| (float.terminal_id.clone(), float.pane_id))
+                else {
                     return false;
                 };
-                super::pane_input::downgrade_ineligible_pixel_mouse(
-                    &mut events,
-                    pixel_mouse,
-                    runtime.current_size(),
-                    runtime.pixel_size(),
-                );
-                if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
-                    let releases = events
-                        .into_iter()
-                        .filter(client_pane_input_releases_press)
-                        .collect::<Vec<_>>();
-                    if releases.is_empty() {
-                        return false;
-                    }
-                    if let Some(client) = self.clients.get_mut(&client_id) {
-                        client.track_shell_input(
-                            ClientShellInputTarget::Popup(terminal_id.clone()),
-                            &releases,
-                        );
-                    }
-                    let scroll_before = runtime.scroll_metrics();
-                    if let Err(err) = apply_client_popup_input_events(runtime, &releases) {
-                        warn!(client_id, terminal_id, err = %err, "targeted client popup release failed");
-                    }
-                    return runtime.scroll_metrics() != scroll_before;
-                }
-                let interaction = client_pane_input_has_interaction(&events);
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.track_shell_input(
-                        ClientShellInputTarget::Popup(terminal_id.clone()),
-                        &events,
-                    );
-                }
-                let foreground_changed =
-                    interaction && self.promote_client_to_foreground(client_id);
-                let geometry_changed =
-                    interaction && self.claim_shell_tab_geometry(client_id, false);
-                let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return foreground_changed | geometry_changed;
-                };
-                let scroll_before = runtime.scroll_metrics();
-                let mut keyboard_forwarded = false;
-                let input_result = apply_client_terminal_input_events(
-                    runtime,
-                    &events,
-                    false,
-                    &mut keyboard_forwarded,
-                );
-                let scroll_changed = runtime.scroll_metrics() != scroll_before;
-                if keyboard_forwarded {
-                    self.note_interactive_input(popup_pane_id, Instant::now());
-                }
-                if let Err(err) = input_result {
-                    warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
-                }
-                foreground_changed | geometry_changed || scroll_changed
+                let popup_blocks_input = self.app.state.popup_pane.is_some()
+                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+                let accepts_input =
+                    !popup_blocks_input && self.shell_client_sees_float(client_id, float_pane_id);
+                self.apply_shell_terminal_input(
+                    client_id,
+                    float_terminal_id,
+                    float_pane_id,
+                    events,
+                    accepts_input,
+                )
             }
             ServerEvent::ClientShellEndpointRequestError {
                 client_id,

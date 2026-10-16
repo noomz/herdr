@@ -270,6 +270,18 @@ pub enum ResponseResult {
     PluginPaneClosed {
         pane_id: String,
     },
+    FloatOpened {
+        float: super::floats::FloatInfo,
+    },
+    FloatList {
+        floats: Vec<super::floats::FloatInfo>,
+    },
+    FloatInfo {
+        float: super::floats::FloatInfo,
+    },
+    FloatClosed {
+        float_id: String,
+    },
     ConfigReload {
         status: crate::config::ConfigReloadStatus,
         diagnostics: Vec<String>,

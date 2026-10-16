@@ -658,6 +658,14 @@ impl AppState {
         {
             self.previous_pane_focus = None;
         }
+        for float in &mut self.floats {
+            if float
+                .hide_while_focused
+                .is_some_and(|pane_id| pane_ids.contains(&pane_id))
+            {
+                float.hide_while_focused = None;
+            }
+        }
         for pane_id in pane_ids {
             self.plugin_panes.remove(&pane_id);
         }

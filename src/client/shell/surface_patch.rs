@@ -80,6 +80,8 @@ fn fast_path_blocker(
         Some("client_surface_patch.fallback.copy_mode")
     } else if state.selection_highlight_clear_deadline.is_some() {
         Some("client_surface_patch.fallback.selection_deadline")
+    } else if state.floats_block_patch(patch) {
+        Some("client_surface_patch.fallback.floats")
     } else if patch.panes.iter().any(|pane| {
         !state
             .hits
@@ -186,15 +188,17 @@ impl ClientShellState {
                     cells: row.cells.clone(),
                 })
                 .collect(),
-            cursor: patch
-                .cursor
-                .clone()
-                .map(|cursor| crate::protocol::CursorState {
-                    x: area.x.saturating_add(cursor.x),
-                    y: area.y.saturating_add(cursor.y),
-                    visible: cursor.visible,
-                    shape: cursor.shape,
-                }),
+            cursor: self.focused_float_cursor().unwrap_or_else(|| {
+                patch
+                    .cursor
+                    .clone()
+                    .map(|cursor| crate::protocol::CursorState {
+                        x: area.x.saturating_add(cursor.x),
+                        y: area.y.saturating_add(cursor.y),
+                        visible: cursor.visible,
+                        shape: cursor.shape,
+                    })
+            }),
         });
         if let Some(area) = fast_path_area {
             let applied = self

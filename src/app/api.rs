@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 mod agent_view;
 mod agents;
 mod env;
+mod floats;
 mod integrations;
 mod layouts;
 mod panes;
@@ -215,6 +216,11 @@ impl App {
                 .is_some_and(|popup| popup.pane_id == *pane_id)
             {
                 self.close_popup_pane();
+                return Vec::new();
+            }
+            if let Some(float) = self.state.float_for_pane(*pane_id) {
+                let terminal_id = float.terminal_id.clone();
+                self.close_float(terminal_id.as_str());
                 return Vec::new();
             }
             if worktree_restore_failed {
@@ -1259,6 +1265,28 @@ impl App {
             Method::PluginPaneClose(params) => {
                 return self.handle_plugin_pane_close(request.id, params);
             }
+            Method::FloatList(_) => return self.handle_float_list(request.id),
+            Method::FloatMove(params) => return self.handle_float_move(request.id, params),
+            Method::FloatResize(params) => return self.handle_float_resize(request.id, params),
+            Method::FloatHide(target) => {
+                return self.handle_float_visibility(
+                    request.id,
+                    target,
+                    crate::app::floats::FloatVisibility::Hidden,
+                );
+            }
+            Method::FloatShow(target) => {
+                return self.handle_float_visibility(
+                    request.id,
+                    target,
+                    crate::app::floats::FloatVisibility::Shown,
+                );
+            }
+            Method::FloatRaise(target) => return self.handle_float_raise(request.id, target),
+            Method::FloatSetHideRule(params) => {
+                return self.handle_float_set_hide_rule(request.id, params);
+            }
+            Method::FloatClose(target) => return self.handle_float_close(request.id, target),
             _ => {
                 return responses::encode_error(
                     request.id,

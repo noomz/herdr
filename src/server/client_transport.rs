@@ -419,6 +419,7 @@ pub(crate) enum ServerEvent {
         surface_reuse: bool,
         surface_delta: bool,
         surface_scroll: bool,
+        floats: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -511,6 +512,12 @@ pub(crate) enum ServerEvent {
         terminal_id: String,
         events: Vec<ClientPaneInputEvent>,
     },
+    /// A client-owned shell delivered semantic input to one float terminal.
+    ClientShellFloatInput {
+        client_id: u64,
+        terminal_id: String,
+        events: Vec<ClientPaneInputEvent>,
+    },
     /// A client-owned shell published one host terminal theme observation.
     ClientShellHostTheme {
         client_id: u64,
@@ -567,6 +574,51 @@ enum InputEventLimit {
     TooManyEvents,
     PasteTooLarge { size: usize },
     InputPayloadTooLarge { size: usize },
+}
+
+/// Size-checks targeted terminal input. `None` means the client must be disconnected.
+fn terminal_input_event(
+    client_id: u64,
+    events: Vec<ClientPaneInputEvent>,
+    target: &'static str,
+    event: impl FnOnce(Vec<ClientPaneInputEvent>) -> ServerEvent,
+) -> Option<ServerEvent> {
+    match pane_input_event_limit(&events) {
+        InputEventLimit::WithinLimits => Some(event(events)),
+        InputEventLimit::TooManyEvents => {
+            warn!(
+                client_id,
+                target,
+                count = events.len(),
+                "oversized terminal input batch, closing"
+            );
+            None
+        }
+        InputEventLimit::PasteTooLarge { size } => {
+            warn!(
+                client_id,
+                target,
+                size,
+                max = MAX_INPUT_PAYLOAD,
+                "oversized terminal paste, rejecting"
+            );
+            Some(ServerEvent::ClientPasteRejected {
+                client_id,
+                size,
+                max: MAX_INPUT_PAYLOAD,
+            })
+        }
+        InputEventLimit::InputPayloadTooLarge { size } => {
+            warn!(
+                client_id,
+                target,
+                size,
+                max = MAX_INPUT_PAYLOAD,
+                "oversized terminal input, closing"
+            );
+            None
+        }
+    }
 }
 
 fn pane_input_event_limit(events: &[ClientPaneInputEvent]) -> InputEventLimit {
@@ -787,6 +839,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_reuse,
                     hello.surface_delta,
                     hello.surface_scroll,
+                    hello.floats,
                 )),
             )
         }
@@ -884,6 +937,7 @@ pub(crate) fn handle_client_handshake(
         surface_reuse,
         surface_delta,
         surface_scroll,
+        floats,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -900,6 +954,7 @@ pub(crate) fn handle_client_handshake(
             surface_reuse,
             surface_delta,
             surface_scroll,
+            floats,
             writer,
         }
     } else {
@@ -1239,47 +1294,46 @@ fn client_read_loop_with_endpoint_controls(
             ClientMessage::ClientShellPopupInput {
                 terminal_id,
                 events,
-            } => match pane_input_event_limit(&events) {
-                InputEventLimit::WithinLimits => ServerEvent::ClientShellPopupInput {
-                    client_id,
-                    terminal_id,
-                    events,
-                },
-                InputEventLimit::TooManyEvents => {
-                    warn!(
+            } => {
+                let Some(event) = terminal_input_event(client_id, events, "popup", |events| {
+                    ServerEvent::ClientShellPopupInput {
                         client_id,
-                        count = events.len(),
-                        "oversized popup input batch, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-                InputEventLimit::PasteTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized popup paste, rejecting"
-                    );
-                    ServerEvent::ClientPasteRejected {
-                        client_id,
-                        size,
-                        max: MAX_INPUT_PAYLOAD,
+                        terminal_id,
+                        events,
                     }
-                }
-                InputEventLimit::InputPayloadTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized popup input, closing"
-                    );
+                }) else {
                     let _ = server_event_tx
                         .blocking_send(ServerEvent::ClientDisconnected { client_id });
                     break;
-                }
-            },
+                };
+                event
+            }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::floats::INPUT_KIND =>
+            {
+                let input = match crate::protocol::floats::decode_input(&data) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        warn!(client_id, %error, "invalid float input, ignoring");
+                        continue;
+                    }
+                };
+                let terminal_id = input.float_id;
+                let Some(event) =
+                    terminal_input_event(client_id, input.events, "float", |events| {
+                        ServerEvent::ClientShellFloatInput {
+                            client_id,
+                            terminal_id,
+                            events,
+                        }
+                    })
+                else {
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                };
+                event
+            }
             ClientMessage::ClientShellEndpointRequest { boot_id, request } => {
                 if boot_id.len() > crate::server::client_commands::MAX_ENDPOINT_BOOT_ID_BYTES
                     || request.len() > crate::server::client_commands::MAX_ENDPOINT_COMMAND_BYTES
@@ -1477,6 +1531,7 @@ mod tests {
             surface_reuse: false,
             surface_delta: false,
             surface_scroll: false,
+            floats: false,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -2028,11 +2083,13 @@ mod tests {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                floats,
                 writer,
             } => {
                 assert!(!surface_reuse);
                 assert!(!surface_delta);
                 assert!(!surface_scroll);
+                assert!(!floats);
                 assert_eq!(client_id, 43);
                 assert_eq!((surface_cols, surface_rows), (80, 29));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));

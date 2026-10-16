@@ -276,7 +276,7 @@ impl ClientShellState {
                     viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
                 }),
                 pane_id: pane.pane_id.clone(),
-                popup: false,
+                layer: PaneHitLayer::Tiled,
                 mouse_reporting: pane.mouse_reporting,
                 sgr_pixel_mouse: pane.sgr_pixel_mouse,
                 pixel_width: pane.pixel_width,
@@ -461,6 +461,15 @@ impl ClientShellState {
             }
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
+        let focused_float = self.focused_float_id().map(str::to_owned);
+        self.hits.floats = super::floats::compose_floats(
+            &self.floats,
+            focused_float.as_deref(),
+            &self.config.palette,
+            &mut frame,
+            layout.pane_surface,
+            &mut occlusion,
+        )?;
         self.hits.notification_toast = Rect::default();
         let has_config_diagnostic = self.config_diagnostic.is_some();
         let active_lifecycle = self
@@ -596,7 +605,7 @@ impl ClientShellState {
                     scrollbar_rect: None,
                     scroll: None,
                     pane_id: popup.terminal_id.clone(),
-                    popup: true,
+                    layer: PaneHitLayer::Popup,
                     mouse_reporting: popup.mouse_reporting,
                     sgr_pixel_mouse: popup.sgr_pixel_mouse,
                     pixel_width: popup.pixel_width,
@@ -647,6 +656,7 @@ impl ClientShellState {
             self.hits.panes.clear();
             self.hits.pane_splits.clear();
             self.hits.popup = None;
+            self.hits.floats.clear();
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         if let Some(bar) = mode_bar {
@@ -749,6 +759,7 @@ impl ClientShellState {
             self.hits.panes.clear();
             self.hits.pane_splits.clear();
             self.hits.popup = None;
+            self.hits.floats.clear();
         }
         let graphics = self.compose_graphics(layout, &occlusion);
         Some(crate::client::frame_output::ComposedFrame { frame, graphics })

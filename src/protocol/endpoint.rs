@@ -64,6 +64,9 @@ pub struct EndpointClientHello {
     /// Accept the optional scroll-aware patch encoding on this connection.
     #[serde(default)]
     pub surface_scroll: bool,
+    /// Accept the optional floating-terminal layer on this connection.
+    #[serde(default)]
+    pub floats: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -174,6 +177,7 @@ impl EndpointServerWelcome {
                 HEALTH_CHECK_CAPABILITY.into(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 AGENT_COMPLETIONS_CAPABILITY.into(),
+                super::floats::CAPABILITY.into(),
             ],
             error: None,
         }
@@ -215,6 +219,7 @@ mod tests {
             surface_reuse: false,
             surface_delta: false,
             surface_scroll: false,
+            floats: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -364,11 +369,13 @@ mod tests {
         value.as_object_mut().unwrap().remove("surface_reuse");
         value.as_object_mut().unwrap().remove("surface_delta");
         value.as_object_mut().unwrap().remove("surface_scroll");
+        value.as_object_mut().unwrap().remove("floats");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
         assert!(!decoded.surface_delta);
         assert!(!decoded.surface_scroll);
+        assert!(!decoded.floats);
     }
 
     #[test]
@@ -385,6 +392,7 @@ mod tests {
                 HEALTH_CHECK_CAPABILITY.to_string(),
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
                 AGENT_COMPLETIONS_CAPABILITY.to_string(),
+                super::super::floats::CAPABILITY.to_string(),
             ]
         );
     }

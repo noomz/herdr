@@ -27,6 +27,12 @@ const OWNED_ACK_TIMEOUT: Duration = Duration::from_millis(500);
 // batch stays well below both limits and the number of panes stays unbounded.
 #[cfg(unix)]
 const FDS_PER_MESSAGE: usize = 64;
+// An importer that knows floats says so, so the source never sends float fds whose stream
+// bytes an older importer would misread as the commit line.
+#[cfg(unix)]
+const VALIDATED: &str = "validated";
+#[cfg(unix)]
+const VALIDATED_WITH_FLOATS: &str = "validated floats";
 #[cfg(unix)]
 pub(crate) const MAX_REPLAY_BYTES_PER_PANE: usize = 8 * 1024;
 #[cfg(unix)]
@@ -51,12 +57,16 @@ pub(crate) struct HandoffManifest {
     /// committed. Absent from manifests written before this field existed.
     #[serde(default)]
     pub host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
+    /// Floating terminals, bottom to top. Absent from manifests written before floats existed.
+    #[serde(default)]
+    pub floats: Vec<crate::handoff_runtime::HandoffFloat>,
 }
 
 #[cfg(unix)]
 pub(crate) struct ReceivedHandoff {
     pub manifest: HandoffManifest,
     pub fds: Vec<RawFd>,
+    pub float_fds: Vec<RawFd>,
     pub stream: UnixStream,
 }
 
@@ -148,12 +158,13 @@ pub(crate) fn bind_listener(socket_path: &Path) -> io::Result<UnixListener> {
 }
 
 #[cfg(unix)]
+/// Returns the stream and whether the importer accepts the manifest's floats.
 pub(crate) fn accept_and_validate_on(
     listener: UnixListener,
     socket_path: &Path,
     token: &str,
     manifest: &HandoffManifest,
-) -> io::Result<UnixStream> {
+) -> io::Result<(UnixStream, bool)> {
     let (mut stream, _) = accept_with_timeout(&listener, READY_TIMEOUT)?;
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
@@ -172,16 +183,23 @@ pub(crate) fn accept_and_validate_on(
 
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
     let validated = read_line_unbuffered(&mut stream)?;
-    if validated.trim_end() != "validated" {
-        return Err(io::Error::other("handoff import did not validate manifest"));
-    }
+    let floats_accepted = match validated.trim_end() {
+        VALIDATED => false,
+        VALIDATED_WITH_FLOATS => true,
+        _ => return Err(io::Error::other("handoff import did not validate manifest")),
+    };
     let _ = std::fs::remove_file(socket_path);
-    Ok(stream)
+    Ok((stream, floats_accepted))
 }
 
 #[cfg(unix)]
-pub(crate) fn send_fds_and_wait_restored(stream: &mut UnixStream, fds: &[RawFd]) -> io::Result<()> {
+pub(crate) fn send_fds_and_wait_restored(
+    stream: &mut UnixStream,
+    fds: &[RawFd],
+    float_fds: &[RawFd],
+) -> io::Result<()> {
     send_fds(stream, fds)?;
+    send_fds(stream, float_fds)?;
 
     stream.set_read_timeout(Some(READY_TIMEOUT))?;
     let restored = read_line_unbuffered(&mut *stream)?;
@@ -266,12 +284,26 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
             crate::build_info::version()
         )));
     }
-    stream.write_all(b"validated\n")?;
+    let validated = if manifest.floats.is_empty() {
+        VALIDATED
+    } else {
+        VALIDATED_WITH_FLOATS
+    };
+    stream.write_all(validated.as_bytes())?;
+    stream.write_all(b"\n")?;
     stream.flush()?;
     let fds = recv_fds(&stream, manifest.panes.len())?;
+    let float_fds = match recv_fds(&stream, manifest.floats.len()) {
+        Ok(float_fds) => float_fds,
+        Err(err) => {
+            close_raw_fds(&fds);
+            return Err(err);
+        }
+    };
     Ok(ReceivedHandoff {
         manifest,
         fds,
+        float_fds,
         stream,
     })
 }
@@ -312,6 +344,7 @@ pub(crate) fn manifest_for(
     expected_version: Option<String>,
     api_window_title: Option<String>,
     host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
+    floats: Vec<crate::handoff_runtime::HandoffFloat>,
 ) -> HandoffManifest {
     HandoffManifest {
         version: HANDOFF_VERSION,
@@ -323,6 +356,7 @@ pub(crate) fn manifest_for(
         panes,
         api_window_title,
         host_shutdown_intent,
+        floats,
     }
 }
 
@@ -556,6 +590,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
+            Vec::new(),
         );
 
         assert_eq!(manifest.api_window_title.as_deref(), Some("deploying"));
@@ -566,7 +601,15 @@ mod tests {
         let intent: crate::platform::HostShutdownIntent =
             serde_json::from_value(serde_json::json!({ "announced_at_ns": 42 }))
                 .expect("intent should deserialize");
-        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, Some(intent));
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            Some(intent),
+            Vec::new(),
+        );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
         let decoded: HandoffManifest =
             serde_json::from_slice(&encoded).expect("manifest should deserialize");
@@ -574,9 +617,108 @@ mod tests {
         assert_eq!(decoded.host_shutdown_intent, Some(intent));
     }
 
+    fn test_float() -> crate::handoff_runtime::HandoffFloat {
+        crate::handoff_runtime::HandoffFloat {
+            runtime: crate::handoff_runtime::HandoffRuntimeState {
+                pane_id: 1,
+                child_pid: 0,
+                rows: 6,
+                cols: 17,
+                cell_width_px: 0,
+                cell_height_px: 0,
+                keyboard_protocol_flags: 0,
+                keyboard_protocol_ansi: None,
+                input_state: None,
+                terminal_title: None,
+                initial_history_ansi: None,
+                agent_state: None,
+            },
+            cwd: "/".into(),
+            title: None,
+            launch_argv: None,
+            width: None,
+            height: None,
+            position: None,
+            hidden: false,
+            hide_while_focused: None,
+        }
+    }
+
+    fn handshake(floats: Vec<crate::handoff_runtime::HandoffFloat>) -> (bool, usize) {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-handoff-floats-{}-{}",
+            std::process::id(),
+            floats.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("handoff.sock");
+        let listener = bind_listener(&socket_path).unwrap();
+        let float_count = floats.len();
+        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, None, floats);
+        let importer_path = socket_path.clone();
+        let importer = std::thread::spawn(move || {
+            let mut received = receive(&importer_path, "token").unwrap();
+            report_restored(&mut received.stream).unwrap();
+            close_raw_fds(&received.float_fds);
+            // Returning the stream keeps the socket open until the source has read "restored".
+            (received.float_fds.len(), received.stream)
+        });
+        let (mut stream, accepted) =
+            accept_and_validate_on(listener, &socket_path, "token", &manifest).unwrap();
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let float_fds = if accepted {
+            vec![pipe[0]; float_count]
+        } else {
+            Vec::new()
+        };
+        send_fds_and_wait_restored(&mut stream, &[], &float_fds).unwrap();
+        close_raw_fds(&pipe);
+        let (received, _importer_stream) = importer.join().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        (accepted, received)
+    }
+
+    #[test]
+    fn importer_accepts_floats_only_when_the_manifest_carries_them() {
+        assert_eq!(handshake(Vec::new()), (false, 0));
+        assert_eq!(handshake(vec![test_float()]), (true, 1));
+    }
+
+    #[test]
+    fn a_manifest_written_before_floats_existed_still_loads_without_floats() {
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
+        value
+            .as_object_mut()
+            .expect("manifest should be a json object")
+            .remove("floats");
+
+        let older: HandoffManifest =
+            serde_json::from_value(value).expect("an older manifest should still load");
+
+        assert!(older.floats.is_empty());
+    }
+
     #[test]
     fn a_manifest_written_before_the_host_shutdown_field_still_loads() {
-        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, None);
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value
             .as_object_mut()
@@ -617,6 +759,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             Some(intent),
+            Vec::new(),
         );
         let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
 
@@ -636,6 +779,7 @@ mod tests {
             None,
             Some("deploying".to_string()),
             None,
+            Vec::new(),
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value

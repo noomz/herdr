@@ -457,6 +457,14 @@ cli_params! {
             .input(bindings::boolean("no-focus", false).order(9)),
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         pub env: HashMap<String, String> => Field::new(HashMap::new()).input(bindings::environment().order(7)),
+        /// Float only: outer left edge in cells; centered when `x` and `y` are absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub x: Option<u16> => Field::new(None::<u16>),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub y: Option<u16> => Field::new(None::<u16>),
+        /// Float only: hide the float while this pane is focused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub hide_while_focused: Option<String> => Field::new(None::<String>),
     }
 }
 
@@ -471,6 +479,8 @@ pub enum PluginPanePlacement {
     Split,
     Tab,
     Zoomed,
+    /// Non-modal floating terminal above the tiled layout.
+    Float,
 }
 
 cli_params! {

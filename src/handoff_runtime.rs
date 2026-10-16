@@ -46,3 +46,28 @@ pub(crate) struct ImportedHandoffRuntime {
     #[cfg(unix)]
     pub state: HandoffRuntimeState,
 }
+
+/// A floating terminal transferred during server replacement. Its master fd travels after
+/// every pane fd, in separate messages, so an importer that predates floats ignores it.
+#[cfg(unix)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HandoffFloat {
+    pub runtime: HandoffRuntimeState,
+    pub cwd: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_argv: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<crate::popup_size::PopupSize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<crate::popup_size::PopupSize>,
+    /// Outer position; absent while centered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<(u16, u16)>,
+    #[serde(default)]
+    pub hidden: bool,
+    /// Raw id of the source server's pane that hides this float while focused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_while_focused: Option<u32>,
+}

@@ -76,22 +76,7 @@ impl App {
             extra_env,
             geometry,
             |pane_id, rows, cols, cwd, launch_env, app| {
-                TerminalRuntime::spawn_argv_command(
-                    pane_id,
-                    rows,
-                    cols,
-                    cwd,
-                    argv,
-                    launch_env,
-                    crate::pane::AgentDetection::Disabled,
-                    app.state.pane_scrollback_limit_bytes,
-                    app.state.host_terminal_theme,
-                    app.state.host_terminal_appearance,
-                    app.event_tx.clone(),
-                    app.render_notify.clone(),
-                    app.render_dirty.clone(),
-                )
-                .map(|runtime| (runtime, Some(argv.to_vec())))
+                spawn_argv_runtime(app, argv, pane_id, rows, cols, cwd, launch_env)
             },
         )
     }
@@ -124,41 +109,17 @@ impl App {
             .workspaces
             .get(ws_idx)
             .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
-        let active_tab = ws
-            .active_tab()
+        ws.active_tab()
             .ok_or_else(|| std::io::Error::other("active tab disappeared"))?;
-        let focused_pane = ws
-            .focused_pane_id()
+        ws.focused_pane_id()
             .ok_or_else(|| std::io::Error::other("active tab has no focused pane"))?;
-        let cwd = cwd.or_else(|| {
-            active_tab.cwd_for_pane(focused_pane, &self.state.terminals, &self.terminal_runtimes)
-        });
-        let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
-        let pane_id = PaneId::alloc();
-        let terminal_id = TerminalId::alloc();
-        let launch_env = PaneLaunchEnv::from_extra(extra_env).without_pane_identity();
-        let terminal_area = if self.state.view.terminal_area.width >= 4
-            && self.state.view.terminal_area.height >= 4
-        {
-            self.state.view.terminal_area
-        } else {
-            let (cols, rows) = self.state.headless_size;
-            ratatui::layout::Rect::new(0, 0, cols, rows)
-        };
         let Some(resolved_geometry) =
-            resolve_popup_geometry(geometry.width, geometry.height, terminal_area)
+            resolve_popup_geometry(geometry.width, geometry.height, self.state.float_area())
         else {
             return Err(std::io::Error::other("terminal area too small for popup"));
         };
-        let rows = resolved_geometry.inner.height;
-        let cols = resolved_geometry.inner.width;
-        let (runtime, launch_argv) = spawn(pane_id, rows, cols, cwd.clone(), &launch_env, self)?;
-        let terminal = match launch_argv {
-            Some(argv) => TerminalState::new(terminal_id.clone(), cwd).with_launch_argv(argv),
-            None => TerminalState::new(terminal_id.clone(), cwd),
-        };
-        self.terminal_runtimes.insert(terminal_id.clone(), runtime);
-        self.state.terminals.insert(terminal_id.clone(), terminal);
+        let (pane_id, terminal_id) =
+            self.spawn_pane_less_terminal(cwd, extra_env, resolved_geometry.inner, spawn)?;
         self.state.popup_pane = Some(crate::app::state::PopupPaneState {
             pane_id,
             terminal_id,
@@ -168,6 +129,81 @@ impl App {
         self.state.mode = Mode::Terminal;
         Ok(())
     }
+
+    /// Spawns a terminal that belongs to no pane layout, sized to `inner`.
+    pub(super) fn spawn_pane_less_terminal<F>(
+        &mut self,
+        cwd: Option<PathBuf>,
+        extra_env: Vec<(String, String)>,
+        inner: ratatui::layout::Rect,
+        spawn: F,
+    ) -> std::io::Result<(PaneId, TerminalId)>
+    where
+        F: FnOnce(
+            PaneId,
+            u16,
+            u16,
+            PathBuf,
+            &PaneLaunchEnv,
+            &mut App,
+        ) -> std::io::Result<(TerminalRuntime, Option<Vec<String>>)>,
+    {
+        let cwd = cwd.or_else(|| {
+            let ws = self.state.workspaces.get(self.state.active?)?;
+            let focused_pane = ws.focused_pane_id()?;
+            ws.active_tab()?.cwd_for_pane(
+                focused_pane,
+                &self.state.terminals,
+                &self.terminal_runtimes,
+            )
+        });
+        let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+        let pane_id = PaneId::alloc();
+        let terminal_id = TerminalId::alloc();
+        let launch_env = PaneLaunchEnv::from_extra(extra_env).without_pane_identity();
+        let (runtime, launch_argv) = spawn(
+            pane_id,
+            inner.height,
+            inner.width,
+            cwd.clone(),
+            &launch_env,
+            self,
+        )?;
+        let terminal = match launch_argv {
+            Some(argv) => TerminalState::new(terminal_id.clone(), cwd).with_launch_argv(argv),
+            None => TerminalState::new(terminal_id.clone(), cwd),
+        };
+        self.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        self.state.terminals.insert(terminal_id.clone(), terminal);
+        Ok((pane_id, terminal_id))
+    }
+}
+
+pub(super) fn spawn_argv_runtime(
+    app: &mut App,
+    argv: &[String],
+    pane_id: PaneId,
+    rows: u16,
+    cols: u16,
+    cwd: PathBuf,
+    launch_env: &PaneLaunchEnv,
+) -> std::io::Result<(TerminalRuntime, Option<Vec<String>>)> {
+    TerminalRuntime::spawn_argv_command(
+        pane_id,
+        rows,
+        cols,
+        cwd,
+        argv,
+        launch_env,
+        crate::pane::AgentDetection::Disabled,
+        app.state.pane_scrollback_limit_bytes,
+        app.state.host_terminal_theme,
+        app.state.host_terminal_appearance,
+        app.event_tx.clone(),
+        app.render_notify.clone(),
+        app.render_dirty.clone(),
+    )
+    .map(|runtime| (runtime, Some(argv.to_vec())))
 }
 
 #[cfg(test)]
