@@ -379,8 +379,36 @@ it has no pane ID, emits no pane lifecycle events, and does not take part in
 pane, layout, persistence, or agent APIs. Floats survive client detach and
 `server live-handoff`.
 
-`plugin.pane.open` returns the new float, including its `float_id`. Control a
-float through the socket API:
+Each client focuses floats on its own, so `plugin.pane.open` rejects
+`focus: true` for a float with `invalid_params`. Omit `focus` or send `false`.
+
+`plugin.pane.open` returns a `float_opened` result that describes the new float:
+
+```json
+{
+  "type": "float_opened",
+  "float": {
+    "float_id": "term_18f3a2c0b41",
+    "title": "Peek",
+    "width": 50,
+    "height": 14,
+    "x": 5,
+    "y": 2,
+    "visibility": "shown",
+    "hide_while_focused": "w1:p1",
+    "z": 0
+  }
+}
+```
+
+`float_id` names the float in every `float.*` method. `width` and `height` are
+cells or a percentage string such as `"80%"`, and are absent when the float uses
+the default size. `x` and `y` are absent while the float is centered. `visibility`
+is `shown` or `hidden`. `hide_while_focused` is absent when no hide rule is set.
+`z` is the stacking position, and 0 is the bottom float. `float.list` returns the
+same objects in a `floats` array.
+
+Control a float through the socket API:
 
 | Method | Params | Effect |
 | --- | --- | --- |

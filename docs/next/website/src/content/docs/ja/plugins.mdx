@@ -360,7 +360,32 @@ Escape はフロート内のプログラムに届き、プレフィックスの�
 フロートは Herdr ペインではありません。ペイン ID を持たず、ペインのライフサイクルイベントを発行せず、pane、layout、永続化、エージェント API に参加しません。
 フロートはクライアントのデタッチと `server live-handoff` を越えて維持されます。
 
-`plugin.pane.open` は `float_id` を含む新しいフロートを返します。フロートはソケット API で操作します:
+フロートのフォーカスは各クライアントが管理するため、フロートに `focus: true` を指定すると `plugin.pane.open` は `invalid_params` を返します。`focus` を省略するか `false` を送ってください。
+
+`plugin.pane.open` は新しいフロートを表す `float_opened` の結果を返します:
+
+```json
+{
+  "type": "float_opened",
+  "float": {
+    "float_id": "term_18f3a2c0b41",
+    "title": "Peek",
+    "width": 50,
+    "height": 14,
+    "x": 5,
+    "y": 2,
+    "visibility": "shown",
+    "hide_while_focused": "w1:p1",
+    "z": 0
+  }
+}
+```
+
+`float_id` はすべての `float.*` メソッドでフロートを指定します。`width` と `height` はセル数か `"80%"` のような割合の文字列で、既定サイズのときは含まれません。
+`x` と `y` は中央配置の間は含まれません。`visibility` は `shown` か `hidden` です。`hide_while_focused` は非表示ルールがないときは含まれません。
+`z` は重なり順の位置で、0 が最下層のフロートです。`float.list` は同じオブジェクトを `floats` 配列で返します。
+
+フロートはソケット API で操作します:
 `float.list`、`float.move`、`float.resize`、`float.hide`、`float.show`、`float.raise`、`float.set_hide_rule`、`float.close`。
 不明な `float_id` には `float_not_found` が返ります。
 

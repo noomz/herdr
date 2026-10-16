@@ -323,7 +323,32 @@ Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
 浮动窗口不是 Herdr 窗格：它没有窗格 ID，不发出窗格生命周期事件，也不参与 pane、layout、持久化或代理 API。
 浮动窗口在客户端分离和 `server live-handoff` 后仍会保留。
 
-`plugin.pane.open` 返回新的浮动窗口，其中包含 `float_id`。通过套接字 API 控制浮动窗口：
+每个客户端各自管理浮动窗口的焦点，因此对浮动窗口指定 `focus: true` 时，`plugin.pane.open` 返回 `invalid_params`。请省略 `focus` 或发送 `false`。
+
+`plugin.pane.open` 返回描述新浮动窗口的 `float_opened` 结果：
+
+```json
+{
+  "type": "float_opened",
+  "float": {
+    "float_id": "term_18f3a2c0b41",
+    "title": "Peek",
+    "width": 50,
+    "height": 14,
+    "x": 5,
+    "y": 2,
+    "visibility": "shown",
+    "hide_while_focused": "w1:p1",
+    "z": 0
+  }
+}
+```
+
+`float_id` 在所有 `float.*` 方法中标识浮动窗口。`width` 和 `height` 是单元格数或 `"80%"` 这样的百分比字符串，使用默认尺寸时不出现。
+浮动窗口居中时不出现 `x` 和 `y`。`visibility` 为 `shown` 或 `hidden`。没有隐藏规则时不出现 `hide_while_focused`。
+`z` 是堆叠位置，0 表示最底层的浮动窗口。`float.list` 在 `floats` 数组中返回相同的对象。
+
+通过套接字 API 控制浮动窗口：
 `float.list`、`float.move`、`float.resize`、`float.hide`、`float.show`、`float.raise`、`float.set_hide_rule`、`float.close`。
 未知的 `float_id` 返回 `float_not_found`。
 
