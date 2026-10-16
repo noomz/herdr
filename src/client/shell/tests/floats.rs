@@ -423,3 +423,86 @@ fn a_sidebar_drag_released_over_a_float_ends_the_chrome_drag() {
 
     assert!(state.chrome_drag.is_none());
 }
+
+fn release_border_drag(state: &mut ClientShellState, by: (u16, u16)) -> String {
+    let a = hit(state, "term_a");
+    let grab = (a.outer.x + 4, a.outer.y);
+    click(
+        state,
+        MouseEventKind::Down(MouseButton::Left),
+        grab.0,
+        grab.1,
+    );
+    click(
+        state,
+        MouseEventKind::Drag(MouseButton::Left),
+        grab.0 + by.0,
+        grab.1 + by.1,
+    );
+    let up = click(
+        state,
+        MouseEventKind::Up(MouseButton::Left),
+        grab.0 + by.0,
+        grab.1 + by.1,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &up.actions[..] else {
+        panic!("release sends float.move");
+    };
+    request.id.clone()
+}
+
+fn float_origin(state: &mut ClientShellState) -> (u16, u16) {
+    let surface = state.layout(106, 20).pane_surface;
+    state.compose(106, 20).expect("frame");
+    let outer = hit(state, "term_a").outer;
+    (outer.x - surface.x, outer.y - surface.y)
+}
+
+#[test]
+fn a_held_drag_preview_yields_to_a_move_from_elsewhere() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    release_border_drag(&mut state, (5, 2));
+    assert_eq!(float_origin(&mut state), (15, 5));
+
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 30, 1, "pip")],
+    });
+
+    assert_eq!(float_origin(&mut state), (30, 1));
+}
+
+#[test]
+fn a_rejected_move_reverts_the_preview_to_the_server_position() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let request_id = release_border_drag(&mut state, (5, 2));
+
+    let (repaint, _) = state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Err(ClientShellEndpointError {
+            code: Some("float_not_found".into()),
+            message: "float moved away".into(),
+        }),
+    );
+
+    assert!(repaint);
+    assert_eq!(float_origin(&mut state), (10, 3));
+}
+
+#[test]
+fn an_answered_move_settles_on_the_next_layer_even_when_the_server_placed_it_elsewhere() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let request_id = release_border_drag(&mut state, (5, 2));
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::Ok {}),
+    );
+    assert_eq!(float_origin(&mut state), (15, 5));
+
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+
+    assert_eq!(float_origin(&mut state), (10, 3));
+}

@@ -686,6 +686,9 @@ pub(super) enum PendingEndpointKind {
         origin: crate::api::schema::PaneTextPoint,
         session_generation: u64,
     },
+    FloatMove {
+        float_id: String,
+    },
     CopySearch {
         pane_id: String,
         origin: crate::api::schema::PaneTextPoint,

@@ -628,6 +628,12 @@ impl ClientShellState {
                     }
                 };
             }
+            PendingEndpointKind::FloatMove { float_id } => {
+                return (
+                    self.complete_float_move(&float_id, result.is_ok()),
+                    Vec::new(),
+                );
+            }
             PendingEndpointKind::PaneScroll { pane_id, serial } => {
                 let mut outcome = ClientShellInput::default();
                 let repaint = self.complete_pane_scroll(pane_id, serial, result, &mut outcome);

@@ -15,8 +15,27 @@ pub(super) struct ClientFloatDrag {
     pub(super) grab: (u16, u16),
     /// Previewed outer top-left, relative to the pane surface.
     pub(super) position: (u16, u16),
-    /// The button is up and `float.move` is in flight; the preview holds until a layer confirms it.
-    pub(super) released: bool,
+    pub(super) phase: ClientFloatDragPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClientFloatDragPhase {
+    Dragging,
+    /// The button is up and `float.move` was sent. The preview holds until the server's float
+    /// geometry moves off `origin`, or until the first layer after the request is answered.
+    Moving {
+        origin: (u16, u16, u16, u16),
+        answered: bool,
+    },
+}
+
+fn outer_geometry(float: &FloatSurface) -> (u16, u16, u16, u16) {
+    (
+        float.outer.x,
+        float.outer.y,
+        float.outer.width,
+        float.outer.height,
+    )
 }
 
 #[derive(Clone)]
@@ -156,12 +175,18 @@ impl ClientShellState {
             }
         }
         if let Some(drag) = self.floats.drag.as_ref() {
-            let committed = drag.released
-                && layer.floats.iter().any(|float| {
-                    float.float_id == drag.float_id
-                        && (float.outer.x, float.outer.y) == drag.position
-                });
-            if !present(&drag.float_id) || committed {
+            let server = layer
+                .floats
+                .iter()
+                .find(|float| float.float_id == drag.float_id)
+                .map(outer_geometry);
+            let settled = match (server, drag.phase) {
+                (None, _) => true,
+                (Some(_), ClientFloatDragPhase::Dragging) => false,
+                (Some(_), ClientFloatDragPhase::Moving { answered: true, .. }) => true,
+                (Some(server), ClientFloatDragPhase::Moving { origin, .. }) => server != origin,
+            };
+            if settled {
                 self.floats.drag = None;
             }
         }
@@ -211,7 +236,12 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) -> bool {
         let point = (mouse.column, mouse.row);
-        if self.floats.drag.as_ref().is_some_and(|drag| !drag.released) {
+        if self
+            .floats
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.phase == ClientFloatDragPhase::Dragging)
+        {
             match mouse.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     self.drag_float_to(point);
@@ -273,7 +303,7 @@ impl ClientShellState {
                                 hit.outer.x.saturating_sub(surface.x),
                                 hit.outer.y.saturating_sub(surface.y),
                             ),
-                            released: false,
+                            phase: ClientFloatDragPhase::Dragging,
                         });
                     }
                     return true;
@@ -338,25 +368,57 @@ impl ClientShellState {
         let Some(drag) = self.floats.drag.clone() else {
             return;
         };
-        let unchanged = self
-            .floats
-            .get(&drag.float_id)
-            .is_some_and(|float| (float.outer.x, float.outer.y) == drag.position);
-        if unchanged {
+        let Some(origin) = self.floats.get(&drag.float_id).map(outer_geometry) else {
+            self.floats.drag = None;
+            return;
+        };
+        if (origin.0, origin.1) == drag.position {
             self.floats.drag = None;
             return;
         }
         if let Some(drag) = self.floats.drag.as_mut() {
-            drag.released = true;
+            drag.phase = ClientFloatDragPhase::Moving {
+                origin,
+                answered: false,
+            };
         }
-        self.push_endpoint_method(
+        let sent = self.push_endpoint_method_with_kind(
             crate::api::schema::Method::FloatMove(crate::api::schema::FloatMoveParams {
-                float_id: drag.float_id,
+                float_id: drag.float_id.clone(),
                 x: drag.position.0,
                 y: drag.position.1,
             }),
+            PendingEndpointKind::FloatMove {
+                float_id: drag.float_id,
+            },
             outcome,
         );
+        if !sent {
+            self.floats.drag = None;
+        }
+    }
+
+    /// A failed move reverts the preview to the server position; a successful one lets the
+    /// next layer settle it.
+    pub(super) fn complete_float_move(&mut self, float_id: &str, succeeded: bool) -> bool {
+        let Some(drag) = self
+            .floats
+            .drag
+            .as_mut()
+            .filter(|drag| drag.float_id == float_id)
+        else {
+            return false;
+        };
+        let ClientFloatDragPhase::Moving { answered, .. } = &mut drag.phase else {
+            return false;
+        };
+        if succeeded {
+            *answered = true;
+            false
+        } else {
+            self.floats.drag = None;
+            true
+        }
     }
 
     fn focus_float(&mut self, float_id: &str, outcome: &mut ClientShellInput) {
