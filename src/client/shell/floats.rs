@@ -30,6 +30,8 @@ pub(super) struct ClientFloats {
     pub(super) layer: FloatsSurface,
     pub(super) focused: Option<String>,
     pub(super) drag: Option<ClientFloatDrag>,
+    /// A button went down on a float; its Drag and Up belong to the float.
+    pub(super) pressed: bool,
 }
 
 impl ClientFloats {
@@ -217,6 +219,7 @@ impl ClientShellState {
                     return true;
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
+                    self.floats.pressed = false;
                     self.drag_float_to(point);
                     self.commit_float_drag(outcome);
                     outcome.repaint = true;
@@ -225,8 +228,18 @@ impl ClientShellState {
                 _ => {}
             }
         }
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            self.floats.pressed = false;
+        }
         if self.overlay.is_some() {
             return false;
+        }
+        if matches!(mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
+            let pressed = self.floats.pressed;
+            if matches!(mouse.kind, MouseEventKind::Up(_)) {
+                self.floats.pressed = false;
+            }
+            return pressed;
         }
         let Some(hit) = self
             .hits
@@ -245,6 +258,7 @@ impl ClientShellState {
         let in_content = super::contains(hit.pane.inner_rect, point);
         match mouse.kind {
             MouseEventKind::Down(button) => {
+                self.floats.pressed = true;
                 self.focus_float(&hit.pane.pane_id, outcome);
                 if !in_content {
                     if button == MouseButton::Left {

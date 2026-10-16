@@ -375,3 +375,51 @@ fn clipboard_images_are_not_misrouted_to_the_pane_under_a_focused_float() {
 
     assert_eq!(state.clipboard_image_target(), None);
 }
+
+#[test]
+fn a_selection_dragged_across_a_float_still_finishes() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let pane = state.hits.panes[0].clone();
+    let a = hit(&state, "term_a");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        pane.inner_rect.x,
+        pane.inner_rect.y,
+    );
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        a.pane.inner_rect.x + 1,
+        a.pane.inner_rect.y,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        a.pane.inner_rect.x + 1,
+        a.pane.inner_rect.y,
+    );
+
+    assert!(float_inputs(&up).is_empty());
+    assert!(matches!(
+        &endpoint_methods(&up)[..],
+        [crate::api::schema::Method::PaneSelectionRead(params)] if params.pane_id == "pane_1"
+    ));
+}
+
+#[test]
+fn a_sidebar_drag_released_over_a_float_ends_the_chrome_drag() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    state.chrome_drag = Some(ClientChromeDrag::SidebarWidth);
+
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        a.pane.inner_rect.x + 1,
+        a.pane.inner_rect.y,
+    );
+
+    assert!(state.chrome_drag.is_none());
+}
