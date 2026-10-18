@@ -17,6 +17,8 @@ const ROWS: u16 = 24;
 const FLOAT_COLS: u16 = 18;
 const FLOAT_ROWS: u16 = 6;
 const CELL: (u32, u32) = (10, 20);
+/// How long the test writer's forwarding thread may take to deliver one message.
+const DELIVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn read_server_messages(bytes: Vec<u8>) -> Vec<ServerMessage> {
     let len = bytes.len() as u64;
@@ -83,6 +85,8 @@ struct HostTerminal {
     loading: Option<(u32, Option<u32>, Vec<u8>)>,
     /// Placements by (image id, placement id).
     placements: Vec<(u32, u32)>,
+    /// Every control string written, for failure messages.
+    log: Vec<String>,
 }
 
 impl HostTerminal {
@@ -93,6 +97,7 @@ impl HostTerminal {
     }
 
     fn accept_native(&mut self, image_id: u32, path: &str) {
+        self.log.push(format!("native file i={image_id}"));
         self.images
             .insert(image_id, std::fs::read(path).expect("native export"));
     }
@@ -112,6 +117,9 @@ impl HostTerminal {
 
     fn apc(&mut self, command: &str) {
         let (control, payload) = command.split_once(';').unwrap_or((command, ""));
+        if !control.starts_with("m=") {
+            self.log.push(control.to_owned());
+        }
         let keys: HashMap<&str, &str> = control
             .split(',')
             .filter_map(|pair| pair.split_once('='))
@@ -227,21 +235,29 @@ impl Harness {
     }
 
     fn compose(&mut self) {
-        if let Some(frame) = self.shell.compose(COLS, ROWS) {
-            self.host.write(&frame.graphics.into_inline_bytes());
+        match self.shell.compose(COLS, ROWS) {
+            Some(frame) => self.host.write(&frame.graphics.into_inline_bytes()),
+            None => self.host.log.push("compose: none".to_owned()),
+        }
+    }
+
+    fn apply_control(&mut self, bytes: Vec<u8>) {
+        if let ServerMessage::EndpointControl { kind, data } = read_server_message(bytes) {
+            if kind == protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
+                let snapshot: Box<protocol::ClientShellSnapshot> =
+                    serde_json::from_str(&data).expect("snapshot");
+                self.host
+                    .log
+                    .push(format!("snapshot rev={}", snapshot.revision));
+                self.shell.set_snapshot(snapshot);
+                self.compose();
+            }
         }
     }
 
     fn drain_control(&mut self) {
         while let Ok(bytes) = self.control_rx.try_recv() {
-            if let ServerMessage::EndpointControl { kind, data } = read_server_message(bytes) {
-                if kind == protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
-                    let snapshot: Box<protocol::ClientShellSnapshot> =
-                        serde_json::from_str(&data).expect("snapshot");
-                    self.shell.set_snapshot(snapshot);
-                    self.compose();
-                }
-            }
+            self.apply_control(bytes);
         }
     }
 
@@ -250,14 +266,23 @@ impl Harness {
         for message in read_server_messages(bytes) {
             match message {
                 ServerMessage::PaneSurface(surface) => {
+                    self.host.log.push(format!(
+                        "surface rev={} placements={} assets={}",
+                        surface.projection_revision,
+                        surface.graphics.placements.len(),
+                        surface.graphics.assets.len()
+                    ));
                     self.shell.set_pane_surface(surface);
                     self.compose();
                 }
                 ServerMessage::EndpointControl { kind, data }
                     if kind == protocol::floats::SURFACE_KIND =>
                 {
-                    self.shell
-                        .set_float_layer(protocol::floats::decode_surface(&data).expect("layer"));
+                    let layer = protocol::floats::decode_surface(&data).expect("layer");
+                    self.host
+                        .log
+                        .push(format!("float layer floats={}", layer.floats.len()));
+                    self.shell.set_float_layer(layer);
                     self.compose();
                 }
                 ServerMessage::GraphicsFile {
@@ -299,10 +324,37 @@ impl Harness {
         }
     }
 
+    /// What the server has committed as sent to this client: the pane surface revision, the
+    /// float layer, and the snapshot projection revision.
+    fn sent_state(&self) -> (Option<u64>, Option<protocol::floats::FloatsSurface>, u64) {
+        let client = &self.server.clients[&CLIENT];
+        (
+            client
+                .render_state
+                .last_pane_surface()
+                .map(|surface| surface.surface_revision),
+            client.shell_floats.clone(),
+            client.shell_projection_revision,
+        )
+    }
+
+    /// Renders once and delivers what the server sent. The test writer forwards ordered render
+    /// frames and control messages through a thread, so each expected message is awaited.
     fn render_once(&mut self) -> bool {
+        let before = self.sent_state();
         self.server.render_and_stream();
+        let after = self.sent_state();
+        if after.2 != before.2 {
+            let bytes = self.control_rx.recv_timeout(DELIVERY).expect("snapshot");
+            self.apply_control(bytes);
+        }
         self.drain_control();
         let mut received = false;
+        if after.0 != before.0 || after.1 != before.1 {
+            let bytes = self.render_rx.recv_timeout(DELIVERY).expect("render frame");
+            received = true;
+            self.deliver(bytes);
+        }
         while let Ok(bytes) = self.render_rx.try_recv() {
             received = true;
             self.deliver(bytes);
@@ -379,11 +431,12 @@ fn stream(frames: std::ops::RangeInclusive<u8>) -> (Harness, crate::terminal::Te
         harness.settle();
         assert!(
             harness.host.shows(&frame_pixels(frame)),
-            "frame {frame} never reached the host; uploads={} rejected={} resident={:?} placements={:?}",
+            "frame {frame} never reached the host; uploads={} rejected={} resident={:?} placements={:?} log={:#?}",
             harness.native_uploads,
             harness.rejected_uploads,
             harness.host.images.keys().collect::<Vec<_>>(),
             harness.host.placements,
+            harness.host.log,
         );
     }
     (harness, terminal_id)
