@@ -3896,6 +3896,44 @@ mod tests {
         assert!(terminal.kitty_image_placements().unwrap().is_empty());
     }
 
+    #[test]
+    fn kitty_chunked_retransmission_keeps_the_previous_placement_until_it_completes() {
+        use base64::Engine as _;
+        let first = [255, 0, 0, 255, 0, 0, 255, 255];
+        let second = [0, 255, 0, 255, 255, 255, 0, 255];
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        terminal.enable_kitty_graphics().unwrap();
+        let encoded = |payload: &[u8]| base64::engine::general_purpose::STANDARD.encode(payload);
+        terminal.write(
+            format!(
+                "\x1b[H\x1b_Ga=T,f=32,i=7,p=3,s=2,v=1,c=2,r=1,q=2;{}\x1b\\",
+                encoded(&first)
+            )
+            .as_bytes(),
+        );
+        let before = terminal.kitty_image_placements().unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].data, first);
+
+        let replacement = encoded(&second);
+        let (head, tail) = replacement.split_at(8);
+        terminal.write(
+            format!("\x1b[H\x1b_Ga=T,f=32,i=7,p=3,s=2,v=1,c=2,r=1,q=2,m=1;{head}\x1b\\").as_bytes(),
+        );
+        let loading = terminal.kitty_image_placements().unwrap();
+        assert_eq!(
+            loading.len(),
+            1,
+            "the old image stays placed while its replacement loads"
+        );
+        assert_eq!(loading[0].data, first);
+
+        terminal.write(format!("\x1b_Gm=0;{tail}\x1b\\").as_bytes());
+        let after = terminal.kitty_image_placements().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].data, second);
+    }
+
     #[cfg(unix)]
     #[test]
     fn kitty_file_image_survives_source_mutation_and_unlink() {
