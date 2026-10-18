@@ -272,3 +272,48 @@ verification:
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
 just maintenance-test
 ```
+
+## 0009 keep an image placed until its chunked replacement completes
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0009-keep-image-until-chunked-replacement-completes.patch`
+
+herdr issue: fork-only, no upstream issue; float and popup kitty images streamed
+in chunks went blank through herdr while the program kept transmitting
+
+upstream discussion: none
+
+upstream pr: none
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig`
+
+reason: Upstream deletes an image and all of its placements when a transmission
+reusing its id begins, so between the first and the last chunk the terminal
+reports no placement for that id. A GUI terminal hides that window inside one
+frame. Herdr samples terminal state after every PTY read and publishes it to
+clients, so a render during a chunked re-transmission removed the image from
+the client scene, superseded the native upload in flight, and made the client
+reject it when the host answered; at a steady frame rate that repeated every
+frame and the image never appeared. The patch deletes the old image when the
+replacement's data is complete instead, so every sample shows either the old
+or the new image. A replacement that fails validation still removes the old
+image, as before.
+
+remove when: upstream keeps the previous image placed until a chunked
+replacement completes, or exposes the in-progress load through the C API and
+Herdr defers publishing scenes for a loading terminal, and the checks below
+pass without this patch.
+
+verification:
+
+```sh
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='kittygfx retransmit')
+just test-one kitty_chunked_retransmission_keeps_the_previous_placement_until_it_completes
+just test-one a_float_frame_acked_after_the_next_frame_starts_stays_visible
+just maintenance-test
+```

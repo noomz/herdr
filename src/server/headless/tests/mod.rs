@@ -1,6 +1,8 @@
 use super::*;
 
 mod event_fairness;
+#[path = "float_graphics.rs"]
+mod float_graphics_tests;
 #[path = "floats.rs"]
 mod float_tests;
 mod native_graphics;

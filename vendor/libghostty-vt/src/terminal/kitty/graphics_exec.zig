@@ -1028,18 +1028,13 @@ fn loadAndAddImage(
         }
 
         break :loading loading.*;
-    } else loading: {
-        // Reusing a specific image ID deletes the old image and all of its
-        // placements when the new transmission begins, not when it completes.
-        if (t.image_id > 0) {
-            storage.delete(io, alloc, terminal, .{ .id = .{
-                .image_id = t.image_id,
-                .delete = true,
-            } });
-        }
+    } else try .init(io, alloc, cmd, storage.image_limits);
 
-        break :loading try .init(io, alloc, cmd, storage.image_limits);
-    };
+    // Reusing a specific image ID replaces the old image and all of its
+    // placements. Herdr samples terminal state between the chunks of a
+    // transmission, so the old image stays placed until the replacement's
+    // data is complete; a failed replacement still removes it.
+    const replaces_image_id = loading.image.id > 0;
 
     // We only want to deinit on error. If we're chunking, then we don't
     // want to deinit at all. If we're not chunking, then we'll deinit
@@ -1066,6 +1061,13 @@ fn loadAndAddImage(
         loading_ptr.* = loading;
         storage.loading = loading_ptr;
         return .{ .image = loading.image, .more = true };
+    }
+
+    if (replaces_image_id) {
+        storage.delete(io, alloc, terminal, .{ .id = .{
+            .image_id = loading.image.id,
+            .delete = true,
+        } });
     }
 
     // Dump the image data before it is decompressed
@@ -1743,7 +1745,7 @@ test "kittygfx retransmit same id removes existing placements" {
     );
 }
 
-test "kittygfx retransmit same id removes image on first chunk" {
+test "kittygfx retransmit same id keeps old image until final chunk" {
     const testing = std.testing;
     const io = testing.io;
     const alloc = testing.allocator;
@@ -1762,15 +1764,15 @@ test "kittygfx retransmit same id removes image on first chunk" {
         defer cmd.deinit(alloc);
         try testing.expect(execute(io, alloc, &t, &cmd).?.ok());
     }
-    try testing.expect(storage.imageById(1) != null);
+    const old_generation = storage.imageById(1).?.generation;
     try testing.expectEqual(@as(usize, 1), storage.placements.count());
     try testing.expectEqual(
         tracked + 1,
         t.screens.active.pages.countTrackedPins(),
     );
 
-    // Starting a replacement for the same explicit ID removes the old image
-    // and placements before the replacement's final chunk arrives.
+    // Starting a replacement for the same explicit ID leaves the old image
+    // and its placements in place until the replacement's final chunk.
     {
         const cmd = try command.Parser.parseString(
             alloc,
@@ -1780,7 +1782,24 @@ test "kittygfx retransmit same id removes image on first chunk" {
         try testing.expect(execute(io, alloc, &t, &cmd) == null);
     }
     try testing.expect(storage.loading != null);
-    try testing.expect(storage.imageById(1) == null);
+    try testing.expectEqual(old_generation, storage.imageById(1).?.generation);
+    try testing.expectEqual(@as(usize, 1), storage.placements.count());
+    try testing.expectEqual(
+        tracked + 1,
+        t.screens.active.pages.countTrackedPins(),
+    );
+
+    // The final chunk replaces the image and removes the old placements.
+    {
+        const cmd = try command.Parser.parseString(
+            alloc,
+            "m=0;AAAA",
+        );
+        defer cmd.deinit(alloc);
+        try testing.expect(execute(io, alloc, &t, &cmd).?.ok());
+    }
+    try testing.expect(storage.loading == null);
+    try testing.expect(storage.imageById(1).?.generation != old_generation);
     try testing.expectEqual(@as(usize, 0), storage.placements.count());
     try testing.expectEqual(tracked, t.screens.active.pages.countTrackedPins());
 }
