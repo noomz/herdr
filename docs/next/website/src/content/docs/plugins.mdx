@@ -371,8 +371,11 @@ command = ["sh", "peek.sh"]
 A float receives input only while it has focus. Click a float to focus it and
 bring it to the front. Click a tiled pane, or move pane focus with a keybinding,
 to return input to the layout. Escape goes to the program in the float, and
-prefix keybindings keep working. Drag a float by its border or title to move
-it. A modal popup appears above floats and takes input while it is open.
+prefix keybindings keep working. Drag a float by its title, top border, or left
+border to move it. Drag its right border, bottom border, or bottom-right corner
+to resize it. The top-left corner stays in place, and the program in the float
+gets the new size when you release the button. A modal popup appears above
+floats and takes input while it is open.
 
 A program in a float can draw kitty graphics images. Herdr places them inside
 the float's border, moves them with the float, and crops them where a higher

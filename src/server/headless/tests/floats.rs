@@ -353,3 +353,39 @@ async fn retained_tiled_patches_keep_float_images() {
     assert!(surface.graphics.assets.is_empty(), "pixels are not resent");
     shutdown_test_runtimes(&mut server);
 }
+
+#[tokio::test]
+async fn a_client_shell_float_resize_resizes_the_program_terminal() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (float_id, _terminal_id, _input) = install_float(&mut server, b"FLOAT_LIVE", None);
+    let render_rx = connect_shell(&mut server, 7, true);
+    server.render_and_stream();
+    let _ = render_rx.recv().expect("first render");
+
+    let boot_id = server.client_shell_boot_id.clone();
+    server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
+        client_id: 7,
+        boot_id,
+        request: Box::new(api::schema::Request {
+            id: "resize".into(),
+            method: api::schema::Method::FloatResize(api::schema::FloatResizeParams {
+                float_id: float_id.to_string(),
+                width: Some(PopupSize::Cells(30)),
+                height: Some(PopupSize::Cells(10)),
+            }),
+        }),
+    });
+    server.render_and_stream();
+    let messages = read_server_messages(render_rx.recv().expect("resized render"));
+
+    let layers = float_layers(&messages);
+    let float = &layers.last().expect("float layer").floats[0];
+    assert_eq!((float.outer.width, float.outer.height), (30, 10));
+    assert_eq!(
+        (float.frame.width, float.frame.height),
+        (27, 8),
+        "the program's terminal follows the committed size"
+    );
+    shutdown_test_runtimes(&mut server);
+}

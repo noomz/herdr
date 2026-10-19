@@ -1,4 +1,5 @@
-//! Floating terminals in the client shell: composition, focus, input routing, and drag-to-move.
+//! Floating terminals in the client shell: composition, focus, input routing, and dragging to
+//! move or resize.
 //!
 //! The server owns float existence, geometry, visibility, and z-order. Focus and an in-flight
 //! drag are client-local presentation state.
@@ -11,19 +12,47 @@ use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ClientFloatDrag {
     pub(super) float_id: FloatId,
-    /// Pointer offset from the float's outer top-left cell.
-    pub(super) grab: (u16, u16),
-    /// Previewed outer top-left, relative to the pane surface.
-    pub(super) position: (u16, u16),
+    pub(super) gesture: ClientFloatGesture,
+    /// Previewed outer rect, relative to the pane surface.
+    pub(super) rect: Rect,
     pub(super) phase: ClientFloatDragPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClientFloatGesture {
+    /// Pointer offset from the float's outer top-left cell.
+    Move { grab: (u16, u16) },
+    /// The outer top-left stays put while the flagged edges follow the pointer.
+    Resize { width: bool, height: bool },
+}
+
+impl ClientFloatGesture {
+    /// The title row and left border move the float; the right and bottom borders resize it.
+    fn for_border(outer: Rect, point: (u16, u16)) -> Self {
+        let right = point.0 == outer.right().saturating_sub(1);
+        let bottom = point.1 == outer.bottom().saturating_sub(1);
+        if point.1 == outer.y || !(right || bottom) {
+            return Self::Move {
+                grab: (
+                    point.0.saturating_sub(outer.x),
+                    point.1.saturating_sub(outer.y),
+                ),
+            };
+        }
+        Self::Resize {
+            width: right,
+            height: bottom,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientFloatDragPhase {
     Dragging,
-    /// The button is up and `float.move` was sent. The preview holds until the server's float
-    /// geometry moves off `origin`, or until the first layer after the request is answered.
-    Moving {
+    /// The button is up and `float.move` or `float.resize` was sent. The preview holds until the
+    /// server's float geometry moves off `origin`, or until the first layer after the request
+    /// is answered.
+    Committing {
         origin: (u16, u16, u16, u16),
         answered: bool,
     },
@@ -71,13 +100,16 @@ impl ClientFloats {
 
     /// Outer rect relative to the pane surface, with an in-flight drag applied.
     fn outer(&self, float: &FloatSurface) -> Rect {
-        let (x, y) = self
-            .drag
+        self.drag
             .as_ref()
             .filter(|drag| drag.float_id == float.float_id)
-            .map_or((float.outer.x, float.outer.y), |drag| drag.position);
-        Rect::new(x, y, float.outer.width, float.outer.height)
+            .map_or_else(|| float_rect(float), |drag| drag.rect)
     }
+}
+
+fn float_rect(float: &FloatSurface) -> Rect {
+    let (x, y, width, height) = outer_geometry(float);
+    Rect::new(x, y, width, height)
 }
 
 /// Clamps a dragged outer top-left so the float stays inside the pane surface.
@@ -87,6 +119,17 @@ fn clamp_drag_position(surface: Rect, size: (u16, u16), wanted: (i32, i32)) -> (
     (
         wanted.0.clamp(0, max_x) as u16,
         wanted.1.clamp(0, max_y) as u16,
+    )
+}
+
+/// Clamps a dragged outer size between the float minimum and the pane surface edge.
+fn clamp_resize(surface: Rect, position: (u16, u16), wanted: (i32, i32)) -> (u16, u16) {
+    let (min_width, min_height) = crate::popup_size::MIN_FLOAT_OUTER;
+    let max_width = i32::from(surface.width.saturating_sub(position.0));
+    let max_height = i32::from(surface.height.saturating_sub(position.1));
+    (
+        wanted.0.max(i32::from(min_width)).min(max_width) as u16,
+        wanted.1.max(i32::from(min_height)).min(max_height) as u16,
     )
 }
 
@@ -113,13 +156,20 @@ pub(super) fn compose_floats(
         if outer.is_empty() {
             continue;
         }
-        let inner = Rect::new(
+        // A resize preview can shrink the border inside the last frame the server sent.
+        let interior = Rect::new(
             outer.x.saturating_add(1),
             outer.y.saturating_add(1),
+            outer.width.saturating_sub(2),
+            outer.height.saturating_sub(2),
+        );
+        let inner = Rect::new(
+            interior.x,
+            interior.y,
             float.frame.width,
             float.frame.height,
         )
-        .intersection(outer);
+        .intersection(interior);
         let is_focused = focused == Some(float.float_id);
         occlusion.start_terminal(&float.terminal_id, outer, (inner.x, inner.y));
         let mut composed = frame.to_ratatui_buffer()?;
@@ -185,8 +235,8 @@ impl ClientShellState {
             let settled = match (server, drag.phase) {
                 (None, _) => true,
                 (Some(_), ClientFloatDragPhase::Dragging) => false,
-                (Some(_), ClientFloatDragPhase::Moving { answered: true, .. }) => true,
-                (Some(server), ClientFloatDragPhase::Moving { origin, .. }) => server != origin,
+                (Some(_), ClientFloatDragPhase::Committing { answered: true, .. }) => true,
+                (Some(server), ClientFloatDragPhase::Committing { origin, .. }) => server != origin,
             };
             if settled {
                 self.floats.drag = None;
@@ -310,13 +360,12 @@ impl ClientShellState {
                         let surface = self.float_pane_surface();
                         self.floats.drag = Some(ClientFloatDrag {
                             float_id: hit.float_id,
-                            grab: (
-                                point.0.saturating_sub(hit.outer.x),
-                                point.1.saturating_sub(hit.outer.y),
-                            ),
-                            position: (
+                            gesture: ClientFloatGesture::for_border(hit.outer, point),
+                            rect: Rect::new(
                                 hit.outer.x.saturating_sub(surface.x),
                                 hit.outer.y.saturating_sub(surface.y),
+                                hit.outer.width,
+                                hit.outer.height,
                             ),
                             phase: ClientFloatDragPhase::Dragging,
                         });
@@ -360,26 +409,43 @@ impl ClientShellState {
         let Some(drag) = self.floats.drag.as_ref() else {
             return;
         };
-        let Some(size) = self
-            .floats
-            .get(drag.float_id)
-            .map(|float| (float.outer.width, float.outer.height))
-        else {
+        if self.floats.get(drag.float_id).is_none() {
             self.floats.drag = None;
             return;
-        };
-        let wanted = (
-            i32::from(point.0) - i32::from(surface.x) - i32::from(drag.grab.0),
-            i32::from(point.1) - i32::from(surface.y) - i32::from(drag.grab.1),
+        }
+        let mut rect = drag.rect;
+        let pointer = (
+            i32::from(point.0) - i32::from(surface.x),
+            i32::from(point.1) - i32::from(surface.y),
         );
-        let position = clamp_drag_position(surface, size, wanted);
+        match drag.gesture {
+            ClientFloatGesture::Move { grab } => {
+                let wanted = (pointer.0 - i32::from(grab.0), pointer.1 - i32::from(grab.1));
+                (rect.x, rect.y) = clamp_drag_position(surface, (rect.width, rect.height), wanted);
+            }
+            ClientFloatGesture::Resize { width, height } => {
+                let wanted = (
+                    pointer.0 - i32::from(rect.x) + 1,
+                    pointer.1 - i32::from(rect.y) + 1,
+                );
+                let size = clamp_resize(surface, (rect.x, rect.y), wanted);
+                if width {
+                    rect.width = size.0;
+                }
+                if height {
+                    rect.height = size.1;
+                }
+            }
+        }
         if let Some(drag) = self.floats.drag.as_mut() {
-            drag.position = position;
+            drag.rect = rect;
         }
     }
 
-    /// Sends the previewed position; the drag preview stays until the server confirms it.
+    /// Sends the previewed geometry; the drag preview stays until the server confirms it.
     fn commit_float_drag(&mut self, outcome: &mut ClientShellInput) {
+        use crate::api::schema::{FloatMoveParams, FloatResizeParams, Method};
+
         let Some(drag) = self.floats.drag.clone() else {
             return;
         };
@@ -387,23 +453,41 @@ impl ClientShellState {
             self.floats.drag = None;
             return;
         };
-        if (origin.0, origin.1) == drag.position {
+        let rect = drag.rect;
+        if origin == (rect.x, rect.y, rect.width, rect.height) {
             self.floats.drag = None;
             return;
         }
         if let Some(drag) = self.floats.drag.as_mut() {
-            drag.phase = ClientFloatDragPhase::Moving {
+            drag.phase = ClientFloatDragPhase::Committing {
                 origin,
                 answered: false,
             };
         }
+        let float_id = drag.float_id.to_string();
+        let pin = Method::FloatMove(FloatMoveParams {
+            float_id: float_id.clone(),
+            x: rect.x,
+            y: rect.y,
+        });
+        let method = match drag.gesture {
+            ClientFloatGesture::Move { .. } => pin,
+            ClientFloatGesture::Resize { .. } => {
+                let resize = Method::FloatResize(FloatResizeParams {
+                    float_id,
+                    width: Some(crate::popup_size::PopupSize::Cells(rect.width)),
+                    height: Some(crate::popup_size::PopupSize::Cells(rect.height)),
+                });
+                // A centered float recenters when resized, so pin its top-left first.
+                if self.supports_endpoint_method(&resize) {
+                    self.push_endpoint_method(pin, outcome);
+                }
+                resize
+            }
+        };
         let sent = self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::FloatMove(crate::api::schema::FloatMoveParams {
-                float_id: drag.float_id.to_string(),
-                x: drag.position.0,
-                y: drag.position.1,
-            }),
-            PendingEndpointKind::FloatMove {
+            method,
+            PendingEndpointKind::FloatGeometry {
                 float_id: drag.float_id,
             },
             outcome,
@@ -413,9 +497,9 @@ impl ClientShellState {
         }
     }
 
-    /// A failed move reverts the preview to the server position; a successful one lets the
-    /// next layer settle it.
-    pub(super) fn complete_float_move(&mut self, float_id: FloatId, succeeded: bool) -> bool {
+    /// A failed move or resize reverts the preview to the server geometry; a successful one
+    /// lets the next layer settle it.
+    pub(super) fn complete_float_geometry(&mut self, float_id: FloatId, succeeded: bool) -> bool {
         let Some(drag) = self
             .floats
             .drag
@@ -424,7 +508,7 @@ impl ClientShellState {
         else {
             return false;
         };
-        let ClientFloatDragPhase::Moving { answered, .. } = &mut drag.phase else {
+        let ClientFloatDragPhase::Committing { answered, .. } = &mut drag.phase else {
             return false;
         };
         if succeeded {
@@ -488,7 +572,7 @@ impl ClientShellState {
 
 #[cfg(test)]
 mod tests {
-    use super::clamp_drag_position;
+    use super::{clamp_drag_position, clamp_resize};
     use ratatui::layout::Rect;
 
     #[test]
@@ -498,5 +582,14 @@ mod tests {
         assert_eq!(clamp_drag_position(surface, (10, 5), (-4, -9)), (0, 0));
         assert_eq!(clamp_drag_position(surface, (10, 5), (12, 3)), (12, 3));
         assert_eq!(clamp_drag_position(surface, (10, 5), (99, 99)), (50, 15));
+    }
+
+    #[test]
+    fn resized_size_stays_between_the_minimum_and_the_pane_surface_edge() {
+        let surface = Rect::new(20, 1, 60, 20);
+
+        assert_eq!(clamp_resize(surface, (10, 5), (-3, 1)), (6, 4));
+        assert_eq!(clamp_resize(surface, (10, 5), (20, 8)), (20, 8));
+        assert_eq!(clamp_resize(surface, (10, 5), (99, 99)), (50, 15));
     }
 }
