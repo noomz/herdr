@@ -149,7 +149,7 @@ operations::define_operations! {
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false;
     FloatList(EmptyParams) => "float.list", false, false;
     FloatMove(FloatMoveParams) => "float.move", true, true;
-    FloatResize(FloatResizeParams) => "float.resize", true, false;
+    FloatResize(FloatResizeParams) => "float.resize", true, true;
     FloatHide(FloatTarget) => "float.hide", true, false;
     FloatShow(FloatTarget) => "float.show", true, false;
     FloatRaise(FloatTarget) => "float.raise", true, true;
