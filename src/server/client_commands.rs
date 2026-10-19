@@ -259,6 +259,10 @@ mod tests {
             Some("27927bc37b87eff57da932043a68d76fa4b5ac876247b5c03f178c706cbcba54")
         );
         assert_eq!(
+            actual.remove("float.resize").as_deref(),
+            Some("85be8445baca1ff67ad6c04de083c5ec53dcaea8afdf40f2783488e8a4ad62ec")
+        );
+        assert_eq!(
             actual.remove("float.raise").as_deref(),
             Some("a80f294e073aa8066a851a825df47ac9905022897240287c9f83cf361cf73728")
         );

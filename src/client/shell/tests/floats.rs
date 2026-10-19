@@ -805,3 +805,159 @@ fn float_images_leave_with_their_float_and_never_draw_without_one() {
     });
     assert!(placed(&mut state, (inner.x, inner.y)));
 }
+
+/// Presses at `grab`, drags to `to`, and returns the previewed outer rect relative to the
+/// pane surface, before release.
+fn preview_border_drag(state: &mut ClientShellState, grab: (u16, u16), to: (u16, u16)) -> Rect {
+    let down = click(
+        state,
+        MouseEventKind::Down(MouseButton::Left),
+        grab.0,
+        grab.1,
+    );
+    assert!(
+        float_inputs(&down).is_empty(),
+        "border clicks never reach the program"
+    );
+    click(state, MouseEventKind::Drag(MouseButton::Left), to.0, to.1);
+    let surface = state.layout(106, 20).pane_surface;
+    state.compose(106, 20).expect("drag preview");
+    let outer = hit(state, "term_a").outer;
+    Rect::new(
+        outer.x - surface.x,
+        outer.y - surface.y,
+        outer.width,
+        outer.height,
+    )
+}
+
+#[test]
+fn dragging_the_right_border_widens_only() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    let grab = (a.outer.right() - 1, a.outer.y + 2);
+
+    let preview = preview_border_drag(&mut state, grab, (grab.0 + 4, grab.1 + 2));
+
+    assert_eq!(preview, Rect::new(10, 3, 16, 5));
+}
+
+#[test]
+fn dragging_the_bottom_border_heightens_only() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    let grab = (a.outer.x + 4, a.outer.bottom() - 1);
+
+    let preview = preview_border_drag(&mut state, grab, (grab.0 + 5, grab.1 + 3));
+
+    assert_eq!(preview, Rect::new(10, 3, 12, 8));
+}
+
+#[test]
+fn dragging_the_bottom_right_corner_resizes_both_axes() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    let grab = (a.outer.right() - 1, a.outer.bottom() - 1);
+
+    let preview = preview_border_drag(&mut state, grab, (grab.0 + 5, grab.1 + 2));
+
+    assert_eq!(preview, Rect::new(10, 3, 17, 7));
+}
+
+#[test]
+fn a_resize_stops_at_the_float_minimum_and_the_pane_surface_edge() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let surface = state.layout(106, 20).pane_surface;
+    let a = hit(&state, "term_a");
+    let grab = (a.outer.right() - 1, a.outer.bottom() - 1);
+
+    let shrunk = preview_border_drag(&mut state, grab, (a.outer.x, a.outer.y));
+    assert_eq!(shrunk, Rect::new(10, 3, 6, 4));
+
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        500,
+        500,
+    );
+    state.compose(106, 20).expect("grown preview");
+    let grown = hit(&state, "term_a").outer;
+    assert_eq!(
+        grown,
+        Rect::new(a.outer.x, a.outer.y, surface.width - 10, surface.height - 3)
+    );
+}
+
+#[test]
+fn the_title_top_border_and_left_border_still_move_without_resizing() {
+    let fixture = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&fixture, "term_a");
+    let grabs = [
+        ("title", (a.outer.x + 4, a.outer.y)),
+        ("top-right corner", (a.outer.right() - 1, a.outer.y)),
+        ("left border", (a.outer.x, a.outer.y + 2)),
+    ];
+
+    for (name, grab) in grabs {
+        let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+        let preview = preview_border_drag(&mut state, grab, (grab.0 + 3, grab.1 + 1));
+        assert_eq!(preview, Rect::new(13, 4, 12, 5), "{name} moves the float");
+
+        let up = click(
+            &mut state,
+            MouseEventKind::Up(MouseButton::Left),
+            grab.0 + 3,
+            grab.1 + 1,
+        );
+        assert!(
+            matches!(
+                &endpoint_methods(&up)[..],
+                [crate::api::schema::Method::FloatMove(params)] if (params.x, params.y) == (13, 4)
+            ),
+            "{name} commits a move only"
+        );
+    }
+}
+
+#[test]
+fn releasing_a_resize_pins_the_top_left_then_commits_through_float_resize() {
+    use crate::popup_size::PopupSize;
+
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let a = hit(&state, "term_a");
+    let grab = (a.outer.right() - 1, a.outer.bottom() - 1);
+    preview_border_drag(&mut state, grab, (grab.0 + 5, grab.1 + 2));
+
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        grab.0 + 5,
+        grab.1 + 2,
+    );
+    let id = fid("term_a").to_string();
+    assert!(matches!(
+        &endpoint_methods(&up)[..],
+        [
+            crate::api::schema::Method::FloatMove(pin),
+            crate::api::schema::Method::FloatResize(resize),
+        ] if pin.float_id == id
+            && (pin.x, pin.y) == (10, 3)
+            && resize.float_id == id
+            && resize.width == Some(PopupSize::Cells(17))
+            && resize.height == Some(PopupSize::Cells(7))
+    ));
+    state.compose(106, 20).expect("held preview");
+    assert_eq!(
+        hit(&state, "term_a").outer,
+        Rect::new(a.outer.x, a.outer.y, 17, 7),
+        "the preview holds until the server confirms"
+    );
+
+    let mut resized = float("term_a", 10, 3, "pip");
+    resized.outer.width = 17;
+    resized.outer.height = 7;
+    state.set_float_layer(FloatsSurface {
+        floats: vec![resized],
+    });
+    assert!(state.floats.drag.is_none());
+}

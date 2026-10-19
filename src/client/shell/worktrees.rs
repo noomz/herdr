@@ -540,7 +540,7 @@ impl ClientShellState {
                 | PendingEndpointKind::PaneLinkResolve { .. }
                 | PendingEndpointKind::CopyMotion { .. }
                 | PendingEndpointKind::CopySearch { .. }
-                | PendingEndpointKind::FloatMove { .. },
+                | PendingEndpointKind::FloatGeometry { .. },
                 Err(_),
             ) => true,
         }

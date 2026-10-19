@@ -58,6 +58,9 @@ pub(crate) enum FloatPosition {
     },
 }
 
+/// The smallest outer size a popup or float resolves to, in cells.
+pub(crate) const MIN_FLOAT_OUTER: (u16, u16) = (6, 4);
+
 pub(crate) fn resolve_popup_geometry(
     width: Option<PopupSize>,
     height: Option<PopupSize>,
@@ -73,19 +76,20 @@ pub(crate) fn resolve_float_geometry(
     position: FloatPosition,
     area: Rect,
 ) -> Option<PopupResolvedGeometry> {
-    let default_width = area.width.saturating_div(2).max(6);
-    let default_height = area.height.saturating_div(2).max(4);
+    let (min_width, min_height) = MIN_FLOAT_OUTER;
+    let default_width = area.width.saturating_div(2).max(min_width);
+    let default_height = area.height.saturating_div(2).max(min_height);
     let outer_width = width
         .map(|width| width.resolve(area.width))
         .unwrap_or(default_width)
-        .max(6)
+        .max(min_width)
         .min(area.width);
     let outer_height = height
         .map(|height| height.resolve(area.height))
         .unwrap_or(default_height)
-        .max(4)
+        .max(min_height)
         .min(area.height);
-    if outer_width < 6 || outer_height < 4 {
+    if outer_width < min_width || outer_height < min_height {
         return None;
     }
 
