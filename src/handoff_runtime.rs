@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HandoffRuntimeState {
     pub pane_id: u32,
+    /// Absent from manifests written before terminal ids survived handoff; the
+    /// importer then mints a fresh one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<crate::terminal::TerminalId>,
     pub child_pid: u32,
     pub rows: u16,
     pub cols: u16,
