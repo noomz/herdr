@@ -2052,6 +2052,19 @@ impl HeadlessServer {
                 terminal_id,
                 takeover,
             } => self.attach_terminal_client(client_id, terminal_id, takeover),
+            ServerEvent::ClientAttachGraphics { client_id } => {
+                let Some(client) = self.clients.get_mut(&client_id) else {
+                    return false;
+                };
+                if !matches!(client.mode, ClientConnectionMode::TerminalAttach { .. })
+                    || client.direct_terminal_graphics.is_some()
+                {
+                    return false;
+                }
+                client.direct_terminal_graphics =
+                    Some(crate::kitty_graphics::HostGraphicsCache::default());
+                true
+            }
             ServerEvent::ClientObserveTerminal { client_id, target } => {
                 self.observe_terminal_client(client_id, target)
             }
