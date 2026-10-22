@@ -858,6 +858,7 @@ impl HeadlessServer {
             }
             let mut surface_parts = None;
             let mut float_layer = None;
+            let mut next_direct_graphics = None;
             let frame = match mode {
                 ClientConnectionMode::ClientShell => {
                     let crate::server::client_shell::RenderedPaneSurface {
@@ -931,12 +932,25 @@ impl HeadlessServer {
                         continue;
                     }
                     let frame_started = crate::render_prof::timer();
-                    let frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+                    let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(
                         &buffer,
                         cursor,
                         &hyperlinks,
                     );
                     crate::render_prof::duration_since("full_render.frame_build", frame_started);
+                    // Encode against a copy so a frame that is never sent leaves the
+                    // delivered-image record untouched for the next attempt.
+                    if let Some(mut cache) = self
+                        .clients
+                        .get(&client_id)
+                        .and_then(|client| client.direct_terminal_graphics.clone())
+                    {
+                        let graphics = crate::kitty_graphics::encode_direct_terminal_graphics(
+                            &mut cache, runtime, area, cell_size,
+                        );
+                        frame.graphics = graphics.bytes;
+                        next_direct_graphics = Some((cache, graphics.pending));
+                    }
                     frame
                 }
             };
@@ -944,6 +958,7 @@ impl HeadlessServer {
             if let Some((_, _, _, graphics, _, _)) = &surface_parts {
                 self.supersede_changed_native_geometry(client_id, graphics);
             }
+            let has_direct_graphics = !frame.graphics.is_empty();
             let mut native_upload =
                 surface_parts
                     .as_mut()
@@ -985,6 +1000,10 @@ impl HeadlessServer {
                     client.render_state.prepare_frame(frame)
                 };
             let Some(mut prepared) = prepared else {
+                // Nothing was encoded for the client to miss, so the copy is current.
+                if let Some((cache, _)) = next_direct_graphics.filter(|_| !has_direct_graphics) {
+                    client.direct_terminal_graphics = Some(cache);
+                }
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
                 if let Some((layer, framed)) = float_layer {
@@ -998,7 +1017,7 @@ impl HeadlessServer {
                 }
                 continue;
             };
-            let max = if has_graphics {
+            let max = if has_graphics || has_direct_graphics {
                 graphics_frame_limit
             } else {
                 crate::protocol::MAX_FRAME_SIZE
@@ -1113,11 +1132,16 @@ impl HeadlessServer {
                     if let Some(delivery) = next_shell_graphics_delivery {
                         client.shell_graphics_delivery = delivery;
                     }
+                    let mut direct_graphics_pending = false;
+                    if let Some((cache, pending)) = next_direct_graphics {
+                        client.direct_terminal_graphics = Some(cache);
+                        direct_graphics_pending = pending;
+                    }
                     client.render_state.commit_sent_frame(prepared);
                     if let Some((layer, _)) = float_layer {
                         client.shell_floats = Some(layer);
                     }
-                    if shell_graphics_pending || shell_assets_deferred {
+                    if shell_graphics_pending || shell_assets_deferred || direct_graphics_pending {
                         client.defer_full_render();
                     } else {
                         client.clear_deferred_render();

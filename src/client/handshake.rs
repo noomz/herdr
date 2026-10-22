@@ -155,6 +155,21 @@ pub(crate) fn probe_endpoint_negotiation(
     ))
 }
 
+/// The opt-in a direct terminal attach client sends after `AttachTerminal` so the server
+/// forwards the terminal's Kitty images. Placement needs the host cell size in pixels.
+pub(super) fn attach_graphics_opt_in(
+    kitty_graphics_enabled: bool,
+    cell_width_px: u32,
+    cell_height_px: u32,
+) -> Option<ClientMessage> {
+    (kitty_graphics_enabled && cell_width_px > 0 && cell_height_px > 0).then(|| {
+        ClientMessage::EndpointControl {
+            kind: crate::protocol::endpoint::ATTACH_GRAPHICS_KIND.into(),
+            data: String::new(),
+        }
+    })
+}
+
 pub(super) struct HandshakePixelCapabilities {
     pub(super) exact_geometry: bool,
     pub(super) sgr_mouse: bool,
@@ -471,6 +486,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn attach_graphics_opt_in_requires_kitty_graphics_and_known_cell_size() {
+        assert!(matches!(
+            attach_graphics_opt_in(true, 8, 16),
+            Some(ClientMessage::EndpointControl { kind, data })
+                if kind == crate::protocol::endpoint::ATTACH_GRAPHICS_KIND && data.is_empty()
+        ));
+        assert!(attach_graphics_opt_in(false, 8, 16).is_none());
+        assert!(attach_graphics_opt_in(true, 0, 16).is_none());
+        assert!(attach_graphics_opt_in(true, 8, 0).is_none());
     }
 
     #[test]

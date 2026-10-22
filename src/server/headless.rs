@@ -1766,7 +1766,22 @@ impl HeadlessServer {
         }
     }
 
+    /// Removes images a direct terminal client still shows before its stream ends.
+    fn clear_direct_terminal_graphics(&mut self, client_id: u64) {
+        let Some(bytes) = self
+            .clients
+            .get_mut(&client_id)
+            .and_then(|client| client.direct_terminal_graphics.take())
+            .map(|mut cache| cache.clear_bytes())
+            .filter(|bytes| !bytes.is_empty())
+        else {
+            return;
+        };
+        self.send_to_client(client_id, ServerMessage::Graphics { bytes });
+    }
+
     fn send_terminal_stream_detach_shutdown(&mut self, client_id: u64) {
+        self.clear_direct_terminal_graphics(client_id);
         if matches!(
             self.clients.get(&client_id).map(|client| &client.mode),
             Some(
@@ -1869,6 +1884,7 @@ impl HeadlessServer {
                 return false;
             }
             if existing_owner != client_id {
+                self.clear_direct_terminal_graphics(existing_owner);
                 self.send_to_client(
                     existing_owner,
                     ServerMessage::ServerShutdown {
@@ -2125,6 +2141,19 @@ impl HeadlessServer {
                 terminal_id,
                 takeover,
             } => self.attach_terminal_client(client_id, terminal_id, takeover),
+            ServerEvent::ClientAttachGraphics { client_id } => {
+                let Some(client) = self.clients.get_mut(&client_id) else {
+                    return false;
+                };
+                if !matches!(client.mode, ClientConnectionMode::TerminalAttach { .. })
+                    || client.direct_terminal_graphics.is_some()
+                {
+                    return false;
+                }
+                client.direct_terminal_graphics =
+                    Some(crate::kitty_graphics::HostGraphicsCache::default());
+                true
+            }
             ServerEvent::ClientObserveTerminal { client_id, target } => {
                 self.observe_terminal_client(client_id, target)
             }

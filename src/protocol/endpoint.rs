@@ -31,6 +31,9 @@ pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+/// A direct terminal attach client asks the server to forward the attached terminal's Kitty
+/// images. Older servers ignore it, so old and new peers keep text-only attach.
+pub const ATTACH_GRAPHICS_KIND: &str = "endpoint.attach-graphics.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {

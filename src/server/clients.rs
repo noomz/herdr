@@ -146,6 +146,8 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_graphics_delivery: crate::kitty_graphics::surface::DeliveryCache,
     /// Passive eligibility for audited local Kitty regular-file graphics.
     pub(crate) direct_graphics: bool,
+    /// Kitty images delivered to a direct terminal client that opted in to graphics.
+    pub(crate) direct_terminal_graphics: Option<crate::kitty_graphics::HostGraphicsCache>,
     /// Whether this frontend preserves exact SGR pixel reports.
     pub(crate) pixel_mouse: bool,
     /// Last host terminal default colors reported by this client.
@@ -234,6 +236,7 @@ impl ClientConnection {
             render_state: ClientRenderState::new(render_encoding),
             shell_graphics_delivery: crate::kitty_graphics::surface::DeliveryCache::default(),
             direct_graphics: false,
+            direct_terminal_graphics: None,
             pixel_mouse: false,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_terminal_appearance: None,

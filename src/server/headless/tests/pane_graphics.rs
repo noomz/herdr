@@ -641,3 +641,140 @@ async fn mouse_capture_stays_cell_based_without_host_pixel_capability() {
         }
     ));
 }
+
+const ATTACH_KITTY_IMAGE: &[u8] =
+    b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,C=1,q=2;/wAA/w==\x1b\\";
+
+fn connect_terminal_attach_client(
+    server: &mut HeadlessServer,
+    target: &str,
+    graphics_opt_in: bool,
+) -> (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let (writer, control_rx, render_rx) = test_client_writer();
+    server.handle_server_event(ServerEvent::ClientConnected {
+        client_id: 7,
+        cols: 80,
+        rows: 24,
+        cell_width_px: 10,
+        cell_height_px: 20,
+        pixel_mouse: false,
+        writer,
+    });
+    assert!(
+        server.handle_server_event(ServerEvent::ClientAttachTerminal {
+            client_id: 7,
+            terminal_id: target.to_owned(),
+            takeover: false,
+        })
+    );
+    if graphics_opt_in {
+        assert!(server.handle_server_event(ServerEvent::ClientAttachGraphics { client_id: 7 }));
+    }
+    server.render_and_stream();
+    let ServerMessage::Terminal(baseline) = read_server_message(
+        render_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("attach baseline frame"),
+    ) else {
+        panic!("expected terminal baseline frame");
+    };
+    assert!(!String::from_utf8_lossy(&baseline.bytes).contains("\x1b_G"));
+    (control_rx, render_rx)
+}
+
+#[test]
+fn terminal_attach_forwards_a_graphics_only_kitty_change_once_after_opt_in() {
+    with_terminal_session_test_server(|server, terminal_id, target, _| {
+        let (_control_rx, render_rx) = connect_terminal_attach_client(server, &target, true);
+
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(ATTACH_KITTY_IMAGE);
+        server.render_and_stream();
+        let ServerMessage::Terminal(frame) = read_server_message(
+            render_rx
+                .recv_timeout(Duration::from_millis(100))
+                .expect("graphics-only change must still produce a frame"),
+        ) else {
+            panic!("expected terminal frame");
+        };
+        let bytes = String::from_utf8_lossy(&frame.bytes);
+        assert!(
+            bytes.contains("\x1b_Ga=t,t=d,f=32,s=1,v=1,"),
+            "image upload missing: {bytes:?}"
+        );
+        assert!(
+            bytes.contains("/wAA/w=="),
+            "image pixels missing: {bytes:?}"
+        );
+        assert!(
+            bytes.contains("\x1b[1;1H\x1b_Ga=p,"),
+            "placement missing: {bytes:?}"
+        );
+
+        server.render_and_stream();
+        assert!(
+            render_rx.try_recv().is_err(),
+            "an unchanged image must not be uploaded again"
+        );
+    });
+}
+
+#[test]
+fn terminal_attach_without_graphics_opt_in_keeps_text_only_frames() {
+    with_terminal_session_test_server(|server, terminal_id, target, _| {
+        let (_control_rx, render_rx) = connect_terminal_attach_client(server, &target, false);
+
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(ATTACH_KITTY_IMAGE);
+        server.render_and_stream();
+        if let Ok(bytes) = render_rx.try_recv() {
+            let ServerMessage::Terminal(frame) = read_server_message(bytes) else {
+                panic!("expected terminal frame");
+            };
+            assert!(!String::from_utf8_lossy(&frame.bytes).contains("\x1b_G"));
+        }
+    });
+}
+
+#[test]
+fn terminal_attach_detach_deletes_forwarded_kitty_images() {
+    with_terminal_session_test_server(|server, terminal_id, target, _| {
+        let (control_rx, render_rx) = connect_terminal_attach_client(server, &target, true);
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(ATTACH_KITTY_IMAGE);
+        server.render_and_stream();
+        render_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("graphics frame");
+        while control_rx.try_recv().is_ok() {}
+
+        assert!(server.handle_server_event(ServerEvent::ClientDetach { client_id: 7 }));
+        let ServerMessage::Graphics { bytes } = read_server_message(
+            control_rx
+                .try_recv()
+                .expect("detach clears forwarded images"),
+        ) else {
+            panic!("expected graphics cleanup before shutdown");
+        };
+        assert!(String::from_utf8_lossy(&bytes).contains("\x1b_Ga=d,d=I,i="));
+        assert!(matches!(
+            read_server_message(control_rx.try_recv().expect("detach shutdown")),
+            ServerMessage::ServerShutdown { .. }
+        ));
+    });
+}

@@ -129,7 +129,7 @@ use frame_output::{
 };
 pub(crate) use handshake::probe_endpoint_negotiation;
 use handshake::{
-    client_shell_keybinding_source, do_handshake, is_remote_client_process,
+    attach_graphics_opt_in, client_shell_keybinding_source, do_handshake, is_remote_client_process,
     HandshakePixelCapabilities,
 };
 #[cfg(test)]
@@ -206,9 +206,10 @@ fn run_client_with_mode(
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
     let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
-    let kitty_graphics_enabled =
-        loaded_config.config.kitty_graphics_enabled() && client_rendered_shell;
-    let pixel_geometry_enabled = kitty_graphics_enabled || attach_escape.is_some();
+    // Direct attach shows server-forwarded Kitty images but keeps exact-only pixel geometry.
+    let kitty_graphics_enabled = loaded_config.config.kitty_graphics_enabled();
+    let pixel_geometry_fallback = kitty_graphics_enabled && client_rendered_shell;
+    let pixel_geometry_enabled = pixel_geometry_fallback || attach_escape.is_some();
     let endpoint_keybindings = shell_config
         .as_ref()
         .is_some_and(shell::ClientShellConfig::uses_endpoint_keybindings);
@@ -219,7 +220,7 @@ fn run_client_with_mode(
         host_cursor,
         kitty_graphics_enabled,
         pixel_geometry_enabled,
-        pixel_geometry_fallback: kitty_graphics_enabled,
+        pixel_geometry_fallback,
         mouse_capture_active: mouse_capture,
         host_escape_disambiguation_active: false,
         host_sgr_pixel_mouse: None,
@@ -257,7 +258,7 @@ fn run_client_with_mode(
 
     // Get one coherent geometry snapshot before raw mode changes the terminal.
     let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) =
-        initial_terminal_geometry(pixel_geometry_enabled, kitty_graphics_enabled)?;
+        initial_terminal_geometry(pixel_geometry_enabled, pixel_geometry_fallback)?;
 
     let direct_attach = attach_escape.is_some();
     let mut terminal_guard = if direct_attach {
@@ -319,6 +320,11 @@ fn run_client_with_mode(
                         takeover,
                     },
                 )?;
+                if let Some(opt_in) =
+                    attach_graphics_opt_in(kitty_graphics_enabled, cell_width_px, cell_height_px)
+                {
+                    write_to_server(&mut stream, &opt_in)?;
+                }
             }
             Ok((stream, handshake))
         })

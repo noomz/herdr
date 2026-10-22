@@ -455,6 +455,8 @@ pub(crate) enum ServerEvent {
         terminal_id: String,
         takeover: bool,
     },
+    /// A direct terminal client asked to receive the terminal's Kitty images.
+    ClientAttachGraphics { client_id: u64 },
     /// A client requested read-only observation of one terminal.
     ClientObserveTerminal { client_id: u64, target: String },
     /// A client requested writable control of one terminal.
@@ -1400,6 +1402,11 @@ fn client_read_loop_with_endpoint_controls(
                     token: data,
                 }
             }
+            ClientMessage::EndpointControl { kind, .. }
+                if kind == crate::protocol::endpoint::ATTACH_GRAPHICS_KIND =>
+            {
+                ServerEvent::ClientAttachGraphics { client_id }
+            }
             ClientMessage::EndpointControl { kind, data } => {
                 let Some(response) = crate::server::client_endpoint_control::response(&kind, data)
                 else {
@@ -2271,6 +2278,41 @@ mod tests {
 
         assert!(matches!(
             recv_server_event(&mut server_event_rx, "detach after future control"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_routes_attach_graphics_opt_in_to_the_server() {
+        let (mut client_stream, server_stream, _path) =
+            local_stream_pair("client-read-attach-graphics");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind: crate::protocol::endpoint::ATTACH_GRAPHICS_KIND.into(),
+                data: String::new(),
+            },
+        )
+        .unwrap();
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "attach graphics opt-in"),
+            ServerEvent::ClientAttachGraphics { client_id: 7 }
+        ));
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach after opt-in"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
         handle
