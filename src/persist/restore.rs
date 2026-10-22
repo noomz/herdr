@@ -2044,6 +2044,117 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    struct OnePaneHandoff {
+        source_terminal_id: TerminalId,
+        workspaces: Vec<Workspace>,
+        terminals: HashMap<TerminalId, TerminalState>,
+        runtimes: HashMap<TerminalId, TerminalRuntime>,
+    }
+
+    #[cfg(unix)]
+    fn handoff_one_pane(manifest_terminal_id: bool) -> OnePaneHandoff {
+        let (snapshot, _) = snapshot_with_saved_pane_history();
+        let (events, _events_rx) = mpsc::channel(32);
+        let (workspaces, terminals, runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            4096,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            false,
+            events.clone(),
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::from(runtimes);
+        let snapshot = crate::persist::capture(&workspaces, &terminals, &runtimes, Some(0), 0);
+        let (&pane_id, pane) = workspaces[0].tabs[0].panes.iter().next().unwrap();
+        let source_terminal_id = pane.attached_terminal_id.clone();
+        let runtime = runtimes.get(&source_terminal_id).unwrap();
+        runtime
+            .pause_handoff_reader(std::time::Duration::from_secs(2))
+            .unwrap();
+        let mut wire = serde_json::to_value(runtime.handoff_runtime_state(pane_id.raw())).unwrap();
+        if manifest_terminal_id {
+            wire["terminal_id"] = serde_json::to_value(&source_terminal_id).unwrap();
+        }
+        let mut imports = HashMap::from([(
+            pane_id.raw(),
+            crate::handoff_runtime::ImportedHandoffRuntime {
+                master_fd: runtime.duplicate_handoff_fd().unwrap(),
+                state: serde_json::from_value(wire).unwrap(),
+            },
+        )]);
+        let (workspaces, terminals, restored_runtimes) = restore_handoff(
+            &snapshot,
+            4096,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            &mut imports,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .expect("handoff import should restore the pane");
+        drop(runtimes);
+        for workspace in &workspaces {
+            workspace.assert_invariants_for_test();
+        }
+        OnePaneHandoff {
+            source_terminal_id,
+            workspaces,
+            terminals,
+            runtimes: restored_runtimes,
+        }
+    }
+
+    #[cfg(unix)]
+    fn restored_terminal_id(restored: &OnePaneHandoff) -> TerminalId {
+        let pane = restored.workspaces[0].tabs[0]
+            .panes
+            .values()
+            .next()
+            .unwrap();
+        let terminal_id = pane.attached_terminal_id.clone();
+        assert!(
+            restored.terminals.contains_key(&terminal_id),
+            "the restored pane must point at a restored terminal"
+        );
+        assert!(
+            restored.runtimes.contains_key(&terminal_id),
+            "the imported runtime must be keyed by the pane's terminal id"
+        );
+        terminal_id
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn live_handoff_keeps_terminal_id_from_manifest() {
+        let restored = handoff_one_pane(true);
+
+        assert_eq!(
+            restored_terminal_id(&restored),
+            restored.source_terminal_id,
+            "terminal ids are public API identity and must survive live handoff"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn live_handoff_without_manifest_terminal_id_mints_a_fresh_one() {
+        let restored = handoff_one_pane(false);
+
+        assert_ne!(
+            restored_terminal_id(&restored),
+            restored.source_terminal_id,
+            "a manifest from an older exporter carries no terminal id, so the importer mints one"
+        );
+    }
+
+
     #[tokio::test]
     async fn restore_seeds_saved_pane_history_into_runtime() {
         let (snapshot, history) = snapshot_with_saved_pane_history();
