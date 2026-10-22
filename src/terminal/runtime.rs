@@ -448,6 +448,10 @@ impl TerminalRuntime {
         self.0.link_target_at(col, row)
     }
 
+    pub(crate) fn kitty_graphics_may_have_placements(&self) -> bool {
+        self.0.kitty_graphics_may_have_placements()
+    }
+
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         needs_data: F,

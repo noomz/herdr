@@ -162,8 +162,12 @@ pub(super) fn attach_graphics_opt_in(
     cell_width_px: u32,
     cell_height_px: u32,
 ) -> Option<ClientMessage> {
-    let _ = (kitty_graphics_enabled, cell_width_px, cell_height_px);
-    None
+    (kitty_graphics_enabled && cell_width_px > 0 && cell_height_px > 0).then(|| {
+        ClientMessage::EndpointControl {
+            kind: crate::protocol::endpoint::ATTACH_GRAPHICS_KIND.into(),
+            data: String::new(),
+        }
+    })
 }
 
 pub(super) struct HandshakePixelCapabilities {

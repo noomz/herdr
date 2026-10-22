@@ -267,6 +267,96 @@ fn encode_graphics_output(
     output
 }
 
+/// Kitty graphics bytes for a client that shows one terminal across its whole screen.
+pub(crate) struct DirectTerminalGraphics {
+    pub(crate) bytes: Vec<u8>,
+    /// Some images did not fit this frame's transfer budget and wait for a later frame.
+    pub(crate) pending: bool,
+}
+
+/// Encodes `runtime`'s visible placements against what `cache` already delivered.
+/// Pixel data is read only for images the client lacks, within one graphics frame budget.
+pub(crate) fn encode_direct_terminal_graphics(
+    cache: &mut HostGraphicsCache,
+    runtime: &crate::terminal::TerminalRuntime,
+    area: Rect,
+    cell_size: HostCellSize,
+) -> DirectTerminalGraphics {
+    let nothing = |bytes| DirectTerminalGraphics {
+        bytes,
+        pending: false,
+    };
+    let cache_empty = cache.images.is_empty() && cache.placements.is_empty();
+    if !cell_size.is_known() {
+        return nothing(if cache_empty {
+            Vec::new()
+        } else {
+            cache.clear_bytes()
+        });
+    }
+    if cache_empty && !runtime.kitty_graphics_may_have_placements() {
+        return nothing(Vec::new());
+    }
+    // Host image ids hash a pane id; a direct terminal client shows exactly one terminal.
+    let pane_id = PaneId::from_raw(0);
+    let scrollback_offset = runtime
+        .scroll_metrics()
+        .map_or(0, |metrics| metrics.offset_from_bottom as u32);
+    let mut requested = HashSet::new();
+    let mut payload_bytes = 0usize;
+    let mut pending = false;
+    let placements = runtime
+        .kitty_image_placements_with_data_filter(|descriptor| {
+            let signature =
+                image_signature_from_descriptor(descriptor, kitty_format_code(descriptor.format));
+            let host_id = host_image_id_for_signature(pane_id, signature);
+            if cache.images.get(&host_id) == Some(&signature) || !requested.insert(host_id) {
+                return false;
+            }
+            let encoded_size = image_transfer_estimated_size(descriptor.data_len);
+            if encoded_size > HEADLESS_GRAPHICS_TRANSACTION_BUDGET {
+                return false;
+            }
+            if payload_bytes.saturating_add(encoded_size) > HEADLESS_GRAPHICS_TRANSACTION_BUDGET {
+                pending = true;
+                return false;
+            }
+            payload_bytes = payload_bytes.saturating_add(encoded_size);
+            true
+        })
+        .into_iter()
+        .map(|placement| HostPlacement {
+            raw_data: None,
+            pane_id,
+            host_image_id: None,
+            area,
+            cell_size,
+            source_key: HostSourceKey::Terminal {
+                pane_id,
+                image_id: placement.image_id,
+            },
+            placement,
+            scrollback_offset,
+        })
+        .collect::<Vec<_>>();
+    if placements.is_empty() && cache_empty {
+        return nothing(Vec::new());
+    }
+    let output = encode_graphics_output(cache, &placements).into_inline_bytes();
+    if output.is_empty() {
+        return DirectTerminalGraphics {
+            bytes: output,
+            pending,
+        };
+    }
+    // Placements move the cursor, so keep the text frame's cursor where it left it.
+    let mut bytes = Vec::with_capacity(output.len() + 4);
+    bytes.extend_from_slice(b"\x1b7");
+    bytes.extend_from_slice(&output);
+    bytes.extend_from_slice(b"\x1b8");
+    DirectTerminalGraphics { bytes, pending }
+}
+
 impl HostGraphicsCache {
     fn reset_replay(&mut self) {
         self.replay_placements = false;
