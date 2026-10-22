@@ -627,6 +627,7 @@ mod tests {
             id: None,
             runtime: crate::handoff_runtime::HandoffRuntimeState {
                 pane_id: 1,
+                terminal_id: None,
                 child_pid: 0,
                 rows: 6,
                 cols: 17,
