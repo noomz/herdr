@@ -158,6 +158,44 @@ impl HeadlessServer {
             });
             location.reconcile(&topology);
         }
+        self.resize_popup_for_owner_tab_viewer();
+    }
+
+    /// Spawned popups know only rows and cols, so size the PTY, including
+    /// pixels, from the shell client showing the owner tab.
+    fn resize_popup_for_owner_tab_viewer(&self) {
+        let Some(owner) = self.popup_owner_tab_id.as_deref() else {
+            return;
+        };
+        let viewer = self
+            .tab_geometry_controllers
+            .get(owner)
+            .copied()
+            .filter(|&client_id| self.client_views_shell_tab(client_id, owner))
+            .or_else(|| {
+                self.clients
+                    .keys()
+                    .copied()
+                    .filter(|&client_id| self.client_views_shell_tab(client_id, owner))
+                    .min()
+            });
+        let Some(client) = viewer.and_then(|client_id| self.clients.get(&client_id)) else {
+            return;
+        };
+        let (cols, rows) = client.terminal_size;
+        let cell_size = if client.cell_size.is_known() {
+            client.cell_size
+        } else {
+            crate::kitty_graphics::HostCellSize::default()
+        };
+        let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
+    }
+
+    fn client_views_shell_tab(&self, client_id: u64, tab_id: &str) -> bool {
+        self.clients
+            .get(&client_id)
+            .is_some_and(|client| client.is_active_shell_client() && client.writer.is_some())
+            && self.shell_tab_id_for_client(client_id).as_deref() == Some(tab_id)
     }
 
     pub(super) fn focus_all_shell_clients_on_default_target(&mut self) {
