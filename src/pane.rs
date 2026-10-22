@@ -2297,6 +2297,7 @@ impl PaneRuntime {
         let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
         crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
+            terminal_id: None,
             child_pid,
             rows,
             cols,
@@ -2511,6 +2512,7 @@ impl PaneRuntime {
         let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
         let crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
+            terminal_id: _,
             child_pid,
             rows,
             cols,

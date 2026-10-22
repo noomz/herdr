@@ -751,6 +751,25 @@ fn live_handoff_unknown_pane_exit_preserves_session_on_shutdown() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminal_ids_by_pane(socket_path: &Path) -> std::collections::BTreeMap<String, String> {
+    let panes = request(
+        socket_path,
+        serde_json::json!({"id":"test:pane:list","method":"pane.list","params":{}}),
+    );
+    panes["result"]["panes"]
+        .as_array()
+        .expect("pane.list should return panes")
+        .iter()
+        .map(|pane| {
+            (
+                pane["pane_id"].as_str().unwrap().to_string(),
+                pane["terminal_id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
     const PANES: usize = 70;
@@ -795,6 +814,8 @@ fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
         ));
     }
     wait_for_server_ptmx_fd_count(server_pid, PANES, Duration::from_secs(60));
+    let terminals_before = terminal_ids_by_pane(&api_socket);
+    assert_eq!(terminals_before.len(), PANES);
 
     assert_ok(request(
         &api_socket,
@@ -805,14 +826,10 @@ fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
     wait_for_api(&api_socket, Duration::from_secs(30));
     wait_for_server_ptmx_fd_count(replacement_pid, PANES, Duration::from_secs(30));
 
-    let panes = request(
-        &api_socket,
-        serde_json::json!({"id":"test:pane:list","method":"pane.list","params":{}}),
-    );
     assert_eq!(
-        panes["result"]["panes"].as_array().map(Vec::len),
-        Some(PANES),
-        "replacement server should report every pane after handoff"
+        terminal_ids_by_pane(&api_socket),
+        terminals_before,
+        "every pane should keep its terminal id across handoff"
     );
 
     let _ = request(
