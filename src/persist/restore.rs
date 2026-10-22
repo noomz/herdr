@@ -103,6 +103,7 @@ pub fn restore_handoff(
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> std::io::Result<RestoredSession> {
+    drop_duplicate_handoff_terminal_ids(imports);
     restore_with_imports_strict(
         snapshot,
         None,
@@ -116,6 +117,34 @@ pub fn restore_handoff(
         render_notify,
         render_dirty,
     )
+}
+
+/// Two panes claiming one terminal id would collapse into one terminal, so a
+/// claimed id that is not unique falls back to a freshly minted one.
+#[cfg(unix)]
+fn drop_duplicate_handoff_terminal_ids(
+    imports: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
+) {
+    let mut claims: HashMap<TerminalId, usize> = HashMap::new();
+    for imported in imports.values() {
+        if let Some(terminal_id) = &imported.state.terminal_id {
+            *claims.entry(terminal_id.clone()).or_default() += 1;
+        }
+    }
+    for imported in imports.values_mut() {
+        let repeated = imported
+            .state
+            .terminal_id
+            .as_ref()
+            .is_some_and(|terminal_id| claims.get(terminal_id).is_some_and(|&count| count > 1));
+        if repeated {
+            warn!(
+                pane_id = imported.state.pane_id,
+                "handoff manifest repeats a terminal id; minting a fresh one"
+            );
+            imported.state.terminal_id = None;
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -584,6 +613,12 @@ fn restore_tab(
         let handoff_agent_state = imported_runtime
             .as_ref()
             .and_then(|imported| imported.state.agent_state.clone());
+        #[cfg(unix)]
+        let handoff_terminal_id = imported_runtime
+            .as_ref()
+            .and_then(|imported| imported.state.terminal_id.clone());
+        #[cfg(not(unix))]
+        let handoff_terminal_id: Option<TerminalId> = None;
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -686,7 +721,7 @@ fn restore_tab(
 
         match runtime_result {
             Ok(runtime) => {
-                let terminal_id = TerminalId::alloc();
+                let terminal_id = handoff_terminal_id.unwrap_or_else(TerminalId::alloc);
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {
@@ -2154,6 +2189,46 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn handoff_import_mints_fresh_ids_for_repeated_terminal_ids() {
+        let import = |pane_id: u32, terminal_id: &str| {
+            (
+                pane_id,
+                crate::handoff_runtime::ImportedHandoffRuntime {
+                    master_fd: -1,
+                    state: serde_json::from_value(serde_json::json!({
+                        "pane_id": pane_id,
+                        "terminal_id": terminal_id,
+                        "child_pid": 0,
+                        "rows": 24,
+                        "cols": 80,
+                        "cell_width_px": 0,
+                        "cell_height_px": 0,
+                    }))
+                    .unwrap(),
+                },
+            )
+        };
+        let mut imports = HashMap::from([
+            import(1, "term_shared"),
+            import(2, "term_shared"),
+            import(3, "term_unique"),
+        ]);
+
+        drop_duplicate_handoff_terminal_ids(&mut imports);
+
+        let claimed = |pane_id: u32| {
+            imports[&pane_id]
+                .state
+                .terminal_id
+                .as_ref()
+                .map(|id| id.to_string())
+        };
+        assert_eq!(claimed(1), None);
+        assert_eq!(claimed(2), None);
+        assert_eq!(claimed(3).as_deref(), Some("term_unique"));
+    }
 
     #[tokio::test]
     async fn restore_seeds_saved_pane_history_into_runtime() {
