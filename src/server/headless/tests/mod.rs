@@ -3124,6 +3124,125 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
     shutdown_test_runtimes(&mut server);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_popup_opened_under_attached_shell_client_gets_cell_pixel_size() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            surface_reuse: false,
+            surface_delta: false,
+            surface_scroll: false,
+            client_id: 14,
+            surface_cols: 80,
+            surface_rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            surface_active: true,
+            writer,
+        })
+    );
+    let _snapshot = client_shell_snapshot(&control_rx);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let root =
+        std::env::temp_dir().join(format!("herdr-popup-pixels-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("herdr-plugin.toml"),
+        r#"
+id = "example.popup-pixels"
+name = "Popup Pixels"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Popup Pixels"
+placement = "popup"
+width = "80%"
+height = "50%"
+command = ["sh", "-c", "sleep 5"]
+"#,
+    )
+    .unwrap();
+    let request = |id: &str, method| {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        let message = api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: id.into(),
+                method,
+            },
+            respond_to,
+            response_write_complete: None,
+        };
+        (message, response_rx)
+    };
+    let (link, link_rx) = request(
+        "link",
+        api::schema::Method::PluginLink(api::schema::PluginLinkParams {
+            path: root.display().to_string(),
+            enabled: true,
+            source: None,
+        }),
+    );
+    server.handle_api_request_with_shutdown_check(link);
+    assert!(link_rx.recv().unwrap().contains("plugin_linked"));
+    let (open, open_rx) = request(
+        "open",
+        api::schema::Method::PluginPaneOpen(api::schema::PluginPaneOpenParams {
+            plugin_id: "example.popup-pixels".into(),
+            entrypoint: "board".into(),
+            placement: None,
+            width: None,
+            height: None,
+            workspace_id: None,
+            target_pane_id: None,
+            direction: None,
+            cwd: None,
+            focus: true,
+            env: std::collections::HashMap::new(),
+        }),
+    );
+    server.handle_api_request_with_shutdown_check(open);
+    let response = open_rx.recv().unwrap();
+    assert!(response.contains("\"ok\""), "popup open failed: {response}");
+
+    let popup = server.app.state.popup_pane.as_ref().expect("popup opened");
+    let expected = crate::popup_size::resolve_popup_geometry(
+        popup.width,
+        popup.height,
+        Rect::new(0, 0, 80, 24),
+    )
+    .expect("popup geometry")
+    .inner;
+    let runtime = server
+        .app
+        .terminal_runtimes
+        .get(&popup.terminal_id)
+        .expect("popup runtime");
+    assert_eq!(
+        runtime.pixel_size(),
+        Some((
+            u32::from(expected.width) * 8,
+            u32::from(expected.height) * 16
+        )),
+        "popup PTY must carry the attached client's cell pixel size"
+    );
+    shutdown_test_runtimes(&mut server);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
     let mut server = test_headless_server();
