@@ -769,6 +769,7 @@ fn terminal_ids_by_pane(socket_path: &Path) -> std::collections::BTreeMap<String
         .collect()
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn live_handoff_carries_more_panes_than_one_scm_rights_message() {
     const PANES: usize = 70;
