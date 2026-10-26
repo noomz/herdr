@@ -124,8 +124,6 @@ impl ClientShellState {
 
 struct EndpointAgentRow {
     endpoint_id: ClientEndpointId,
-    workspace_id: String,
-    workspace_label: String,
     machine_label: String,
     stale: bool,
     agent: super::agent_sidebar::AgentRow,
@@ -158,7 +156,7 @@ fn agent_rows(
         .flatten()
         .collect::<HashMap<_, _>>();
 
-    let mut rows = super::aggregate_navigation::aggregate_agent_rows(
+    super::aggregate_navigation::aggregate_agent_rows(
         endpoints,
         active_endpoint_id,
         config.agent_panel_sort,
@@ -170,96 +168,10 @@ fn agent_rows(
         agent.focused &= row.endpoint.endpoint_id == active_endpoint_id;
         Some(EndpointAgentRow {
             endpoint_id: row.endpoint.endpoint_id.clone(),
-            workspace_id: row.agent.workspace_id.clone(),
-            workspace_label: row
-                .endpoint
-                .snapshot
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.workspace_id == row.agent.workspace_id)
-                .map(|workspace| workspace.label.clone())
-                .unwrap_or_default(),
             machine_label: row.endpoint.label.to_owned(),
             stale: row.endpoint.stale(),
             agent,
         })
     })
-    .collect::<Vec<_>>();
-    realign_leading_group_headers(&mut rows);
-    rows
-}
-
-fn leading_group_header_line(
-    row: &super::agent_sidebar::AgentRow,
-) -> Option<&Vec<crate::ui::ResolvedToken>> {
-    let first = row.rows.first()?;
-    first
-        .iter()
-        .all(|token| {
-            matches!(
-                token.kind,
-                crate::ui::ResolvedTokenKind::Custom(_)
-                    | crate::ui::ResolvedTokenKind::Workspace(_)
-            )
-        })
-        .then_some(first)
-}
-
-fn header_line_text(line: &[crate::ui::ResolvedToken]) -> Option<&str> {
-    line.iter().find_map(|token| match &token.kind {
-        crate::ui::ResolvedTokenKind::Custom(value)
-        | crate::ui::ResolvedTokenKind::Workspace(value) => Some(value.as_str()),
-        _ => None,
-    })
-}
-
-fn realign_leading_group_headers(rows: &mut [EndpointAgentRow]) {
-    let mut start = 0;
-    while start < rows.len() {
-        let end = start
-            + rows[start + 1..]
-                .iter()
-                .take_while(|row| {
-                    row.endpoint_id == rows[start].endpoint_id
-                        && row.workspace_id == rows[start].workspace_id
-                })
-                .count()
-            + 1;
-        let workspace_label = rows[start].workspace_label.clone();
-        let header = rows[start..end]
-            .iter()
-            .find_map(|row| {
-                let line = leading_group_header_line(&row.agent)?;
-                (header_line_text(line) == Some(workspace_label.as_str())).then(|| line.clone())
-            })
-            .or_else(|| {
-                let mut found = None;
-                for row in &rows[start..end] {
-                    let Some(line) = leading_group_header_line(&row.agent) else {
-                        continue;
-                    };
-                    match &found {
-                        None => found = Some(line.clone()),
-                        Some(existing) if header_line_text(existing) == header_line_text(line) => {}
-                        Some(_) => return None,
-                    }
-                }
-                found
-            });
-        if let Some(header) = header {
-            let header_text = header_line_text(&header).map(str::to_owned);
-            for (offset, row) in rows[start..end].iter_mut().enumerate() {
-                let has_header = leading_group_header_line(&row.agent)
-                    .is_some_and(|line| header_line_text(line) == header_text.as_deref());
-                if offset == 0 {
-                    if !has_header {
-                        row.agent.rows.insert(0, header.clone());
-                    }
-                } else if has_header {
-                    row.agent.rows.remove(0);
-                }
-            }
-        }
-        start = end;
-    }
+    .collect()
 }
