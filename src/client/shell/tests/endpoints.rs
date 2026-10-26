@@ -1845,6 +1845,99 @@ fn selected_custom_sort_orders_rendering_and_indexed_navigation() {
 }
 
 #[test]
+fn activating_remote_view_keeps_workspace_group_header_on_first_row() {
+    use crate::api::schema::{AgentStatus, AgentViewSort, AgentViewSortField, AgentViewSortOrder};
+    use crate::config::AgentSidebarToken;
+
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![
+        vec![AgentSidebarToken::Custom("group_parent".into())],
+        vec![AgentSidebarToken::Agent],
+    ];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut head = agent("hermes-agent", AgentStatus::Idle, 1);
+    head.tokens = vec![
+        ("group_parent".into(), "GrpHead".into()),
+        ("sort_key".into(), "1".into()),
+    ];
+    let mut child = agent("theme-agent", AgentStatus::Working, 2);
+    child.pane_id = "pane_2".into();
+    child.focused = false;
+    child.tokens = vec![("sort_key".into(), "9".into())];
+    let mut local = snapshot();
+    local.agents = vec![head, child];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agent_view_label = Some("active".into());
+    remote.agents = vec![agent("remote idle", AgentStatus::Idle, 1)];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+    let mut view = current_workspace_view();
+    view.label = Some("active".into());
+    view.filter = None;
+    view.sort = vec![AgentViewSort {
+        field: AgentViewSortField::Token {
+            token: "sort_key".into(),
+        },
+        order: AgentViewSortOrder::Desc,
+    }];
+    state.set_test_endpoint_agent_view(&endpoint_id, Some(view));
+
+    let local_text = {
+        let frame = state.compose(100, 28).expect("local grouped frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        local_text.find("GrpHead").expect("group header")
+            < local_text.find("hermes-agent").expect("group head")
+            && local_text.find("hermes-agent").expect("group head")
+                < local_text.find("theme-agent").expect("group child"),
+        "frame: {local_text}"
+    );
+
+    assert!(state.activate_endpoint_projection(&endpoint_id));
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+    let remote_text = {
+        let frame = state.compose(100, 28).expect("remote view frame");
+        frame
+            .cells
+            .chunks(frame.width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let header = remote_text.find("GrpHead").expect("group header");
+    let theme = remote_text.find("theme-agent").expect("sorted child");
+    let hermes = remote_text.find("hermes-agent").expect("sorted head");
+    assert!(
+        header < theme && theme < hermes,
+        "group header must stay on the first displayed workspace row: {remote_text}"
+    );
+}
+
+#[test]
 fn selected_position_sort_uses_public_tab_and_pane_numbers() {
     use crate::api::schema::{
         AgentStatus, AgentViewBuiltinSortField, AgentViewSort, AgentViewSortField,
