@@ -88,6 +88,73 @@ pub fn validate_resume_argv(argv: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Script runtimes whose second argv element is a script path rather than a
+/// user-facing command (npm/brew CLI shims exec `node /path/to/cli.js ...`).
+fn is_script_runtime(command_name: &str) -> bool {
+    let name = command_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(command_name)
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "node" | "bun" | "deno" | "python" | "python3"
+    ) || name.starts_with("python3.")
+}
+
+/// Normalize a captured launcher process argv into the command a user would
+/// type: `node /opt/homebrew/lib/.../ccs.js work` becomes `ccs work` when a
+/// PATH entry resolves to that script. `resolve_shim` maps an invoked path to
+/// the PATH entry name owning it. Returns `None` when the argv cannot be
+/// reduced to a plain command.
+pub fn normalize_launcher_argv(
+    argv: &[String],
+    resolve_shim: &dyn Fn(&Path) -> Option<String>,
+) -> Option<Vec<String>> {
+    let command = argv.first()?;
+    if is_script_runtime(command) {
+        let script = argv.get(1)?;
+        let script_path = Path::new(script);
+        if !script_path.is_absolute() {
+            return None;
+        }
+        let shim = resolve_shim(script_path)?;
+        let mut normalized = vec![shim];
+        normalized.extend(argv.get(2..)?.iter().cloned());
+        Some(normalized)
+    } else if command.contains('/') || command.contains('\\') {
+        let shim = resolve_shim(Path::new(command))?;
+        let mut normalized = vec![shim];
+        normalized.extend(argv.get(1..)?.iter().cloned());
+        Some(normalized)
+    } else {
+        Some(argv.to_vec())
+    }
+}
+
+/// Reduce a launcher argv to its command and leading positional arguments,
+/// dropping launch-time flags: `ccs work --model x` becomes `ccs work`, so a
+/// replayed resume cannot duplicate or conflict with capture-time flags.
+pub fn launcher_command_prefix(argv: &[String]) -> &[String] {
+    let end = argv
+        .iter()
+        .position(|arg| arg.starts_with('-'))
+        .unwrap_or(argv.len());
+    &argv[..end]
+}
+
+/// Combine a captured launcher command with the resume flags of a native
+/// resume plan: a `claude --resume <id>` plan for a pane launched through
+/// `ccs work` becomes `ccs work --resume <id>`. Returns `None` when the
+/// combined argv is not a safe resume command.
+pub fn launcher_resume_argv(launcher: &[String], plan_argv: &[String]) -> Option<Vec<String>> {
+    let mut argv = launcher.to_vec();
+    argv.extend(plan_argv.get(1..)?.iter().cloned());
+    validate_resume_argv(&argv).ok()?;
+    Some(argv)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedAgentSession {
     pub source: String,
@@ -795,6 +862,94 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
+    }
+
+    #[test]
+    fn launcher_command_prefix_drops_capture_time_flags() {
+        assert_eq!(
+            launcher_command_prefix(&argv(&["ccs", "work"])),
+            argv(&["ccs", "work"])
+        );
+        assert_eq!(
+            launcher_command_prefix(&argv(&["ccs", "work", "--model", "opus"])),
+            argv(&["ccs", "work"])
+        );
+        assert_eq!(
+            launcher_command_prefix(&argv(&["ccs", "work", "--resume", "old-id"])),
+            argv(&["ccs", "work"])
+        );
+        assert!(launcher_command_prefix(&argv(&["-ccs"])).is_empty());
+        assert!(launcher_command_prefix(&[]).is_empty());
+    }
+
+    #[test]
+    fn normalize_launcher_argv_resolves_script_runtime_shims() {
+        let resolver = |path: &Path| {
+            (path == Path::new("/opt/homebrew/lib/node_modules/@kaitranntt/ccs/dist/ccs.js"))
+                .then(|| "ccs".to_string())
+        };
+        assert_eq!(
+            normalize_launcher_argv(
+                &argv(&[
+                    "node",
+                    "/opt/homebrew/lib/node_modules/@kaitranntt/ccs/dist/ccs.js",
+                    "work",
+                    "--model",
+                    "opus"
+                ]),
+                &resolver
+            )
+            .unwrap(),
+            argv(&["ccs", "work", "--model", "opus"])
+        );
+        // The kernel may report the shim path itself when a shebang script ran.
+        assert_eq!(
+            normalize_launcher_argv(&argv(&["/opt/homebrew/bin/ccs", "work"]), &|path: &Path| {
+                (path == Path::new("/opt/homebrew/bin/ccs")).then(|| "ccs".to_string())
+            })
+            .unwrap(),
+            argv(&["ccs", "work"])
+        );
+        // Plain commands pass through unchanged.
+        assert_eq!(
+            normalize_launcher_argv(&argv(&["ccr", "code"]), &|_| None).unwrap(),
+            argv(&["ccr", "code"])
+        );
+        // Unresolvable script paths and relative scripts are rejected.
+        assert!(
+            normalize_launcher_argv(&argv(&["node", "/opt/other/cli.js"]), &resolver).is_none()
+        );
+        assert!(normalize_launcher_argv(&argv(&["node", "cli.js"]), &resolver).is_none());
+        assert!(normalize_launcher_argv(&argv(&["node"]), &resolver).is_none());
+        assert!(normalize_launcher_argv(&[], &resolver).is_none());
+    }
+
+    #[test]
+    fn launcher_resume_argv_replays_native_plan_through_launcher() {
+        let claude_plan = plan(
+            "herdr:claude",
+            "claude",
+            &AgentSessionRef::id("claude-session").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            launcher_resume_argv(&argv(&["ccs", "work"]), &claude_plan.argv).unwrap(),
+            argv(&["ccs", "work", "--resume", "claude-session"])
+        );
+        let codex_plan = plan(
+            "herdr:codex",
+            "codex",
+            &AgentSessionRef::id("codex-session").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            launcher_resume_argv(&argv(&["ccs", "work"]), &codex_plan.argv).unwrap(),
+            argv(&["ccs", "work", "resume", "codex-session"])
+        );
+        // Unsafe combined argv is rejected by the shared resume validation.
+        assert!(launcher_resume_argv(&argv(&["ccs", "can's"]), &claude_plan.argv).is_none());
+        assert!(launcher_resume_argv(&[], &claude_plan.argv).is_none());
+        assert!(launcher_resume_argv(&argv(&["ccs"]), &[]).is_none());
     }
 
     #[test]

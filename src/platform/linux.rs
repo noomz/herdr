@@ -763,6 +763,21 @@ fn process_allows_remote_memory_read(state: char, comm: &str, running_inside_wsl
         && (!running_inside_wsl || crate::detect::identify_agent(comm).is_none())
 }
 
+/// Parent process id of `pid`.
+pub fn process_parent_pid(pid: u32) -> Option<u32> {
+    // /proc/<pid>/stat format: "pid (comm) state ppid ..."
+    // The (comm) field can contain spaces and parens, so we find the last ')' first.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    let ppid: i32 = rest.split_whitespace().nth(1)?.parse().ok()?;
+    (ppid > 0).then_some(ppid as u32)
+}
+
+/// Full argv of `pid`, when procfs exposes it.
+pub fn process_command_argv(pid: u32) -> Option<Vec<String>> {
+    process_argv(pid)
+}
+
 fn process_argv(pid: u32) -> Option<Vec<String>> {
     let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
     if bytes.is_empty() {

@@ -1712,6 +1712,17 @@ impl App {
         });
         let applied =
             report_is_newer && self.session_report_applied(ws_idx, pane_id, session_ref.as_ref());
+        if applied && params.resume_argv.is_none() {
+            if let Some(session_ref) = session_ref.as_ref() {
+                self.maybe_synthesize_launcher_resume(
+                    pane_id,
+                    &params.source,
+                    &agent_label,
+                    session_ref,
+                    params.seq,
+                );
+            }
+        }
         self.report_agent_resume(
             id,
             ws_idx,

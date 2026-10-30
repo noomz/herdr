@@ -4,6 +4,7 @@
 //! - `actions.rs` — state mutations (testable without PTYs/async)
 
 pub(crate) mod actions;
+mod agent_launcher;
 mod agent_resume;
 #[cfg(test)]
 mod agent_suspend_tests;
@@ -145,6 +146,8 @@ pub struct App {
     pane_host_appearance: Option<crate::terminal_theme::HostAppearance>,
     startup_per_agent_delay: Duration,
     next_agent_resume_at: Option<Instant>,
+    /// `session.resume_launcher_allowlist`, applied to agent resume synthesis.
+    pub(crate) resume_launcher_allowlist: Vec<String>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     session_writer: Arc<std::sync::Mutex<crate::persist::SessionWriter>>,
@@ -663,6 +666,7 @@ impl App {
                 config.session.startup_per_agent_delay_ms.into(),
             ),
             next_agent_resume_at: None,
+            resume_launcher_allowlist: config.session.resume_launcher_allowlist.clone(),
             session_save_deadline: None,
             session_save_thread: None,
             session_writer,
@@ -933,14 +937,16 @@ impl App {
             }
         }
 
-        if !invalid_section("session")
-            && Duration::from_millis(config.session.startup_per_agent_delay_ms.into())
+        if !invalid_section("session") {
+            self.resume_launcher_allowlist = config.session.resume_launcher_allowlist.clone();
+            if Duration::from_millis(config.session.startup_per_agent_delay_ms.into())
                 != self.startup_per_agent_delay
-        {
-            diagnostics.push(
-                "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
-                    .into(),
-            );
+            {
+                diagnostics.push(
+                    "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
+                        .into(),
+                );
+            }
         }
 
         let graphics_config_valid = !invalid_section("terminal")

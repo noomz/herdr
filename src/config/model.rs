@@ -270,6 +270,12 @@ pub struct SessionConfig {
     pub resume_agents_on_restore: bool,
     /// Milliseconds between automatic agent restores. Zero disables spacing.
     pub startup_per_agent_delay_ms: u32,
+    /// Launcher commands (for example `ccs`) allowed to wrap restored agent
+    /// resume commands. When a pane's agent was started through a listed
+    /// launcher, restore replays the resume through it so launcher-managed
+    /// environment and account setup apply. Default: empty (resume runs the
+    /// bare agent command).
+    pub resume_launcher_allowlist: Vec<String>,
 }
 
 impl Default for SessionConfig {
@@ -277,6 +283,7 @@ impl Default for SessionConfig {
         Self {
             resume_agents_on_restore: true,
             startup_per_agent_delay_ms: 100,
+            resume_launcher_allowlist: Vec::new(),
         }
     }
 }
@@ -1495,6 +1502,24 @@ startup_per_agent_delay_ms = 0
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
         assert_eq!(config.session.startup_per_agent_delay_ms, 0);
+    }
+
+    #[test]
+    fn resume_launcher_allowlist_defaults_empty_and_parses() {
+        assert!(Config::default()
+            .session
+            .resume_launcher_allowlist
+            .is_empty());
+
+        let toml = r#"
+[session]
+resume_launcher_allowlist = ["ccs", "ccr"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(
+            config.session.resume_launcher_allowlist,
+            vec!["ccs".to_string(), "ccr".to_string()]
+        );
     }
 
     #[test]

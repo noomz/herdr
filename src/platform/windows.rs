@@ -2792,6 +2792,17 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
+/// Parent process id of `pid`. Unsupported: launcher ancestry capture is
+/// unix-only, so resume synthesis stays disabled on Windows.
+pub fn process_parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+
+/// Full argv of `pid`. Unsupported on Windows; see [`process_parent_pid`].
+pub fn process_command_argv(_pid: u32) -> Option<Vec<String>> {
+    None
+}
+
 pub fn process_exists(pid: u32) -> bool {
     let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
         return false;
