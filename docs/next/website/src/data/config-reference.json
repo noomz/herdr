@@ -1481,6 +1481,12 @@
           "type": "integer",
           "default": "100",
           "description": "Milliseconds between automatic agent restores after a server restart. The first agent starts without this delay; 0 disables spacing. Does not delay manual launches or explicit terminal attaches. Restart the server to apply."
+        },
+        {
+          "key": "session.resume_launcher_allowlist",
+          "type": "array of strings",
+          "default": "[]",
+          "description": "Launcher commands (for example [\"ccs\"]) allowed to wrap restored agent resume commands. When a pane's agent was started through a listed launcher, restore replays the resume through it (for example `ccs work --resume <id>`) so launcher-managed environment, account, and provider setup apply. Empty resumes the bare agent command."
         }
       ]
     },

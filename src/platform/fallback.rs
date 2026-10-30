@@ -236,6 +236,16 @@ pub fn process_start_token(_pid: u32) -> Option<u64> {
 }
 
 /// Unsupported platform stub.
+pub fn process_parent_pid(_pid: u32) -> Option<u32> {
+    None
+}
+
+/// Unsupported platform stub.
+pub fn process_command_argv(_pid: u32) -> Option<Vec<String>> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn live_pane_process_group(_shell_pid: u32, _pid: u32, _start_token: u64) -> Option<u32> {
     None
 }

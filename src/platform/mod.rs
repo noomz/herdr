@@ -151,6 +151,38 @@ pub struct ForegroundJob {
     pub processes: Vec<ForegroundProcess>,
 }
 
+/// One process in a parent-chain walk, nearest parent first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessAncestor {
+    pub pid: u32,
+    pub argv: Option<Vec<String>>,
+}
+
+/// Walk the parent chain from `start_pid`'s parent up to `stop_pid`
+/// (exclusive). Returns the intermediate processes, or `None` when the chain
+/// does not reach `stop_pid` (exits, re-parenting) or ancestry is
+/// unsupported on this platform.
+pub fn process_ancestors_until(start_pid: u32, stop_pid: u32) -> Option<Vec<ProcessAncestor>> {
+    const MAX_DEPTH: usize = 8;
+    let mut ancestors = Vec::new();
+    let mut current = process_parent_pid(start_pid)?;
+    for _ in 0..MAX_DEPTH {
+        if current == stop_pid {
+            return Some(ancestors);
+        }
+        if current <= 1 {
+            return None;
+        }
+        let next = process_parent_pid(current)?;
+        ancestors.push(ProcessAncestor {
+            pid: current,
+            argv: process_command_argv(current),
+        });
+        current = next;
+    }
+    None
+}
+
 /// A request from outside the process to stop the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerQuitSignal {
@@ -1056,4 +1088,33 @@ pub(crate) fn shared_ssh_control_path(
         std::io::ErrorKind::Unsupported,
         "interactive SSH recovery requires Unix OpenSSH multiplexing",
     ))
+}
+
+#[cfg(all(test, unix))]
+mod ancestry_tests {
+    #[test]
+    fn process_ancestors_until_reaches_own_pid() {
+        // A directly spawned child's parent is this test process, so the
+        // intermediate chain is empty.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let ancestors = super::process_ancestors_until(child.id(), std::process::id());
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(ancestors, Some(vec![]));
+    }
+
+    #[test]
+    fn process_ancestors_until_rejects_unrelated_stop_pid() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let ancestors = super::process_ancestors_until(child.id(), u32::MAX);
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(ancestors, None);
+    }
 }

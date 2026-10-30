@@ -1006,6 +1006,17 @@ fn process_argv(pid: u32) -> Option<Vec<String>> {
     procargs2_argv(&buf)
 }
 
+/// Parent process id of `pid`.
+pub fn process_parent_pid(pid: u32) -> Option<u32> {
+    let info = process_bsdinfo(pid)?;
+    (info.pbi_ppid > 0).then_some(info.pbi_ppid)
+}
+
+/// Full argv of `pid`, when the kernel exposes it.
+pub fn process_command_argv(pid: u32) -> Option<Vec<String>> {
+    process_argv(pid)
+}
+
 /// Read a Herdr agent identity hint from a process environment.
 pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
     if pid == 0 {
