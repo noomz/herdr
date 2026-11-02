@@ -480,6 +480,7 @@ pub(super) fn render_expanded(
                     state.selected_workspace_id.is_some(),
                     false,
                     palette,
+                    &config.sidebar_token_separator,
                 );
                 if endpoint.status != ClientEndpointStatus::Online {
                     buffer.set_style(

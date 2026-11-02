@@ -112,6 +112,7 @@ pub(crate) fn resolved_token_spans(
     custom_style: Style,
     palette: &Palette,
     max_width: usize,
+    separator: &str,
 ) -> Vec<Span<'static>> {
     let fixed_widths = resolved
         .iter()
@@ -152,7 +153,13 @@ pub(crate) fn resolved_token_spans(
             .sum::<usize>();
         let separators = indices
             .windows(2)
-            .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+            .map(|pair| {
+                display_width(tokens::separator(
+                    &resolved[pair[0]],
+                    &resolved[pair[1]],
+                    separator,
+                ))
+            })
             .sum::<usize>();
         content + separators
     };
@@ -180,7 +187,13 @@ pub(crate) fn resolved_token_spans(
         .collect::<Vec<_>>();
     let separator_width = visible_indices
         .windows(2)
-        .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+        .map(|pair| {
+            display_width(tokens::separator(
+                &resolved[pair[0]],
+                &resolved[pair[1]],
+                separator,
+            ))
+        })
         .sum::<usize>();
     let fixed_width = visible_indices
         .iter()
@@ -218,7 +231,7 @@ pub(crate) fn resolved_token_spans(
         if position > 0 {
             let previous = &resolved[visible_indices[position - 1]];
             spans.push(Span::styled(
-                tokens::separator(previous, token),
+                tokens::separator(previous, token, separator).to_string(),
                 Style::default().fg(palette.overlay0),
             ));
         }
