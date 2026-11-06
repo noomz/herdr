@@ -1349,6 +1349,11 @@ impl App {
             }
         };
 
+        if let Some(workspace_id) = &closed_workspace_id {
+            self.state.close_floats_for_workspace(workspace_id);
+            self.shutdown_detached_terminal_runtimes();
+        }
+
         if focus || self.state.active.is_none() {
             self.state
                 .switch_workspace_tab(target_ws_idx, target_tab_idx);

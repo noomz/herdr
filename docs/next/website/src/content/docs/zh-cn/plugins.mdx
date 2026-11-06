@@ -297,11 +297,12 @@ split、tab、zoomed 和 overlay 插件窗格打开后就是普通的 Herdr 窗�
 
 `placement = "float"` 会在平铺布局上方打开一个非模态的浮动终端。
 它适合画中画视图、监视器，以及在窗格中继续工作时保持打开的临时终端。
-一个会话可以有任意数量的浮动窗口，所有工作区和标签页都会显示它们。
+一个会话可以有任意数量的浮动窗口，默认在所有工作区和标签页显示。
 
 浮动窗口与弹出窗口一样接受 `width` 和 `height`。open 请求还可以设置：
 
 - `x` 和 `y`：外框左上角的单元格，相对于窗格区域。两者都省略时居中。Herdr 会限制位置，使整个浮动窗口留在屏幕内。
+- `workspace_id`：只能在 `plugin.pane.open` 参数中指定的公开工作区 ID。浮动窗口只显示给正在查看该工作区的客户端，适用于其中所有标签页。省略时在所有工作区显示。关闭工作区也会关闭浮动窗口及其进程。未知 ID 返回 `workspace_not_found`。清单中没有此字段，`float.set_hide_rule` 也不会修改此规则。
 - `hide_while_focused`：一个窗格 ID。当该窗格是你正在查看的标签页中的焦点窗格时隐藏浮动窗口，焦点离开后再显示。
 - `hide_on_blur`：布尔值，默认为 `false`，可在清单窗格或 `plugin.pane.open` 参数中设置，请求参数优先。当值为 `true` 时，点击使浮动窗口失去焦点就会隐藏它；键盘焦点移动或窗口未聚焦时的点击不会隐藏它。
 
@@ -348,10 +349,13 @@ Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
     "visibility": "shown",
     "hide_while_focused": "w1:p1",
     "hide_on_blur": true,
+    "workspace_id": "w1",
     "z": 0
   }
 }
 ```
+
+浮动窗口属于某个工作区时，其结果和 `float.list` 会包含公开 ID 字段 `workspace_id`；否则省略该字段。
 
 `float_id` 在所有 `float.*` 方法中标识浮动窗口。它在浮动窗口关闭前保持不变，经过 `server live-handoff` 后也不变，同一会话中也不会分配给其他浮动窗口。`width` 和 `height` 是单元格数或 `"80%"` 这样的百分比字符串，使用默认尺寸时不出现。
 浮动窗口居中时不出现 `x` 和 `y`。`visibility` 为 `shown` 或 `hidden`。没有隐藏规则时不出现 `hide_while_focused`。

@@ -67,6 +67,9 @@ pub struct FloatInfo {
     pub hide_while_focused: Option<String>,
     #[serde(default)]
     pub hide_on_blur: bool,
+    /// Public workspace ID; absent when visible across all workspaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     /// Position in the stacking order; 0 is the bottom float.
     pub z: usize,
 }

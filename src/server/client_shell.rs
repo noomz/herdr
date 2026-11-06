@@ -541,16 +541,17 @@ fn render_popup_surface(
     }))
 }
 
-/// Renders every float visible to a viewer whose tab focuses `focused_pane`, bottom to top.
+/// Renders floats visible in `workspace` with `focused_pane`, bottom to top.
 pub(super) fn render_float_layer(
     app: &app::App,
     focused_pane: Option<crate::layout::PaneId>,
+    workspace: Option<&str>,
     area: Rect,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> Result<protocol::floats::FloatsSurface, SurfaceRenderDeferred> {
     let mut floats = Vec::new();
     for float in &app.state.floats {
-        if !float.visible_to(focused_pane) {
+        if !float.visible_to(focused_pane, workspace) {
             continue;
         }
         let Some(geometry) = float.geometry(area) else {

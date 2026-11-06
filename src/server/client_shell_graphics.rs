@@ -86,8 +86,8 @@ pub(crate) fn collect(
 pub(crate) enum FloatGraphics {
     /// The viewer did not negotiate floats.
     None,
-    /// The floats visible to a viewer whose tab focuses this pane.
-    VisibleTo(Option<crate::layout::PaneId>),
+    /// Floats visible with this focused pane and current workspace index.
+    VisibleTo(Option<crate::layout::PaneId>, Option<usize>),
 }
 
 /// The floats a viewer sees, sized to each float's content inside `area`.
@@ -96,13 +96,16 @@ pub(crate) fn visible_floats(
     viewer: FloatGraphics,
     area: ratatui::layout::Rect,
 ) -> Vec<OverlayTerminal<'_>> {
-    let FloatGraphics::VisibleTo(focused_pane) = viewer else {
+    let FloatGraphics::VisibleTo(focused_pane, workspace_index) = viewer else {
         return Vec::new();
     };
+    let workspace = workspace_index
+        .and_then(|index| app.state.workspaces.get(index))
+        .map(|workspace| workspace.id.as_str());
     app.state
         .floats
         .iter()
-        .filter(|float| float.visible_to(focused_pane))
+        .filter(|float| float.visible_to(focused_pane, workspace))
         .filter_map(|float| {
             let inner = float.geometry(area)?.inner;
             Some(OverlayTerminal {

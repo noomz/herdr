@@ -7854,6 +7854,13 @@
                 }
               ]
             },
+            "workspace_id": {
+              "description": "Public workspace ID; absent when visible across all workspaces.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "x": {
               "description": "Requested outer position; absent while the float is centered.",
               "format": "uint16",

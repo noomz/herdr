@@ -1202,6 +1202,15 @@ impl AppState {
                 "float terminal {} must not also be the popup",
                 float.terminal_id
             );
+            if let Some(workspace_id) = &float.workspace {
+                assert!(
+                    self.workspaces
+                        .iter()
+                        .any(|workspace| &workspace.id == workspace_id),
+                    "float {} references a missing workspace {workspace_id}",
+                    float.id
+                );
+            }
             if let Some(pane_id) = float.hide_while_focused {
                 assert!(
                     self.workspaces
