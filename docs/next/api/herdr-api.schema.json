@@ -3786,6 +3786,13 @@
                 }
               ]
             },
+            "hide_on_blur": {
+              "description": "Float only: hide the float when a click moves focus off it.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "hide_while_focused": {
               "description": "Float only: hide the float while this pane is focused.",
               "type": [
@@ -7800,6 +7807,10 @@
                 }
               ]
             },
+            "hide_on_blur": {
+              "default": false,
+              "type": "boolean"
+            },
             "hide_while_focused": {
               "type": [
                 "string",
@@ -9396,6 +9407,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "hide_on_blur": {
+              "default": false,
+              "type": "boolean"
             },
             "id": {
               "type": "string"

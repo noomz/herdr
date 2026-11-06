@@ -82,6 +82,8 @@ struct RawPluginManifestPane {
     width: Option<PopupSize>,
     #[serde(default)]
     height: Option<PopupSize>,
+    #[serde(default)]
+    hide_on_blur: bool,
     command: Vec<String>,
 }
 
@@ -439,6 +441,12 @@ fn normalize_manifest_pane(
             "pane width and height are only supported when placement is popup or float".to_string(),
         ));
     }
+    if pane.placement != PluginPanePlacement::Float && pane.hide_on_blur {
+        return Err((
+            "invalid_plugin_pane_hide_on_blur",
+            "pane hide_on_blur is only supported when placement is float".to_string(),
+        ));
+    }
     Ok(PluginManifestPane {
         id,
         title,
@@ -447,6 +455,7 @@ fn normalize_manifest_pane(
         placement: pane.placement,
         width: pane.width,
         height: pane.height,
+        hide_on_blur: pane.hide_on_blur,
         command,
     })
 }

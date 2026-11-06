@@ -57,6 +57,8 @@ pub struct FloatInfo {
     pub visibility: FloatVisibilityInfo,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_while_focused: Option<String>,
+    #[serde(default)]
+    pub hide_on_blur: bool,
     /// Position in the stacking order; 0 is the bottom float.
     pub z: usize,
 }

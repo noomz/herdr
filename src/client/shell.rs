@@ -79,6 +79,13 @@ fn float_input_message(
         .ok()
 }
 
+fn float_blur_message(float_id: crate::protocol::floats::FloatId) -> Option<ClientMessage> {
+    let blur = crate::protocol::floats::FloatBlur { float_id };
+    crate::protocol::floats::blur_message(&blur)
+        .map_err(|error| tracing::warn!(%error, "failed to encode float blur"))
+        .ok()
+}
+
 fn push_target_event(
     target: ClientInputTarget,
     event: ClientPaneInputEvent,

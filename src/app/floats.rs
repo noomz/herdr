@@ -36,6 +36,7 @@ pub(crate) struct FloatState {
     pub visibility: FloatVisibility,
     /// Hide the float while this pane is the focused pane of the viewer's tab.
     pub hide_while_focused: Option<PaneId>,
+    pub hide_on_blur: bool,
 }
 
 impl FloatState {
@@ -56,6 +57,7 @@ pub(crate) struct FloatSpec {
     pub height: Option<PopupSize>,
     pub position: FloatPosition,
     pub hide_while_focused: Option<PaneId>,
+    pub hide_on_blur: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +167,7 @@ impl App {
             position: spec.position,
             visibility: FloatVisibility::Shown,
             hide_while_focused: spec.hide_while_focused,
+            hide_on_blur: spec.hide_on_blur,
         });
         self.request_float_render();
         Ok(id)
@@ -236,6 +239,7 @@ impl App {
                             FloatPosition::At { x, y } => Some((x, y)),
                         },
                         hidden: float.visibility == FloatVisibility::Hidden,
+                        hide_on_blur: float.hide_on_blur,
                         hide_while_focused: float
                             .hide_while_focused
                             .filter(|pane_id| self.find_pane(*pane_id).is_some())
@@ -309,6 +313,7 @@ impl App {
                     FloatVisibility::Shown
                 },
                 hide_while_focused,
+                hide_on_blur: float.hide_on_blur,
             });
         }
     }
@@ -366,6 +371,7 @@ impl App {
             position: spec.position,
             visibility: FloatVisibility::Shown,
             hide_while_focused: spec.hide_while_focused,
+            hide_on_blur: spec.hide_on_blur,
         });
         (pane_id, terminal_id, id)
     }
@@ -382,6 +388,7 @@ mod tests {
             height: Some(PopupSize::Cells(8)),
             position: FloatPosition::At { x: 2, y: 3 },
             hide_while_focused: None,
+            hide_on_blur: false,
         }
     }
 
@@ -407,6 +414,7 @@ mod tests {
                     position: spec().position,
                     visibility: FloatVisibility::Shown,
                     hide_while_focused: None,
+                    hide_on_blur: false,
                 });
                 id
             })
@@ -431,6 +439,7 @@ mod tests {
             position: FloatPosition::Centered,
             visibility: FloatVisibility::Shown,
             hide_while_focused: Some(source),
+            hide_on_blur: false,
         };
 
         assert!(!float.visible_to(Some(source)));
@@ -449,6 +458,7 @@ mod tests {
             position: FloatPosition::Centered,
             visibility: FloatVisibility::Hidden,
             hide_while_focused: None,
+            hide_on_blur: false,
         };
 
         assert!(!float.visible_to(None));
@@ -655,6 +665,62 @@ mod tests {
             position: Some((2, 3)),
             hidden: false,
             hide_while_focused,
+            hide_on_blur: false,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_handoff_float_defaults_hide_on_blur_to_false() {
+        let mut json = serde_json::to_value(handoff_float(None)).unwrap();
+        json.as_object_mut().unwrap().remove("hide_on_blur");
+        let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
+        assert!(!decoded.hide_on_blur);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_round_trip_preserves_hide_on_blur() {
+        let (mut app, _, _, float_id) = app_with_float();
+        app.close_float(float_id);
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let (fd, _slave) = handoff_pty();
+        app.restore_handoff_floats(
+            &snapshot,
+            crate::handoff_runtime::HandoffFloats {
+                floats: vec![crate::handoff_runtime::HandoffFloat {
+                    hide_on_blur: true,
+                    ..handoff_float(None)
+                }],
+                next_float_id: None,
+            },
+            vec![fd],
+        );
+        let exported = app.handoff_floats();
+        assert_eq!(exported.len(), 1);
+        let encoded = serde_json::to_string(&exported[0].1).unwrap();
+        let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_str(&encoded).unwrap();
+        assert!(decoded.hide_on_blur);
+        app.close_float(app.state.floats[0].id);
+        let (fd, _slave2) = handoff_pty();
+        app.restore_handoff_floats(
+            &snapshot,
+            crate::handoff_runtime::HandoffFloats {
+                floats: vec![decoded],
+                next_float_id: None,
+            },
+            vec![fd],
+        );
+        assert!(app.state.floats[0].hide_on_blur);
+        assert!(app.float_info(0, &app.state.floats[0]).hide_on_blur);
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
         }
     }
 

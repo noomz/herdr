@@ -3224,6 +3224,7 @@ command = ["sh", "-c", "sleep 5"]
             x: None,
             y: None,
             hide_while_focused: None,
+            hide_on_blur: None,
             workspace_id: None,
             target_pane_id: None,
             direction: None,

@@ -74,6 +74,7 @@ impl App {
             height: params.height.or(pane.height),
             position,
             hide_while_focused,
+            hide_on_blur: params.hide_on_blur.unwrap_or(pane.hide_on_blur),
         };
         let float_id =
             match self.spawn_float_argv_command(&pane.command, Some(cwd), extra_env, spec) {

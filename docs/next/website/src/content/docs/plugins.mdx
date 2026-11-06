@@ -352,6 +352,10 @@ A float takes `width` and `height` like a popup. An open request can also set:
   screen.
 - `hide_while_focused`: a pane ID. The float hides while that pane is the
   focused pane of the tab you view, and comes back when focus leaves it.
+- `hide_on_blur`: a boolean, defaulting to `false`, in the manifest pane or
+  `plugin.pane.open` params. The request value overrides the manifest value.
+  When `true`, a click that moves focus off the float hides it; keyboard focus
+  moves and clicks while the float is shown but unfocused do not hide it.
 
 ```toml
 [[panes]]
@@ -361,6 +365,7 @@ platforms = ["linux", "macos"]
 placement = "float"
 width = 50
 height = 14
+hide_on_blur = true
 command = ["sh", "peek.sh"]
 ```
 
@@ -405,6 +410,7 @@ Each client focuses floats on its own, so `plugin.pane.open` rejects
     "y": 2,
     "visibility": "shown",
     "hide_while_focused": "w1:p1",
+    "hide_on_blur": true,
     "z": 0
   }
 }
@@ -416,6 +422,7 @@ it to another float in the same session. `width` and `height` are
 cells or a percentage string such as `"80%"`, and are absent when the float uses
 the default size. `x` and `y` are absent while the float is centered. `visibility`
 is `shown` or `hidden`. `hide_while_focused` is absent when no hide rule is set.
+`hide_on_blur` reports whether clicks that move focus away hide the float.
 `z` is the stacking position, and 0 is the bottom float. `float.list` returns the
 same objects in a `floats` array.
 

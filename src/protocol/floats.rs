@@ -11,6 +11,7 @@ use super::{ClientMessage, ClientPaneInputEvent, FrameData, ServerMessage, Surfa
 
 pub(crate) const CAPABILITY: &str = "floats";
 pub(crate) const SURFACE_KIND: &str = "endpoint.floats.v1";
+pub(crate) const BLUR_KIND: &str = "endpoint.float-blur.v1";
 pub(crate) const INPUT_KIND: &str = "endpoint.float-input.v1";
 
 /// A float's public id, written `f<n>`. The server mints each id once per session and keeps it
@@ -81,6 +82,22 @@ pub struct FloatSurface {
 pub struct FloatInput {
     pub float_id: FloatId,
     pub events: Vec<ClientPaneInputEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FloatBlur {
+    pub float_id: FloatId,
+}
+
+pub(crate) fn blur_message(blur: &FloatBlur) -> Result<ClientMessage, String> {
+    Ok(ClientMessage::EndpointControl {
+        kind: BLUR_KIND.into(),
+        data: serde_json::to_string(blur).map_err(|error| error.to_string())?,
+    })
+}
+
+pub(crate) fn decode_blur(data: &str) -> Result<FloatBlur, String> {
+    serde_json::from_str(data).map_err(|error| error.to_string())
 }
 
 pub(crate) fn surface_message(surface: &FloatsSurface) -> Result<ServerMessage, String> {

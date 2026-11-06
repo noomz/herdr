@@ -354,7 +354,11 @@ impl ClientShellState {
         match mouse.kind {
             MouseEventKind::Down(button) => {
                 self.floats.pressed = true;
+                let previously_focused = self.floats.focused;
                 self.focus_float(hit.float_id, outcome);
+                if let Some(old) = previously_focused.filter(|old| *old != hit.float_id) {
+                    outcome.requests.extend(super::float_blur_message(old));
+                }
                 if !in_content {
                     if button == MouseButton::Left {
                         let surface = self.float_pane_surface();
@@ -557,6 +561,7 @@ impl ClientShellState {
                 .input_leases
                 .remove_target(&ClientInputTarget::Float(focused));
             self.push_lease_releases(leases, outcome);
+            outcome.requests.extend(super::float_blur_message(focused));
             self.reconcile_input_source();
         }
     }

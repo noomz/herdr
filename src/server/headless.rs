@@ -2589,6 +2589,25 @@ impl HeadlessServer {
                     accepts_input,
                 )
             }
+            ServerEvent::ClientShellFloatBlur {
+                client_id,
+                float_id,
+            } => {
+                let Some(float) = self.app.state.float(float_id) else {
+                    return false;
+                };
+                if !float.hide_on_blur || !self.shell_client_sees_float(client_id, float.pane_id) {
+                    return false;
+                }
+                self.app
+                    .edit_float(
+                        float_id,
+                        crate::app::floats::FloatEdit::Visibility(
+                            crate::app::floats::FloatVisibility::Hidden,
+                        ),
+                    )
+                    .unwrap_or(false)
+            }
             ServerEvent::ClientShellFloatInput {
                 client_id,
                 float_id,

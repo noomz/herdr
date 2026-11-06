@@ -74,6 +74,25 @@ fn float_inputs(input: &ClientShellInput) -> Vec<crate::protocol::floats::FloatI
         .collect()
 }
 
+fn float_blurs(input: &ClientShellInput) -> Vec<FloatId> {
+    input
+        .requests
+        .iter()
+        .filter_map(|message| match message {
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::floats::BLUR_KIND =>
+            {
+                Some(
+                    crate::protocol::floats::decode_blur(data)
+                        .expect("float blur")
+                        .float_id,
+                )
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn endpoint_methods(input: &ClientShellInput) -> Vec<crate::api::schema::Method> {
     input
         .actions
@@ -960,4 +979,92 @@ fn releasing_a_resize_pins_the_top_left_then_commits_through_float_resize() {
         floats: vec![resized],
     });
     assert!(state.floats.drag.is_none());
+}
+
+#[test]
+fn clicking_outside_a_focused_float_reports_blur_and_passes_through() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    state.floats.focused = Some(fid("term_a"));
+    let pane = state.hits.panes[0].clone();
+    let mut outcome = ClientShellInput::default();
+    let consumed = state.handle_float_mouse(
+        crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: pane.inner_rect.x,
+            row: pane.inner_rect.y,
+            modifiers: KeyModifiers::empty(),
+        },
+        &mut outcome,
+    );
+    assert!(!consumed);
+    assert_eq!(float_blurs(&outcome), vec![fid("term_a")]);
+    assert!(state.floats.focused.is_none());
+}
+
+#[test]
+fn clicking_another_float_reports_only_the_previous_float_blur() {
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "a"),
+        float("term_b", 40, 3, "b"),
+    ]);
+    state.floats.focused = Some(fid("term_a"));
+    let b = hit(&state, "term_b");
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        b.pane.inner_rect.x,
+        b.pane.inner_rect.y,
+    );
+    assert_eq!(float_blurs(&down), vec![fid("term_a")]);
+    assert_eq!(state.floats.focused, Some(fid("term_b")));
+}
+
+#[test]
+fn clicking_focused_float_content_or_border_never_reports_blur() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    state.floats.focused = Some(fid("term_a"));
+    let a = hit(&state, "term_a");
+    let content = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.pane.inner_rect.x,
+        a.pane.inner_rect.y,
+    );
+    assert!(float_blurs(&content).is_empty());
+    assert_eq!(float_inputs(&content)[0].float_id, fid("term_a"));
+    let border = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        a.outer.x + 4,
+        a.outer.y,
+    );
+    assert!(float_blurs(&border).is_empty());
+    assert!(state.floats.drag.is_some());
+}
+
+#[test]
+fn yielding_float_focus_never_reports_blur() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    state.floats.focused = Some(fid("term_a"));
+    state.yield_float_focus();
+    assert!(state.floats.focused.is_none());
+    let outcome = state.handle_input_bytes(b"x");
+    assert!(float_blurs(&outcome).is_empty());
+    assert!(matches!(
+        &outcome.requests[..],
+        [ClientMessage::ClientShellPaneInput { .. }]
+    ));
+}
+
+#[test]
+fn clicking_outside_an_unfocused_float_never_reports_blur() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let pane = state.hits.panes[0].clone();
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        pane.inner_rect.x,
+        pane.inner_rect.y,
+    );
+    assert!(float_blurs(&down).is_empty());
 }

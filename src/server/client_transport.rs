@@ -520,6 +520,10 @@ pub(crate) enum ServerEvent {
         float_id: crate::protocol::floats::FloatId,
         events: Vec<ClientPaneInputEvent>,
     },
+    ClientShellFloatBlur {
+        client_id: u64,
+        float_id: crate::protocol::floats::FloatId,
+    },
     /// A client-owned shell published one host terminal theme observation.
     ClientShellHostTheme {
         client_id: u64,
@@ -1335,6 +1339,21 @@ fn client_read_loop_with_endpoint_controls(
                     break;
                 };
                 event
+            }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::floats::BLUR_KIND =>
+            {
+                let blur = match crate::protocol::floats::decode_blur(&data) {
+                    Ok(blur) => blur,
+                    Err(error) => {
+                        warn!(client_id, %error, "invalid float blur, ignoring");
+                        continue;
+                    }
+                };
+                ServerEvent::ClientShellFloatBlur {
+                    client_id,
+                    float_id: blur.float_id,
+                }
             }
             ClientMessage::ClientShellEndpointRequest { boot_id, request } => {
                 if boot_id.len() > crate::server::client_commands::MAX_ENDPOINT_BOOT_ID_BYTES
@@ -2278,6 +2297,46 @@ mod tests {
 
         assert!(matches!(
             recv_server_event(&mut server_event_rx, "detach after future control"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_ignores_invalid_float_blur_and_routes_the_next_control() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-float-blur");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+        for data in [
+            "garbage",
+            "{}",
+            r#"{"float_id":"nope"}"#,
+            r#"{"float_id":"f1"}"#,
+        ] {
+            protocol::write_message(
+                &mut client_stream,
+                &ClientMessage::EndpointControl {
+                    kind: crate::protocol::floats::BLUR_KIND.into(),
+                    data: data.into(),
+                },
+            )
+            .unwrap();
+        }
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "valid blur after invalid controls"),
+            ServerEvent::ClientShellFloatBlur { client_id: 7, float_id }
+                if float_id == crate::protocol::floats::FloatId::FIRST
+        ));
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach after blur"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
         handle

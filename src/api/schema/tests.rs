@@ -1015,6 +1015,7 @@ fn plugin_link_list_unlink_round_trip() {
             command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
         }],
         panes: vec![PluginManifestPane {
+            hide_on_blur: false,
             id: "board".into(),
             title: "Board".into(),
             description: None,
@@ -1413,6 +1414,7 @@ fn plugin_pane_open_request_round_trips() {
             x: None,
             y: None,
             hide_while_focused: None,
+            hide_on_blur: None,
         }),
     };
 

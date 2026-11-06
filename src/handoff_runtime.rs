@@ -77,6 +77,8 @@ pub(crate) struct HandoffFloat {
     /// Raw id of the source server's pane that hides this float while focused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_while_focused: Option<u32>,
+    #[serde(default)]
+    pub hide_on_blur: bool,
 }
 
 /// Every float a live handoff carries, plus the id the source would have minted next, so the

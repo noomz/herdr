@@ -340,6 +340,7 @@ Settings、コピーモード、または別の Herdr モーダルが開いて�
 
 - `x` と `y`: ペイン領域を基準にした外枠の左上セル。両方を省略すると中央に配置されます。フロート全体が画面内に収まるよう位置は制限されます。
 - `hide_while_focused`: ペイン ID。表示中のタブでそのペインがフォーカスされている間はフロートを隠し、フォーカスが離れると再表示します。
+- `hide_on_blur`: 既定値が `false` の真偽値です。マニフェストのペインまたは `plugin.pane.open` のパラメーターに設定でき、リクエストの値が優先されます。`true` の場合、クリックでフロートからフォーカスが離れると非表示になります。キーボードによるフォーカス移動や、フォーカスのないフロートの外をクリックしても非表示にはなりません。
 
 ```toml
 [[panes]]
@@ -349,6 +350,7 @@ platforms = ["linux", "macos"]
 placement = "float"
 width = 50
 height = 14
+hide_on_blur = true
 command = ["sh", "peek.sh"]
 ```
 
@@ -380,6 +382,7 @@ Escape はフロート内のプログラムに届き、プレフィックスの�
     "y": 2,
     "visibility": "shown",
     "hide_while_focused": "w1:p1",
+    "hide_on_blur": true,
     "z": 0
   }
 }

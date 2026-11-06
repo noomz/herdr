@@ -402,6 +402,7 @@ fn install_float(server: &mut HeadlessServer) -> crate::terminal::TerminalId {
             height: Some(PopupSize::Cells(FLOAT_ROWS + 2)),
             position: FloatPosition::At { x: 50, y: 2 },
             hide_while_focused: None,
+            hide_on_blur: false,
         },
     );
     terminal_id

@@ -75,6 +75,7 @@ fn install_float(
             height: Some(PopupSize::Cells(8)),
             position: FloatPosition::At { x: 50, y: 2 },
             hide_while_focused,
+            hide_on_blur: false,
         },
     );
     (float_id, terminal_id, input)
@@ -388,4 +389,78 @@ async fn a_client_shell_float_resize_resizes_the_program_terminal() {
         "the program's terminal follows the committed size"
     );
     shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn float_blur_hides_only_flagged_floats_visible_to_the_reporting_client() {
+    for (flagged, negotiated, hidden_by_rule) in [
+        (true, true, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
+        let mut server = test_headless_server();
+        let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+        let source = server.app.state.workspaces[0].tabs[0].root_pane;
+        let (float_id, terminal_id, _input) =
+            install_float(&mut server, b"FLOAT_LIVE", hidden_by_rule.then_some(source));
+        server.app.state.floats[0].hide_on_blur = flagged;
+        let render_rx = connect_shell(&mut server, 7, negotiated);
+        server.render_and_stream();
+        let _ = render_rx.recv().expect("initial layer");
+        let before = server.app.state.float(float_id).unwrap().clone();
+        let should_hide = flagged && negotiated && !hidden_by_rule;
+
+        assert_eq!(
+            server.handle_server_event(ServerEvent::ClientShellFloatBlur {
+                client_id: 7,
+                float_id
+            }),
+            should_hide
+        );
+        let after = server.app.state.float(float_id).unwrap().clone();
+        if should_hide {
+            let hidden = server.app.handle_api_request(crate::api::schema::Request {
+                id: "hide-again".into(),
+                method: crate::api::schema::Method::FloatHide(crate::api::schema::FloatTarget {
+                    float_id: float_id.to_string(),
+                }),
+            });
+            assert!(serde_json::from_str::<serde_json::Value>(&hidden)
+                .unwrap()
+                .get("result")
+                .is_some());
+            assert_eq!(server.app.state.float(float_id).unwrap(), &after);
+            assert_eq!(after.visibility, FloatVisibility::Hidden);
+            assert!(server.app.terminal_runtimes.get(&terminal_id).is_some());
+            server.render_and_stream();
+            assert_eq!(
+                float_layers(&read_server_messages(
+                    render_rx.recv().expect("hidden layer")
+                )),
+                vec![protocol::floats::FloatsSurface::default()]
+            );
+            assert!(
+                !server.handle_server_event(ServerEvent::ClientShellFloatBlur {
+                    client_id: 7,
+                    float_id
+                })
+            );
+        } else {
+            assert_eq!(after, before);
+        }
+        assert!(
+            !server.handle_server_event(ServerEvent::ClientShellFloatBlur {
+                client_id: 99,
+                float_id
+            })
+        );
+        assert!(
+            !server.handle_server_event(ServerEvent::ClientShellFloatBlur {
+                client_id: 7,
+                float_id: float_id.next()
+            })
+        );
+        shutdown_test_runtimes(&mut server);
+    }
 }

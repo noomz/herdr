@@ -501,12 +501,15 @@ impl App {
             );
         }
         if placement != PluginPanePlacement::Float
-            && (params.x.is_some() || params.y.is_some() || params.hide_while_focused.is_some())
+            && (params.x.is_some()
+                || params.y.is_some()
+                || params.hide_while_focused.is_some()
+                || params.hide_on_blur.is_some())
         {
             return encode_error(
                 id,
                 "invalid_params",
-                "x, y, and hide_while_focused are only supported when placement is float",
+                "x, y, hide_while_focused, and hide_on_blur are only supported when placement is float",
             );
         }
         if placement == PluginPanePlacement::Float && params.focus {
@@ -1624,6 +1627,7 @@ platforms = ["linux", "macos"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1654,6 +1658,7 @@ platforms = ["linux", "macos"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
 
@@ -1773,6 +1778,7 @@ command = ["cmd.exe", "/d", "/c", "slot.cmd", "default"]
                     x: None,
                     y: None,
                     hide_while_focused: None,
+                    hide_on_blur: None,
                 }),
             });
             let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
@@ -1896,6 +1902,7 @@ command = ["sh", "-c", '"$HERDR_BIN_PATH" --list >/dev/null; printf "%s\n" "$?" 
                     x: None,
                     y: None,
                     hide_while_focused: None,
+                    hide_on_blur: None,
                 }),
             });
             assert!(matches!(
@@ -2017,6 +2024,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { plugin_pane } = response_result(&open) else {
@@ -2126,6 +2134,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2219,6 +2228,7 @@ command = ["sh", "-c", "sleep 1"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2305,6 +2315,7 @@ command = ["sh", "-c", "sleep 1"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2387,6 +2398,7 @@ command = ["sh", "-c", "sleep 1"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
@@ -2475,6 +2487,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         };
         app.state.mode = crate::app::Mode::Navigate;
@@ -2535,6 +2548,104 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn plugin_float_hide_on_blur_defaults_overrides_and_list() {
+        for (manifest_flag, param, expected) in [
+            (None, None, false),
+            (Some(true), None, true),
+            (Some(true), Some(false), false),
+            (Some(false), Some(true), true),
+        ] {
+            let mut app = test_app();
+            app.state.workspaces = vec![crate::workspace::Workspace::test_new("float-blur")];
+            app.state.ensure_test_terminals();
+            app.state.active = Some(0);
+            app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 100, 30);
+            let root = unique_temp_path("plugin-float-blur");
+            let flag = manifest_flag
+                .map(|flag| format!("hide_on_blur = {flag}\n"))
+                .unwrap_or_default();
+            let manifest = format!(
+                r#"
+id = "example.blur"
+name = "Blur"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "float"
+{flag}command = ["sh", "-c", "sleep 5"]
+"#
+            );
+            write_manifest_content(&root, &manifest);
+            link_manifest(&mut app, &root);
+            let request = |placement: &str, flag: Option<bool>| {
+                let mut params = serde_json::json!({"plugin_id": "example.blur", "entrypoint": "peek", "placement": placement});
+                if let Some(flag) = flag {
+                    params["hide_on_blur"] = flag.into();
+                }
+                serde_json::from_value::<Request>(serde_json::json!({"id": "open-blur", "method": "plugin.pane.open", "params": params})).unwrap()
+            };
+            let opened = app.handle_api_request(request("float", param));
+            let ResponseResult::FloatOpened { float } = response_result(&opened) else {
+                panic!("expected float: {opened}")
+            };
+            assert_eq!(float.hide_on_blur, expected);
+            assert_eq!(app.state.floats[0].hide_on_blur, expected);
+            let listed = app.handle_api_request(
+                serde_json::from_value(
+                    serde_json::json!({"id": "list", "method": "float.list", "params": {}}),
+                )
+                .unwrap(),
+            );
+            let ResponseResult::FloatList { floats } = response_result(&listed) else {
+                panic!("expected list: {listed}")
+            };
+            assert_eq!(floats[0].hide_on_blur, expected);
+            for flag in [true, false] {
+                let rejected = app.handle_api_request(request("popup", Some(flag)));
+                let rejected: crate::api::schema::ErrorResponse =
+                    serde_json::from_str(&rejected).unwrap();
+                assert_eq!(rejected.error.code, "invalid_params");
+                assert!(rejected.error.message.contains("hide_on_blur"));
+            }
+            for (_, runtime) in app.terminal_runtimes.drain() {
+                runtime.shutdown();
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn plugin_manifest_rejects_hide_on_blur_on_non_float_panes() {
+        for placement in ["overlay", "popup", "split", "tab", "zoomed"] {
+            let root = unique_temp_path("plugin-non-float-blur");
+            let manifest = format!(
+                r#"
+id = "example.blur"
+name = "Blur"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "{placement}"
+hide_on_blur = true
+command = ["echo", "peek"]
+"#
+            );
+            write_manifest_content(&root, &manifest);
+            assert!(matches!(
+                load_plugin_manifest(&root.display().to_string(), true),
+                Err(("invalid_plugin_pane_hide_on_blur", _))
+            ));
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn plugin_pane_open_float_is_non_modal_and_layout_neutral() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2590,6 +2701,7 @@ command = ["sh", "-c", "sleep 5"]
                 x,
                 y: x,
                 hide_while_focused: hide,
+                hide_on_blur: None,
             }),
         };
         let first = app.handle_api_request(float_request(
@@ -2806,6 +2918,7 @@ command = ["sh", "-c", "sleep 5"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let value: serde_json::Value = serde_json::from_str(&pane).unwrap();
@@ -2876,6 +2989,7 @@ command = ["sh", "-c", "sleep 5"]
                 x: None,
                 y: None,
                 hide_while_focused: None,
+                hide_on_blur: None,
             }),
         });
         let pane: serde_json::Value = serde_json::from_str(&pane).unwrap();

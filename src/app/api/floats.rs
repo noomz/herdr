@@ -32,6 +32,7 @@ impl App {
                 let (ws_idx, _) = self.find_pane(pane_id)?;
                 self.public_pane_id(ws_idx, pane_id)
             }),
+            hide_on_blur: float.hide_on_blur,
             z,
         }
     }
@@ -170,6 +171,7 @@ mod tests {
                     position: FloatPosition::Centered,
                     visibility: FloatVisibility::Shown,
                     hide_while_focused: None,
+                    hide_on_blur: false,
                 });
                 id.to_string()
             })

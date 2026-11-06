@@ -648,6 +648,7 @@ mod tests {
             position: None,
             hidden: false,
             hide_while_focused: None,
+            hide_on_blur: false,
         }
     }
 

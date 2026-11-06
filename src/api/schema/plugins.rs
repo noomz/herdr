@@ -287,6 +287,8 @@ pub struct PluginManifestPane {
     pub width: Option<PopupSize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<PopupSize>,
+    #[serde(default)]
+    pub hide_on_blur: bool,
     pub command: Vec<String>,
 }
 
@@ -465,6 +467,9 @@ cli_params! {
         /// Float only: hide the float while this pane is focused.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub hide_while_focused: Option<String> => Field::new(None::<String>),
+        /// Float only: hide the float when a click moves focus off it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub hide_on_blur: Option<bool> => Field::new(None::<bool>),
     }
 }
 
