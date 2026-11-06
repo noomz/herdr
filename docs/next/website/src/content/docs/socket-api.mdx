@@ -624,8 +624,15 @@ leaves plugin focus context on the underlying tiled pane, and does not export
 the active popup and returns
 `popup_not_open` when none exists. `placement = "float"` opens a non-modal
 floating terminal instead; it also accepts `x`, `y`, `hide_while_focused`, and
-`hide_on_blur`. The optional `hide_on_blur` boolean overrides the manifest pane
-value and defaults to `false`. When enabled, a click that moves focus off the
+`hide_on_blur`, plus an optional public `workspace_id`. A float with a
+`workspace_id` shows only to clients viewing that workspace, on any of its
+tabs, and closes with the workspace. Unknown workspace IDs return
+`workspace_not_found`. Omit it for visibility on every workspace. It has no
+manifest equivalent; `float.set_hide_rule` does not change it. Float results
+and `float.list` include `workspace_id` only when this rule is set. Float
+placement still rejects `target_pane_id` and `direction`. The optional
+`hide_on_blur` boolean overrides the manifest pane value and defaults to
+`false`. When enabled, a click that moves focus off the
 float hides it; keyboard focus moves and clicks while it is unfocused do not. It
 returns a `float_opened` result with a `float_id`, and is controlled through the
 `float.*` methods described in [Plugins](/docs/plugins/#floats). Split and zoomed panes target an existing

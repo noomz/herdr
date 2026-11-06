@@ -343,13 +343,18 @@ modal is active, and `plugin.pane.open` returns an `ok` result after launch.
 `placement = "float"` opens a non-modal floating terminal above the tiled
 layout. Floats suit picture-in-picture views, monitors, and scratch terminals
 that stay open while you keep working in your panes. A session can hold any
-number of floats, and every workspace and tab shows them.
+number of floats. By default, every workspace and tab shows them.
 
 A float takes `width` and `height` like a popup. An open request can also set:
 
 - `x` and `y`: the outer top-left cell, relative to the pane area. Omit both to
   center the float. Herdr clamps the position so the whole float stays on
   screen.
+- `workspace_id`: a public workspace ID in `plugin.pane.open` params only. The
+  float shows only to clients viewing that workspace, across all its tabs.
+  Omit it to show the float on every workspace. Closing the workspace closes
+  the float and its process. Unknown IDs return `workspace_not_found`. There
+  is no manifest field, and `float.set_hide_rule` does not change this rule.
 - `hide_while_focused`: a pane ID. The float hides while that pane is the
   focused pane of the tab you view, and comes back when focus leaves it.
 - `hide_on_blur`: a boolean, defaulting to `false`, in the manifest pane or
@@ -370,7 +375,7 @@ command = ["sh", "peek.sh"]
 ```
 
 ```bash
-"$HERDR_BIN_PATH" plugin pane open --plugin example.peek --entrypoint peek --placement float
+"$HERDR_BIN_PATH" plugin pane open --plugin example.peek --entrypoint peek --placement float --workspace w1
 ```
 
 A float receives input only while it has focus. Click a float to focus it and
@@ -411,6 +416,7 @@ Each client focuses floats on its own, so `plugin.pane.open` rejects
     "visibility": "shown",
     "hide_while_focused": "w1:p1",
     "hide_on_blur": true,
+    "workspace_id": "w1",
     "z": 0
   }
 }
@@ -424,7 +430,8 @@ the default size. `x` and `y` are absent while the float is centered. `visibilit
 is `shown` or `hidden`. `hide_while_focused` is absent when no hide rule is set.
 `hide_on_blur` reports whether clicks that move focus away hide the float.
 `z` is the stacking position, and 0 is the bottom float. `float.list` returns the
-same objects in a `floats` array.
+same objects in a `floats` array. `workspace_id` is the public workspace ID
+when the float belongs to one, and is omitted otherwise.
 
 Control a float through the socket API:
 

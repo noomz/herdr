@@ -37,12 +37,15 @@ pub(crate) struct FloatState {
     /// Hide the float while this pane is the focused pane of the viewer's tab.
     pub hide_while_focused: Option<PaneId>,
     pub hide_on_blur: bool,
+    /// Stable public workspace identity; absent for session-wide floats.
+    pub workspace: Option<String>,
 }
 
 impl FloatState {
-    /// Whether a viewer whose tab focuses `focused_pane` should see this float.
-    pub(crate) fn visible_to(&self, focused_pane: Option<PaneId>) -> bool {
+    /// Whether a viewer in `workspace` whose tab focuses `focused_pane` sees this float.
+    pub(crate) fn visible_to(&self, focused_pane: Option<PaneId>, workspace: Option<&str>) -> bool {
         self.visibility == FloatVisibility::Shown
+            && (self.workspace.is_none() || self.workspace.as_deref() == workspace)
             && (self.hide_while_focused.is_none() || self.hide_while_focused != focused_pane)
     }
 
@@ -51,13 +54,15 @@ impl FloatState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FloatSpec {
     pub width: Option<PopupSize>,
     pub height: Option<PopupSize>,
     pub position: FloatPosition,
     pub hide_while_focused: Option<PaneId>,
     pub hide_on_blur: bool,
+    /// Stable public workspace identity; absent for session-wide floats.
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +131,20 @@ impl AppState {
         Some(float)
     }
 
+    pub(crate) fn close_floats_for_workspace(&mut self, workspace_id: &str) {
+        let ids: Vec<_> = self
+            .floats
+            .iter()
+            .filter(|float| float.workspace.as_deref() == Some(workspace_id))
+            .map(|float| float.id)
+            .collect();
+        for id in ids {
+            if let Some(float) = self.remove_float(id) {
+                self.terminal_runtime_shutdowns.push(float.terminal_id);
+            }
+        }
+    }
+
     /// The pane surface floats are placed in when no client geometry is known yet.
     pub(crate) fn float_area(&self) -> Rect {
         if self.view.terminal_area.width >= 4 && self.view.terminal_area.height >= 4 {
@@ -168,6 +187,7 @@ impl App {
             visibility: FloatVisibility::Shown,
             hide_while_focused: spec.hide_while_focused,
             hide_on_blur: spec.hide_on_blur,
+            workspace: spec.workspace,
         });
         self.request_float_render();
         Ok(id)
@@ -240,6 +260,7 @@ impl App {
                         },
                         hidden: float.visibility == FloatVisibility::Hidden,
                         hide_on_blur: float.hide_on_blur,
+                        workspace: float.workspace.clone(),
                         hide_while_focused: float
                             .hide_while_focused
                             .filter(|pane_id| self.find_pane(*pane_id).is_some())
@@ -263,6 +284,18 @@ impl App {
             self.state.reserve_float_ids_below(next);
         }
         for (float, fd) in floats.floats.into_iter().zip(fds) {
+            if float.workspace.as_ref().is_some_and(|id| {
+                !self
+                    .state
+                    .workspaces
+                    .iter()
+                    .any(|workspace| &workspace.id == id)
+            }) {
+                use std::os::fd::{FromRawFd, OwnedFd};
+                // The handoff owns this fd even when its workspace has disappeared.
+                drop(unsafe { OwnedFd::from_raw_fd(fd) });
+                continue;
+            }
             let pane_id = PaneId::alloc();
             let runtime = match TerminalRuntime::from_handoff_fd(
                 crate::handoff_runtime::ImportedHandoffRuntime {
@@ -314,6 +347,7 @@ impl App {
                 },
                 hide_while_focused,
                 hide_on_blur: float.hide_on_blur,
+                workspace: float.workspace,
             });
         }
     }
@@ -372,6 +406,7 @@ impl App {
             visibility: FloatVisibility::Shown,
             hide_while_focused: spec.hide_while_focused,
             hide_on_blur: spec.hide_on_blur,
+            workspace: spec.workspace,
         });
         (pane_id, terminal_id, id)
     }
@@ -389,6 +424,7 @@ mod tests {
             position: FloatPosition::At { x: 2, y: 3 },
             hide_while_focused: None,
             hide_on_blur: false,
+            workspace: None,
         }
     }
 
@@ -415,6 +451,7 @@ mod tests {
                     visibility: FloatVisibility::Shown,
                     hide_while_focused: None,
                     hide_on_blur: false,
+                    workspace: None,
                 });
                 id
             })
@@ -440,11 +477,66 @@ mod tests {
             visibility: FloatVisibility::Shown,
             hide_while_focused: Some(source),
             hide_on_blur: false,
+            workspace: None,
         };
 
-        assert!(!float.visible_to(Some(source)));
-        assert!(float.visible_to(Some(other)));
-        assert!(float.visible_to(None));
+        assert!(!float.visible_to(Some(source), None));
+        assert!(float.visible_to(Some(other), None));
+        assert!(float.visible_to(None, None));
+    }
+
+    #[test]
+    fn workspace_rule_filters_viewers_and_combines_with_hide_rules() {
+        let (mut state, _) = state_with_floats(1);
+        let workspace = state.workspaces[0].id.clone();
+        let float = &mut state.floats[0];
+        for viewer in [Some(workspace.as_str()), Some("other"), None] {
+            assert!(float.visible_to(None, viewer));
+        }
+        float.workspace = Some(workspace.clone());
+        assert!(float.visible_to(None, Some(&workspace)));
+        assert!(!float.visible_to(None, Some("other")));
+        assert!(!float.visible_to(None, None));
+        let pane = PaneId::alloc();
+        float.hide_while_focused = Some(pane);
+        assert!(!float.visible_to(Some(pane), Some(&workspace)));
+        float.visibility = FloatVisibility::Hidden;
+        assert!(!float.visible_to(None, Some(&workspace)));
+    }
+
+    #[test]
+    fn workspace_float_closes_when_its_last_pane_exits() {
+        let (mut app, _, terminal_id, float_id) = app_with_float();
+        app.state.floats[0].workspace = Some(app.state.workspaces[0].id.clone());
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
+        assert!(app.state.workspaces.is_empty());
+        assert!(app.state.float(float_id).is_none());
+        assert!(!app.state.terminals.contains_key(&terminal_id));
+        assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn closing_a_workspace_preserves_global_and_other_workspace_floats() {
+        let (mut state, ids) = state_with_floats(3);
+        state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("other"));
+        state.ensure_test_terminals();
+        state.floats[0].workspace = Some(state.workspaces[0].id.clone());
+        state.floats[1].workspace = Some(state.workspaces[1].id.clone());
+        let terminal_id = state.floats[0].terminal_id.clone();
+        state.direct_attach_resize_locks.insert(terminal_id.clone());
+        state.close_workspaces(vec![0]);
+        assert_eq!(z_order(&state), vec![ids[1], ids[2]]);
+        assert!(!state.terminals.contains_key(&terminal_id));
+        assert!(!state.direct_attach_resize_locks.contains(&terminal_id));
+        assert!(state.terminal_runtime_shutdowns.contains(&terminal_id));
+        state.assert_invariants_for_test();
     }
 
     #[test]
@@ -459,10 +551,11 @@ mod tests {
             visibility: FloatVisibility::Hidden,
             hide_while_focused: None,
             hide_on_blur: false,
+            workspace: None,
         };
 
-        assert!(!float.visible_to(None));
-        assert!(!float.visible_to(Some(PaneId::alloc())));
+        assert!(!float.visible_to(None, None));
+        assert!(!float.visible_to(Some(PaneId::alloc()), None));
     }
 
     #[test]
@@ -666,6 +759,7 @@ mod tests {
             hidden: false,
             hide_while_focused,
             hide_on_blur: false,
+            workspace: None,
         }
     }
 
@@ -676,6 +770,137 @@ mod tests {
         json.as_object_mut().unwrap().remove("hide_on_blur");
         let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
         assert!(!decoded.hide_on_blur);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_handoff_float_defaults_workspace_to_none() {
+        let mut json = serde_json::to_value(handoff_float(None)).unwrap();
+        json.as_object_mut().unwrap().remove("workspace");
+        let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.workspace, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_float_handoff_round_trip_uses_restored_workspace_identity() {
+        let (mut app, _, _, float_id) = app_with_float();
+        app.close_float(float_id);
+        let workspace = app.state.workspaces[0].id.clone();
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let snapshot: crate::persist::SessionSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        assert_eq!(snapshot.workspaces[0].id.as_ref(), Some(&workspace));
+        for handoff in [false, true] {
+            let restored = if handoff {
+                crate::persist::restore_handoff(
+                    &snapshot,
+                    0,
+                    "__missing_workspace_restore_shell__",
+                    crate::config::ShellModeConfig::NonLogin,
+                    &mut std::collections::HashMap::new(),
+                    app.event_tx.clone(),
+                    app.render_notify.clone(),
+                    app.render_dirty.clone(),
+                )
+                .unwrap()
+            } else {
+                crate::persist::restore(
+                    &snapshot,
+                    None,
+                    24,
+                    80,
+                    0,
+                    "__missing_workspace_restore_shell__",
+                    crate::config::ShellModeConfig::NonLogin,
+                    false,
+                    app.event_tx.clone(),
+                    app.render_notify.clone(),
+                    app.render_dirty.clone(),
+                )
+            };
+            app.state.workspaces = restored.0;
+            app.state.terminals = restored.1;
+            app.terminal_runtimes = restored.2.into();
+            assert_eq!(app.state.workspaces[0].id, workspace);
+            let (fd, _slave) = handoff_pty();
+            app.restore_handoff_floats(
+                &snapshot,
+                crate::handoff_runtime::HandoffFloats {
+                    floats: vec![crate::handoff_runtime::HandoffFloat {
+                        workspace: Some(workspace.clone()),
+                        ..handoff_float(None)
+                    }],
+                    next_float_id: None,
+                },
+                vec![fd],
+            );
+            assert_eq!(app.state.floats[0].workspace.as_ref(), Some(&workspace));
+            let exported = app.handoff_floats();
+            let encoded = serde_json::to_string(&exported[0].1).unwrap();
+            let decoded: crate::handoff_runtime::HandoffFloat =
+                serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.workspace.as_ref(), Some(&workspace));
+            app.close_float(app.state.floats[0].id);
+            let (fd, _slave2) = handoff_pty();
+            app.restore_handoff_floats(
+                &snapshot,
+                crate::handoff_runtime::HandoffFloats {
+                    floats: vec![decoded],
+                    next_float_id: None,
+                },
+                vec![fd],
+            );
+            assert_eq!(
+                app.float_info(0, &app.state.floats[0]).workspace_id,
+                Some(workspace.clone())
+            );
+            assert!(app.state.floats[0].visible_to(None, Some(&workspace)));
+            assert!(!app.state.floats[0].visible_to(None, Some("other")));
+            app.close_float(app.state.floats[0].id);
+            app.state.assert_invariants_for_test();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_drops_float_with_missing_workspace_and_closes_its_fd() {
+        let (mut app, _, _, float_id) = app_with_float();
+        app.close_float(float_id);
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let terminal_count = app.state.terminals.len();
+        let (fd, _slave) = handoff_pty();
+        app.restore_handoff_floats(
+            &snapshot,
+            crate::handoff_runtime::HandoffFloats {
+                floats: vec![crate::handoff_runtime::HandoffFloat {
+                    workspace: Some("missing".into()),
+                    ..handoff_float(None)
+                }],
+                next_float_id: None,
+            },
+            vec![fd],
+        );
+        assert!(app.state.floats.is_empty());
+        assert_eq!(app.state.terminals.len(), terminal_count);
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF)
+        );
+        app.state.assert_invariants_for_test();
     }
 
     #[cfg(unix)]

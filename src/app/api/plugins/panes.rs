@@ -48,6 +48,13 @@ impl App {
         plugin: &InstalledPluginInfo,
         pane: PluginManifestPane,
     ) -> String {
+        let workspace = match params.workspace_id.as_deref() {
+            None => None,
+            Some(public_id) => match self.parse_workspace_id(public_id) {
+                Some(ws_idx) => Some(self.state.workspaces[ws_idx].id.clone()),
+                None => return encode_error(id, "workspace_not_found", "workspace not found"),
+            },
+        };
         let hide_while_focused = match params.hide_while_focused.as_deref() {
             None => None,
             Some(public_id) => match self.parse_pane_id(public_id) {
@@ -74,6 +81,7 @@ impl App {
             height: params.height.or(pane.height),
             position,
             hide_while_focused,
+            workspace,
             hide_on_blur: params.hide_on_blur.unwrap_or(pane.hide_on_blur),
         };
         let float_id =

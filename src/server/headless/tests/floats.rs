@@ -76,6 +76,7 @@ fn install_float(
             position: FloatPosition::At { x: 50, y: 2 },
             hide_while_focused,
             hide_on_blur: false,
+            workspace: None,
         },
     );
     (float_id, terminal_id, input)
@@ -128,6 +129,118 @@ async fn negotiated_client_receives_positioned_float_layer_beside_the_pane_surfa
         render_rx.try_recv().is_err(),
         "an unchanged layer is not resent"
     );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn workspace_float_layers_graphics_and_input_follow_each_clients_workspace() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"first-pane");
+    let mut second = crate::workspace::Workspace::test_new("second");
+    let second_pane = second.tabs[0].root_pane;
+    let runtime =
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(80, 24, 0, b"second-pane");
+    second.insert_test_runtime(second_pane, runtime);
+    server.app.state.workspaces.push(second);
+    server.app.state.ensure_test_terminals();
+    let workspace = server.app.state.workspaces[0].id.clone();
+    let first_tab = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab = server.app.public_tab_id(1, 0).unwrap();
+    let (scoped, scoped_terminal, mut scoped_input) = install_float(&mut server, FLOAT_IMAGE, None);
+    server.app.state.floats[0].workspace = Some(workspace);
+    let (global, _, mut global_input) = install_float(&mut server, b"GLOBAL", None);
+    server
+        .app
+        .edit_float(global, FloatEdit::Move(FloatPosition::At { x: 2, y: 2 }));
+    let first_client = connect_shell(&mut server, 7, true);
+    let second_client = connect_shell(&mut server, 8, true);
+    assert!(server.focus_shell_client_on_tab(7, &first_tab));
+    assert!(server.focus_shell_client_on_tab(8, &second_tab));
+    server.render_and_stream();
+    let first = read_server_messages(first_client.recv().unwrap());
+    let second = read_server_messages(second_client.recv().unwrap());
+    let ids = |messages: &[ServerMessage]| {
+        float_layers(messages)[0]
+            .floats
+            .iter()
+            .map(|float| float.float_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&first), vec![scoped, global]);
+    assert_eq!(ids(&second), vec![global]);
+    let images = |messages: &[ServerMessage]| {
+        messages
+            .iter()
+            .find_map(|message| match message {
+                ServerMessage::PaneSurface(surface) => Some(float_image_targets(surface)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(images(&first), vec![scoped_terminal.to_string()]);
+    assert!(images(&second).is_empty());
+    type_into_float(&mut server, 8, scoped, "wrong-workspace");
+    assert!(scoped_input.try_recv().is_err());
+    type_into_float(&mut server, 7, scoped, "matching-workspace");
+    assert_eq!(
+        scoped_input.try_recv().unwrap(),
+        Bytes::from_static(b"matching-workspace")
+    );
+    for client in [7, 8] {
+        type_into_float(&mut server, client, global, "global");
+        assert_eq!(
+            global_input.try_recv().unwrap(),
+            Bytes::from_static(b"global")
+        );
+    }
+    assert!(server.focus_shell_client_on_tab(7, &second_tab));
+    server.render_and_stream();
+    let after = read_server_messages(first_client.recv().unwrap());
+    assert_eq!(ids(&after), vec![global]);
+    assert!(images(&after).is_empty());
+    type_into_float(&mut server, 7, scoped, "left-workspace");
+    assert!(scoped_input.try_recv().is_err());
+    assert!(
+        !server.pty_sources_visible_to_any_render_target(&HashSet::from([server.app.state.floats
+            [0]
+        .pane_id]))
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn moving_the_last_pane_out_closes_its_workspaces_float() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (float_id, terminal_id, _) = install_float(&mut server, b"FLOAT", None);
+    server.app.state.floats[0].workspace = Some(server.app.state.workspaces[0].id.clone());
+    let pane = server.app.state.workspaces[0].tabs[0].root_pane;
+    let pane_id = server.app.public_pane_id(0, pane).unwrap();
+    server
+        .app
+        .state
+        .workspaces
+        .push(crate::workspace::Workspace::test_new("other"));
+    server.app.state.active = Some(1);
+    server.app.state.selected = 1;
+    server.app.state.ensure_test_terminals();
+    let response = server.app.handle_api_request(
+        serde_json::from_value(serde_json::json!({
+            "id": "move", "method": "pane.move", "params": {
+                "pane_id": pane_id, "destination": {"type": "new_workspace"}, "focus": false,
+            }
+        }))
+        .unwrap(),
+    );
+    let response: api::schema::SuccessResponse =
+        serde_json::from_str(&response).unwrap_or_else(|err| panic!("{err}: {response}"));
+    assert!(matches!(
+        response.result,
+        api::schema::ResponseResult::PaneMove { .. }
+    ));
+    assert!(server.app.state.float(float_id).is_none());
+    assert!(server.app.terminal_runtimes.get(&terminal_id).is_none());
+    server.app.state.assert_invariants_for_test();
     shutdown_test_runtimes(&mut server);
 }
 
@@ -462,5 +575,110 @@ async fn float_blur_hides_only_flagged_floats_visible_to_the_reporting_client() 
             })
         );
         shutdown_test_runtimes(&mut server);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "manual workspace float render scaling profile"]
+async fn workspace_float_render_scale_profile() {
+    use crate::server::client_shell_graphics::FloatGraphics;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    for background in [true, false] {
+        for count in [1, 15] {
+            let mut server = test_headless_server();
+            let history = "populated pane\r\n".repeat(100);
+            let _input = install_focused_test_runtime(&mut server, history.as_bytes());
+            let mut pane_ids = vec![server.app.state.workspaces[0].tabs[0].root_pane];
+            for index in 1..count {
+                let (ws_idx, pane_id) = if background {
+                    let ws = crate::workspace::Workspace::test_new("background");
+                    let pane = ws.tabs[0].root_pane;
+                    server.app.state.workspaces.push(ws);
+                    (server.app.state.workspaces.len() - 1, pane)
+                } else {
+                    let workspace = &mut server.app.state.workspaces[0];
+                    workspace.tabs[0]
+                        .layout
+                        .focus_pane(pane_ids[(index - 1) / 2]);
+                    let direction = if index % 2 == 0 {
+                        ratatui::layout::Direction::Vertical
+                    } else {
+                        ratatui::layout::Direction::Horizontal
+                    };
+                    let pane = workspace.test_split(direction);
+                    pane_ids.push(pane);
+                    (0, pane)
+                };
+                server.app.state.workspaces[ws_idx].insert_test_runtime(
+                    pane_id,
+                    crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+                        80,
+                        24,
+                        0,
+                        history.as_bytes(),
+                    ),
+                );
+            }
+            server.app.state.ensure_test_terminals();
+            let (_, _, _input) = install_float(&mut server, b"FLOAT", None);
+            let workspace = server.app.state.workspaces[0].id.clone();
+            let focused = server.app.state.workspaces[0].tabs[0].layout.focused();
+            let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+            let cell = crate::kitty_graphics::HostCellSize {
+                width_px: 10,
+                height_px: 20,
+            };
+            let delivery = crate::kitty_graphics::surface::DeliveryCache::default();
+            let mut samples = [Vec::new(), Vec::new()];
+            for round in 0..6 {
+                for scoped in [false, true] {
+                    server.app.state.floats[0].workspace = scoped.then(|| workspace.clone());
+                    let started = Instant::now();
+                    for _ in 0..40 {
+                        let surface = crate::server::client_shell::render_pane_surface(
+                            &mut server.app,
+                            Some(crate::ui::TabSurfaceTarget {
+                                workspace_index: 0,
+                                tab_index: 0,
+                            }),
+                            area,
+                            true,
+                            true,
+                            FloatGraphics::VisibleTo(Some(focused), Some(0)),
+                            cell,
+                            &delivery,
+                            1,
+                        )
+                        .expect("populated pane surface");
+                        black_box(surface);
+                        let layer = crate::server::client_shell::render_float_layer(
+                            &server.app,
+                            Some(focused),
+                            Some(&workspace),
+                            area,
+                            cell,
+                        )
+                        .expect("float layer");
+                        assert_eq!(layer.floats.len(), 1);
+                        black_box(layer);
+                    }
+                    if round > 0 {
+                        samples[usize::from(scoped)].push(started.elapsed().as_nanos() / 40);
+                    }
+                }
+            }
+            for sample in &mut samples {
+                sample.sort_unstable();
+            }
+            println!(
+                "workspace float {} count={count} fixed=80x24 ns/frame global={} [{}..{}] scoped={} [{}..{}] runs=5 frames/run=40",
+                if background { "background" } else { "active" },
+                samples[0][2], samples[0][0], samples[0][4],
+                samples[1][2], samples[1][0], samples[1][4],
+            );
+            shutdown_test_runtimes(&mut server);
+        }
     }
 }

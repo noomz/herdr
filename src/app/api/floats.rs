@@ -33,6 +33,7 @@ impl App {
                 self.public_pane_id(ws_idx, pane_id)
             }),
             hide_on_blur: float.hide_on_blur,
+            workspace_id: float.workspace.clone(),
             z,
         }
     }
@@ -172,6 +173,7 @@ mod tests {
                     visibility: FloatVisibility::Shown,
                     hide_while_focused: None,
                     hide_on_blur: false,
+                    workspace: None,
                 });
                 id.to_string()
             })
@@ -191,6 +193,27 @@ mod tests {
         FloatTarget {
             float_id: float_id.into(),
         }
+    }
+
+    #[test]
+    fn float_info_omits_global_workspace_and_set_hide_rule_preserves_ownership() {
+        let (mut app, ids) = app_with_floats(1);
+        let listed = call(&mut app, Method::FloatList(Default::default()));
+        assert!(listed["result"]["floats"][0].get("workspace_id").is_none());
+        let workspace = app.state.workspaces[0].id.clone();
+        app.state.floats[0].workspace = Some(workspace.clone());
+        let response = call(
+            &mut app,
+            Method::FloatSetHideRule(FloatSetHideRuleParams {
+                float_id: ids[0].clone(),
+                pane_id: None,
+            }),
+        );
+        assert_eq!(response["result"]["float"]["workspace_id"], workspace);
+        assert_eq!(
+            app.state.floats[0].workspace.as_deref(),
+            Some(workspace.as_str())
+        );
     }
 
     #[test]

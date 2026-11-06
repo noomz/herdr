@@ -76,6 +76,15 @@ impl HeadlessServer {
             .map(|tab| tab.layout.focused())
     }
 
+    fn shell_workspace_id(&self, client_id: u64) -> Option<&str> {
+        let target = self.shell_target_for_client(client_id)?;
+        self.app
+            .state
+            .workspaces
+            .get(target.workspace_index)
+            .map(|ws| ws.id.as_str())
+    }
+
     pub(super) fn shell_client_sees_float(
         &self,
         client_id: u64,
@@ -84,11 +93,12 @@ impl HeadlessServer {
         self.clients
             .get(&client_id)
             .is_some_and(|client| client.shell_floats.is_some())
-            && self
-                .app
-                .state
-                .float_for_pane(pane_id)
-                .is_some_and(|float| float.visible_to(self.shell_focused_tiled_pane(client_id)))
+            && self.app.state.float_for_pane(pane_id).is_some_and(|float| {
+                float.visible_to(
+                    self.shell_focused_tiled_pane(client_id),
+                    self.shell_workspace_id(client_id),
+                )
+            })
     }
 
     pub(super) fn shell_float_graphics(
@@ -104,6 +114,8 @@ impl HeadlessServer {
         }
         crate::server::client_shell_graphics::FloatGraphics::VisibleTo(
             self.shell_focused_tiled_pane(client_id),
+            self.shell_target_for_client(client_id)
+                .map(|target| target.workspace_index),
         )
     }
 
@@ -122,6 +134,7 @@ impl HeadlessServer {
         let layer = match crate::server::client_shell::render_float_layer(
             &self.app,
             focused_pane,
+            self.shell_workspace_id(client_id),
             area,
             cell_size,
         ) {

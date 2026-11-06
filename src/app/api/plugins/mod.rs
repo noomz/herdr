@@ -523,9 +523,7 @@ impl App {
             return encode_error(id, "ui_busy", "a popup pane is already open");
         }
         match placement {
-            PluginPanePlacement::Overlay
-            | PluginPanePlacement::Popup
-            | PluginPanePlacement::Float => {
+            PluginPanePlacement::Overlay | PluginPanePlacement::Popup => {
                 if params.workspace_id.is_some()
                     || params.target_pane_id.is_some()
                     || params.direction.is_some()
@@ -533,7 +531,16 @@ impl App {
                     return encode_error(
                         id,
                         "invalid_params",
-                        "overlay, popup, and float plugin panes target the active pane",
+                        "overlay and popup plugin panes target the active pane",
+                    );
+                }
+            }
+            PluginPanePlacement::Float => {
+                if params.target_pane_id.is_some() || params.direction.is_some() {
+                    return encode_error(
+                        id,
+                        "invalid_params",
+                        "float plugin panes support workspace_id but not target_pane_id or direction",
                     );
                 }
             }
@@ -2615,6 +2622,80 @@ placement = "float"
             }
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plugin_float_workspace_rule_is_reported_and_validated() {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("float-workspace")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 100, 30);
+        let workspace_id = app.public_workspace_id(0);
+        let root = unique_temp_path("plugin-float-workspace");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.workspace"
+name = "Workspace"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "float"
+command = ["sh", "-c", "sleep 5"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+        let open = |workspace: &str, target: Option<&str>| {
+            let mut params = serde_json::json!({"plugin_id": "example.workspace", "entrypoint": "peek", "placement": "float", "workspace_id": workspace});
+            if let Some(target) = target {
+                params["target_pane_id"] = target.into();
+            }
+            serde_json::from_value::<Request>(serde_json::json!({"id": "open-workspace", "method": "plugin.pane.open", "params": params})).unwrap()
+        };
+        let opened = app.handle_api_request(open(&workspace_id, None));
+        let value: serde_json::Value = serde_json::from_str(&opened).unwrap();
+        assert_eq!(
+            value["result"]["float"]["workspace_id"], workspace_id,
+            "{opened}"
+        );
+        let listed = app.handle_api_request(
+            serde_json::from_value(
+                serde_json::json!({"id": "list", "method": "float.list", "params": {}}),
+            )
+            .unwrap(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        assert_eq!(value["result"]["floats"][0]["workspace_id"], workspace_id);
+        for (workspace, target, code) in [
+            ("missing", None, "workspace_not_found"),
+            (workspace_id.as_str(), Some("missing"), "invalid_params"),
+        ] {
+            let response = app.handle_api_request(open(workspace, target));
+            let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(error.error.code, code);
+        }
+        let closed = app.handle_api_request(serde_json::from_value(serde_json::json!({
+            "id": "close-workspace", "method": "workspace.close", "params": {"workspace_id": workspace_id}
+        })).unwrap());
+        assert!(
+            serde_json::from_str::<crate::api::schema::SuccessResponse>(&closed).is_ok(),
+            "{closed}"
+        );
+        let listed = app.handle_api_request(
+            serde_json::from_value(
+                serde_json::json!({"id": "list", "method": "float.list", "params": {}}),
+            )
+            .unwrap(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        assert_eq!(value["result"]["floats"], serde_json::json!([]));
+        assert_eq!(app.terminal_runtimes.len(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
