@@ -393,8 +393,18 @@ it has no pane ID, emits no pane lifecycle events, and does not take part in
 pane, layout, persistence, or agent APIs. Floats survive client detach and
 `server live-handoff`.
 
-Each client focuses floats on its own, so `plugin.pane.open` rejects
-`focus: true` for a float with `invalid_params`. Omit `focus` or send `false`.
+Each client keeps its own float focus. With `placement: "float"`,
+`plugin.pane.open` accepts `focus: true` to request keyboard focus in every
+connected client that can see the new float. Socket requests default to
+`focus: false`. The CLI defaults to focus, so `herdr plugin pane open
+--placement float` focuses the new float unless you pass `--no-focus`.
+Clients that do not support float focus ignore the request.
+
+`float.show` and `float.raise` also accept an optional `focus` boolean.
+`focus: true` requests focus in clients that can see the float after the
+operation. Omitting it or sending `false` leaves focus unchanged. A hide rule
+still controls visibility, and raising a hidden float does not show it.
+These requests do not trigger `hide_on_blur`.
 
 `plugin.pane.open` returns a `float_opened` result that describes the new float:
 
@@ -434,8 +444,8 @@ Control a float through the socket API:
 | `float.move` | `float_id`, `x`, `y` | Moves the outer top-left cell. |
 | `float.resize` | `float_id`, `width`, `height` | Sets the size. An omitted dimension returns to the default. |
 | `float.hide` | `float_id` | Hides the float. Its process keeps running. |
-| `float.show` | `float_id` | Shows a hidden float. |
-| `float.raise` | `float_id` | Brings the float to the front. |
+| `float.show` | `float_id`, optional `focus` | Shows a hidden float and optionally requests focus. |
+| `float.raise` | `float_id`, optional `focus` | Brings the float to the front and optionally requests focus. |
 | `float.set_hide_rule` | `float_id`, `pane_id` | Hides the float while `pane_id` is focused. Send `null` to remove the rule. |
 | `float.close` | `float_id` | Closes the float and ends its process. |
 

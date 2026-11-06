@@ -11,6 +11,7 @@ use super::{ClientMessage, ClientPaneInputEvent, FrameData, ServerMessage, Surfa
 
 pub(crate) const CAPABILITY: &str = "floats";
 pub(crate) const SURFACE_KIND: &str = "endpoint.floats.v1";
+pub(crate) const FOCUS_KIND: &str = "endpoint.float-focus.v1";
 pub(crate) const BLUR_KIND: &str = "endpoint.float-blur.v1";
 pub(crate) const INPUT_KIND: &str = "endpoint.float-input.v1";
 
@@ -82,6 +83,22 @@ pub struct FloatSurface {
 pub struct FloatInput {
     pub float_id: FloatId,
     pub events: Vec<ClientPaneInputEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FloatFocus {
+    pub float_id: FloatId,
+}
+
+pub(crate) fn float_focus_message(float_focus: &FloatFocus) -> Result<ServerMessage, String> {
+    Ok(ServerMessage::EndpointControl {
+        kind: FOCUS_KIND.into(),
+        data: serde_json::to_string(float_focus).map_err(|error| error.to_string())?,
+    })
+}
+
+pub(crate) fn decode_float_focus(data: &str) -> Result<FloatFocus, String> {
+    serde_json::from_str(data).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

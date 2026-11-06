@@ -90,7 +90,12 @@ impl App {
             terminal.set_manual_label(pane.title);
         }
         match self.float_info_by_id(float_id) {
-            Some(float) => encode_success(id, ResponseResult::FloatOpened { float }),
+            Some(float) => {
+                if params.focus {
+                    self.pending_float_focus.push(float_id);
+                }
+                encode_success(id, ResponseResult::FloatOpened { float })
+            }
             None => encode_error(id, "plugin_pane_open_failed", "plugin float disappeared"),
         }
     }

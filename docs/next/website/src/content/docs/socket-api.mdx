@@ -628,7 +628,15 @@ floating terminal instead; it also accepts `x`, `y`, `hide_while_focused`, and
 value and defaults to `false`. When enabled, a click that moves focus off the
 float hides it; keyboard focus moves and clicks while it is unfocused do not. It
 returns a `float_opened` result with a `float_id`, and is controlled through the
-`float.*` methods described in [Plugins](/docs/plugins/#floats). Split and zoomed panes target an existing
+`float.*` methods described in [Plugins](/docs/plugins/#floats). With
+`placement = "float"`, `focus: true` requests keyboard focus in every connected
+client that can see the new float. Socket requests default to `false`; the CLI
+defaults to `true` and accepts `--no-focus`. `float.show` and `float.raise` accept
+`{"float_id":"f1","focus":true}` to request focus after the operation. Omitting
+`focus` or sending `false` leaves focus unchanged. Hide rules still apply, and
+`float.raise` does not show a hidden float. Clients without float-focus support
+ignore the focus request. Focus requests do not trigger `hide_on_blur`.
+Split and zoomed panes target an existing
 pane; tab panes can target a workspace. Split, tab, zoomed, and overlay panes
 behave like normal Herdr panes, and `plugin.pane.focus` and `plugin.pane.close`
 continue to operate on those panes.

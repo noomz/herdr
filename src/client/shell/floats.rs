@@ -78,6 +78,7 @@ pub(super) struct FloatHit {
 pub(super) struct ClientFloats {
     pub(super) layer: FloatsSurface,
     pub(super) focused: Option<FloatId>,
+    pub(super) pending_float_focus: Option<FloatId>,
     pub(super) drag: Option<ClientFloatDrag>,
     /// A button went down on a float; its Drag and Up belong to the float.
     pub(super) pressed: bool,
@@ -217,7 +218,7 @@ pub(super) fn compose_floats(
 }
 
 impl ClientShellState {
-    pub(crate) fn set_float_layer(&mut self, layer: FloatsSurface) {
+    pub(crate) fn set_float_layer(&mut self, layer: FloatsSurface) -> ClientShellInput {
         let present = |id: FloatId| layer.floats.iter().any(|float| float.float_id == id);
         if let Some(focused) = self.floats.focused {
             if !present(focused) {
@@ -248,7 +249,28 @@ impl ClientShellState {
             self.pane_mouse_gesture = None;
         }
         self.floats.layer = layer;
+        let mut outcome = ClientShellInput::default();
+        if let Some(float_id) = self.floats.pending_float_focus.take() {
+            if self.floats.get(float_id).is_some() {
+                self.focus_float(float_id, &mut outcome);
+            }
+        }
         self.reconcile_input_source();
+        outcome
+    }
+
+    pub(crate) fn set_float_focus(
+        &mut self,
+        float_focus: crate::protocol::floats::FloatFocus,
+    ) -> ClientShellInput {
+        let mut outcome = ClientShellInput::default();
+        self.floats.pending_float_focus = None;
+        if self.floats.get(float_focus.float_id).is_some() {
+            self.focus_float(float_focus.float_id, &mut outcome);
+        } else {
+            self.floats.pending_float_focus = Some(float_focus.float_id);
+        }
+        outcome
     }
 
     pub(super) fn clear_float_projection(&mut self) {
@@ -544,8 +566,9 @@ impl ClientShellState {
                 self.floats.layer.floats.push(float);
             }
             self.push_endpoint_method(
-                crate::api::schema::Method::FloatRaise(crate::api::schema::FloatTarget {
+                crate::api::schema::Method::FloatRaise(crate::api::schema::FloatShowParams {
                     float_id: float_id.to_string(),
+                    focus: None,
                 }),
                 outcome,
             );

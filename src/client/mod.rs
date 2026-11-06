@@ -2156,20 +2156,40 @@ async fn run_client_loop(
                                 }
                                 continue;
                             }
-                            Ok(endpoint::EndpointControlMessage::Floats(layer)) => {
+                            Ok(
+                                control @ (endpoint::EndpointControlMessage::Floats(_)
+                                | endpoint::EndpointControlMessage::FloatFocus(_)),
+                            ) => {
                                 if activation_message || !endpoint_active {
                                     continue;
                                 }
-                                let composed = state.shell.as_mut().and_then(|shell| {
-                                    shell.set_float_layer(layer);
-                                    shell.compose(state.reported_size.0, state.reported_size.1)
+                                let update = state.shell.as_mut().map(|shell| {
+                                    let outcome = match control {
+                                        endpoint::EndpointControlMessage::Floats(layer) => {
+                                            shell.set_float_layer(layer)
+                                        }
+                                        endpoint::EndpointControlMessage::FloatFocus(
+                                            float_focus,
+                                        ) => shell.set_float_focus(float_focus),
+                                        _ => unreachable!("matched float control"),
+                                    };
+                                    let frame =
+                                        shell.compose(state.reported_size.0, state.reported_size.1);
+                                    (outcome, frame)
                                 });
-                                apply_client_shell_input_source_changes(
-                                    &mut state,
-                                    &mut prefix_input_source,
-                                );
-                                if let Some(frame) = composed {
-                                    state.present_frame(frame);
+                                if let Some((outcome, frame)) = update {
+                                    if finish_client_shell_input(
+                                        &mut state,
+                                        outcome,
+                                        frame,
+                                        &mut write_stream,
+                                        &mut pending_activation,
+                                        &mut endpoint_commands,
+                                        &mut prefix_input_source,
+                                        &mut scheduled_activation,
+                                    )? {
+                                        return Ok(());
+                                    }
                                 }
                                 continue;
                             }

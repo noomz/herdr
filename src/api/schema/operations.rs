@@ -8,14 +8,14 @@ pub(crate) struct Operation {
 }
 
 macro_rules! define_operations {
-    ($( $variant:ident($params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal; )*) => {
+    ($( $variant:ident($(#[$param_attr:meta])* $params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal; )*) => {
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
         #[serde(tag = "method", content = "params")]
         // Request enums are short-lived wire values; keeping variants direct preserves
         // the simple serde shape and avoids boxing churn across every caller.
         #[allow(clippy::large_enum_variant)]
         pub enum Method {
-            $(#[serde(rename = $name)] $variant($params),)*
+            $(#[serde(rename = $name)] $variant($(#[$param_attr])* $params),)*
         }
 
         impl Method {

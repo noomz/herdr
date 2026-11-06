@@ -329,7 +329,9 @@ Escape 会发送给浮动窗口中的程序，前缀按键绑定仍然有效。
 浮动窗口不是 Herdr 窗格：它没有窗格 ID，不发出窗格生命周期事件，也不参与 pane、layout、持久化或代理 API。
 浮动窗口在客户端分离和 `server live-handoff` 后仍会保留。
 
-每个客户端各自管理浮动窗口的焦点，因此对浮动窗口指定 `focus: true` 时，`plugin.pane.open` 返回 `invalid_params`。请省略 `focus` 或发送 `false`。
+每个客户端各自管理浮动窗口的焦点。调用 `plugin.pane.open` 时指定 `placement: "float"` 和 `focus: true`，会向能够显示新浮动窗口的所有已连接客户端请求键盘焦点。套接字 API 的 `focus` 默认值为 `false`。CLI 默认值为 `true`，因此 `herdr plugin pane open --placement float` 会请求焦点，除非指定 `--no-focus`。不支持浮动窗口焦点请求的客户端会忽略该请求。
+
+`float.show` 和 `float.raise` 也接受可选的布尔参数 `focus`。设置为 `true` 时，会向操作后能够显示浮动窗口的客户端请求焦点。省略或设置为 `false` 时，焦点保持不变。隐藏规则仍然生效，`float.raise` 不会显示已隐藏的浮动窗口。这些请求不会触发 `hide_on_blur`。
 
 `plugin.pane.open` 返回描述新浮动窗口的 `float_opened` 结果：
 

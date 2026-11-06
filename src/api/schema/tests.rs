@@ -29,6 +29,19 @@ fn rewrite_schema_refs(value: &mut serde_json::Value, schema_name: &str) {
     }
 }
 
+fn socket_request_schema_entry() -> serde_json::Value {
+    let mut schema = protocol_schema_entry::<Request>("request");
+    // The socket API documents focus; the generation-1 endpoint keeps its original params schema.
+    let raise = schema["oneOf"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|branch| branch["properties"]["method"]["const"] == "float.raise")
+        .unwrap();
+    raise["properties"]["params"]["$ref"] = "#/schemas/request/$defs/FloatShowParams".into();
+    schema
+}
+
 fn protocol_schema_document() -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -36,7 +49,7 @@ fn protocol_schema_document() -> serde_json::Value {
         "schema_version": 1,
         "protocol": crate::protocol::PROTOCOL_VERSION,
         "schemas": {
-            "request": protocol_schema_entry::<Request>("request"),
+            "request": socket_request_schema_entry(),
             "success_response": protocol_schema_entry::<SuccessResponse>("success_response"),
             "error_response": protocol_schema_entry::<ErrorResponse>("error_response"),
             "event": protocol_schema_entry::<EventEnvelope>("event"),
@@ -1469,4 +1482,51 @@ fn pane_link_resolve_round_trips() {
 fn read_choices_cover_every_api_value() {
     crate::cli::projection::assert_choices_cover_api_enum(READ_SOURCES);
     crate::cli::projection::assert_choices_cover_api_enum(READ_FORMATS);
+}
+
+#[test]
+fn float_show_and_raise_accept_optional_focus_without_changing_absent_shape() {
+    for method in ["float.show", "float.raise"] {
+        for focus in [None, Some(false), Some(true)] {
+            let mut json = serde_json::json!({
+                "id": "float-focus", "method": method, "params": {"float_id": "f1"}
+            });
+            if let Some(focus) = focus {
+                json["params"]["focus"] = focus.into();
+            }
+            let parsed: Request = serde_json::from_value(json.clone()).unwrap();
+            if focus.is_none() {
+                assert_eq!(
+                    serde_json::to_string(&parsed).unwrap(),
+                    format!(
+                        r#"{{"id":"float-focus","method":"{method}","params":{{"float_id":"f1"}}}}"#
+                    )
+                );
+            }
+            assert_eq!(serde_json::to_value(parsed).unwrap(), json);
+        }
+    }
+}
+
+#[test]
+fn socket_float_show_and_raise_schema_exposes_optional_focus() {
+    let schema = socket_request_schema_entry();
+    for method in ["float.show", "float.raise"] {
+        let branch = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|branch| branch["properties"]["method"]["const"] == method)
+            .unwrap();
+        assert_eq!(
+            branch["properties"]["params"]["$ref"],
+            "#/schemas/request/$defs/FloatShowParams"
+        );
+    }
+    let params = &schema["$defs"]["FloatShowParams"];
+    assert_eq!(params["required"], serde_json::json!(["float_id"]));
+    assert_eq!(
+        params["properties"]["focus"]["type"],
+        serde_json::json!(["boolean", "null"])
+    );
 }

@@ -12,6 +12,7 @@ pub(crate) enum EndpointControlMessage {
     AgentCompletions(crate::protocol::endpoint::EndpointAgentCompletions),
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
     Floats(crate::protocol::floats::FloatsSurface),
+    FloatFocus(crate::protocol::floats::FloatFocus),
     Ignored,
 }
 
@@ -53,6 +54,14 @@ pub(crate) fn decode_endpoint_control(
                 view,
             },
         ));
+    }
+    if kind == crate::protocol::floats::FOCUS_KIND {
+        return Ok(crate::protocol::floats::decode_float_focus(data)
+            .map(EndpointControlMessage::FloatFocus)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "ignoring invalid float focus");
+                EndpointControlMessage::Ignored
+            }));
     }
     if kind == crate::protocol::floats::SURFACE_KIND {
         return Ok(crate::protocol::floats::decode_surface(data)

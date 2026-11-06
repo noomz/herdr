@@ -512,13 +512,6 @@ impl App {
                 "x, y, hide_while_focused, and hide_on_blur are only supported when placement is float",
             );
         }
-        if placement == PluginPanePlacement::Float && params.focus {
-            return encode_error(
-                id,
-                "invalid_params",
-                "focus is not supported when placement is float; each client focuses floats itself",
-            );
-        }
         if placement == PluginPanePlacement::Popup && self.state.popup_pane.is_some() {
             return encode_error(id, "ui_busy", "a popup pane is already open");
         }
@@ -2757,10 +2750,15 @@ command = ["sh", "-c", "sleep 5"]
                 }
             }),
         });
-        let focused: crate::api::schema::ErrorResponse = serde_json::from_str(&focused)
-            .unwrap_or_else(|_| panic!("focus on a float must be rejected: {focused}"));
-        assert_eq!(focused.error.code, "invalid_params");
-        assert_eq!(app.state.floats.len(), 2);
+        let ResponseResult::FloatOpened { float: focused } = response_result(&focused) else {
+            panic!("expected focused float: {focused}");
+        };
+        assert_eq!(app.state.floats.len(), 3);
+        assert_eq!(
+            app.pending_float_focus,
+            vec![crate::protocol::floats::FloatId::parse(&focused.float_id).unwrap()]
+        );
+        app.close_float(crate::protocol::floats::FloatId::parse(&focused.float_id).unwrap());
 
         app.handle_internal_event(crate::events::AppEvent::PaneDied {
             pane_id: float_pane,

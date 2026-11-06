@@ -8,6 +8,14 @@ pub struct FloatTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FloatShowParams {
+    pub float_id: String,
+    /// Request keyboard focus in connected clients that can see the float.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FloatMoveParams {
     pub float_id: String,
     /// Outer left edge in cells from the pane surface's left edge. Clamped to stay on screen.

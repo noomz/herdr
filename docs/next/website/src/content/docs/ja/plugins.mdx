@@ -366,7 +366,9 @@ Escape はフロート内のプログラムに届き、プレフィックスの�
 フロートは Herdr ペインではありません。ペイン ID を持たず、ペインのライフサイクルイベントを発行せず、pane、layout、永続化、エージェント API に参加しません。
 フロートはクライアントのデタッチと `server live-handoff` を越えて維持されます。
 
-フロートのフォーカスは各クライアントが管理するため、フロートに `focus: true` を指定すると `plugin.pane.open` は `invalid_params` を返します。`focus` を省略するか `false` を送ってください。
+フロートのフォーカスは各クライアントが管理します。`plugin.pane.open` で `placement: "float"` と `focus: true` を指定すると、新しいフロートを表示できる接続中の各クライアントにキーボードフォーカスを要求します。ソケット API では `focus` の既定値は `false` です。CLI の既定値は `true` なので、`herdr plugin pane open --placement float` は `--no-focus` を指定しない限りフォーカスを要求します。フロートのフォーカス要求に未対応のクライアントは要求を無視します。
+
+`float.show` と `float.raise` も任意の真偽値 `focus` を受け付けます。`true` の場合、操作後にフロートを表示できるクライアントにフォーカスを要求します。省略または `false` の場合、フォーカスは変わりません。非表示ルールは引き続き適用され、`float.raise` は非表示のフロートを表示しません。この要求で `hide_on_blur` は発動しません。
 
 `plugin.pane.open` は新しいフロートを表す `float_opened` の結果を返します:
 

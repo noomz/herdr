@@ -1,7 +1,7 @@
 use super::responses::{encode_error, encode_success};
 use crate::api::schema::{
-    FloatInfo, FloatMoveParams, FloatResizeParams, FloatSetHideRuleParams, FloatTarget,
-    FloatVisibilityInfo, ResponseResult,
+    FloatInfo, FloatMoveParams, FloatResizeParams, FloatSetHideRuleParams, FloatShowParams,
+    FloatTarget, FloatVisibilityInfo, ResponseResult,
 };
 use crate::app::floats::{FloatEdit, FloatId, FloatState, FloatVisibility};
 use crate::app::App;
@@ -62,7 +62,7 @@ impl App {
             x: params.x,
             y: params.y,
         };
-        self.handle_float_edit(id, &params.float_id, FloatEdit::Move(position))
+        self.handle_float_edit(id, &params.float_id, FloatEdit::Move(position), false)
     }
 
     pub(super) fn handle_float_resize(&mut self, id: String, params: FloatResizeParams) -> String {
@@ -70,7 +70,7 @@ impl App {
             width: params.width,
             height: params.height,
         };
-        self.handle_float_edit(id, &params.float_id, edit)
+        self.handle_float_edit(id, &params.float_id, edit, false)
     }
 
     pub(super) fn handle_float_visibility(
@@ -79,11 +79,30 @@ impl App {
         target: FloatTarget,
         visibility: FloatVisibility,
     ) -> String {
-        self.handle_float_edit(id, &target.float_id, FloatEdit::Visibility(visibility))
+        self.handle_float_edit(
+            id,
+            &target.float_id,
+            FloatEdit::Visibility(visibility),
+            false,
+        )
     }
 
-    pub(super) fn handle_float_raise(&mut self, id: String, target: FloatTarget) -> String {
-        self.handle_float_edit(id, &target.float_id, FloatEdit::Raise)
+    pub(super) fn handle_float_show(&mut self, id: String, params: FloatShowParams) -> String {
+        self.handle_float_edit(
+            id,
+            &params.float_id,
+            FloatEdit::Visibility(FloatVisibility::Shown),
+            params.focus == Some(true),
+        )
+    }
+
+    pub(super) fn handle_float_raise(&mut self, id: String, params: FloatShowParams) -> String {
+        self.handle_float_edit(
+            id,
+            &params.float_id,
+            FloatEdit::Raise,
+            params.focus == Some(true),
+        )
     }
 
     pub(super) fn handle_float_set_hide_rule(
@@ -98,7 +117,12 @@ impl App {
                 None => return encode_error(id, "pane_not_found", "pane not found"),
             },
         };
-        self.handle_float_edit(id, &params.float_id, FloatEdit::HideWhileFocused(pane_id))
+        self.handle_float_edit(
+            id,
+            &params.float_id,
+            FloatEdit::HideWhileFocused(pane_id),
+            false,
+        )
     }
 
     pub(super) fn handle_float_close(&mut self, id: String, target: FloatTarget) -> String {
@@ -114,7 +138,13 @@ impl App {
         )
     }
 
-    fn handle_float_edit(&mut self, id: String, float_id: &str, edit: FloatEdit) -> String {
+    fn handle_float_edit(
+        &mut self,
+        id: String,
+        float_id: &str,
+        edit: FloatEdit,
+        focus: bool,
+    ) -> String {
         let Some(float_id) = FloatId::parse(float_id) else {
             return float_not_found(id);
         };
@@ -122,7 +152,12 @@ impl App {
             return float_not_found(id);
         }
         match self.float_info_by_id(float_id) {
-            Some(float) => encode_success(id, ResponseResult::FloatInfo { float }),
+            Some(float) => {
+                if focus {
+                    self.pending_float_focus.push(float_id);
+                }
+                encode_success(id, ResponseResult::FloatInfo { float })
+            }
             None => float_not_found(id),
         }
     }
@@ -135,8 +170,8 @@ fn float_not_found(id: String) -> String {
 #[cfg(test)]
 mod tests {
     use crate::api::schema::{
-        FloatMoveParams, FloatSetHideRuleParams, FloatTarget, Method, Request, ResponseResult,
-        SuccessResponse,
+        FloatMoveParams, FloatSetHideRuleParams, FloatShowParams, FloatTarget, Method, Request,
+        ResponseResult, SuccessResponse,
     };
     use crate::app::floats::FloatVisibility;
     use crate::app::App;
@@ -193,6 +228,13 @@ mod tests {
         }
     }
 
+    fn show_params(float_id: &str) -> FloatShowParams {
+        FloatShowParams {
+            float_id: float_id.into(),
+            focus: None,
+        }
+    }
+
     #[test]
     fn move_hide_show_and_raise_round_trip_through_the_api() {
         let (mut app, ids) = app_with_floats(2);
@@ -220,10 +262,10 @@ mod tests {
             .terminals
             .contains_key(&app.state.floats[0].terminal_id));
 
-        let shown = call(&mut app, Method::FloatShow(target(&ids[0])));
+        let shown = call(&mut app, Method::FloatShow(show_params(&ids[0])));
         assert_eq!(shown["result"]["float"]["visibility"], "shown");
 
-        let raised = call(&mut app, Method::FloatRaise(target(&ids[0])));
+        let raised = call(&mut app, Method::FloatRaise(show_params(&ids[0])));
         assert_eq!(raised["result"]["float"]["z"], 1);
 
         let listed = call(&mut app, Method::FloatList(Default::default()));
@@ -288,7 +330,7 @@ mod tests {
         for method in [
             Method::FloatClose(target(&ids[0])),
             Method::FloatHide(target(&ids[0])),
-            Method::FloatRaise(target(&ids[0])),
+            Method::FloatRaise(show_params(&ids[0])),
         ] {
             assert_eq!(call(&mut app, method)["error"]["code"], "float_not_found");
         }

@@ -235,24 +235,12 @@ const ACTION: &[Leaf] = &[
     },
 ];
 
-/// The CLI focuses a new pane by default, but a float rejects `focus`, so a float sends it only
-/// when `--focus` is on the command line.
-fn plugin_pane_open(matches: &ArgMatches) -> Result<Method, ParseError> {
-    let mut params = PluginPaneOpenProjection::from_matches(matches)?;
-    if params.placement == Some(PluginPanePlacement::Float)
-        && matches.value_source("focus") != Some(clap::parser::ValueSource::CommandLine)
-    {
-        params.focus = false;
-    }
-    Ok(Method::PluginPaneOpen(params))
-}
-
 const PANE: &[Leaf] = &[
     Leaf {
         name: "open",
         about: "Open a plugin pane",
         arguments: PluginPaneOpenProjection::arguments,
-        method: plugin_pane_open,
+        method: |m| PluginPaneOpenProjection::from_matches(m).map(Method::PluginPaneOpen),
         json: false,
     },
     Leaf {
@@ -435,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_pane_open_sends_focus_for_a_float_only_when_asked() {
+    fn plugin_pane_open_focuses_floats_by_default_and_honors_no_focus() {
         let open = |extra: &[&str]| {
             let mut args = vec!["pane", "open", "--plugin=x", "--entrypoint=main"];
             args.extend_from_slice(extra);
@@ -445,8 +433,9 @@ mod tests {
             params.focus
         };
 
-        assert!(!open(&["--placement", "float"]));
+        assert!(open(&["--placement", "float"]));
         assert!(open(&["--placement", "float", "--focus"]));
+        assert!(!open(&["--placement", "float", "--no-focus"]));
         assert!(open(&[]));
         assert!(open(&["--placement", "split"]));
     }

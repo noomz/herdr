@@ -1068,3 +1068,89 @@ fn clicking_outside_an_unfocused_float_never_reports_blur() {
     );
     assert!(float_blurs(&down).is_empty());
 }
+
+fn receive_float_focus(state: &mut ClientShellState, float_id: FloatId) -> ClientShellInput {
+    let control = crate::client::endpoint::decode_endpoint_control(
+        crate::protocol::floats::FOCUS_KIND,
+        &serde_json::json!({"float_id": float_id.to_string()}).to_string(),
+    )
+    .unwrap();
+    let crate::client::endpoint::EndpointControlMessage::FloatFocus(float_focus) = control else {
+        panic!("expected float focus control");
+    };
+    state.set_float_focus(float_focus)
+}
+
+#[test]
+fn float_focus_control_routes_typed_keys_to_the_float_and_raises_it() {
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "a"),
+        float("term_b", 25, 3, "b"),
+    ]);
+    let outcome = receive_float_focus(&mut state, fid("term_a"));
+    assert!(
+        matches!(&endpoint_methods(&outcome)[..], [crate::api::schema::Method::FloatRaise(target)] if target.float_id == "f1")
+    );
+    let typed = state.handle_input_bytes(b"x");
+    let inputs = float_inputs(&typed);
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].float_id, fid("term_a"));
+    assert!(matches!(
+        &inputs[0].events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('x'),
+            kind: crate::protocol::ClientKeyKind::Press,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn float_focus_control_before_the_layer_focuses_when_it_arrives() {
+    let mut state = shell_with_floats(vec![]);
+    let outcome = receive_float_focus(&mut state, fid("term_a"));
+    assert!(float_inputs(&outcome).is_empty());
+    assert!(float_inputs(&state.handle_input_bytes(b"x")).is_empty());
+    let applied = state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "a"), float("term_b", 25, 3, "b")],
+    });
+    assert!(
+        matches!(&endpoint_methods(&applied)[..], [crate::api::schema::Method::FloatRaise(target)] if target.float_id == "f1")
+    );
+    assert_eq!(
+        float_inputs(&state.handle_input_bytes(b"y"))[0].float_id,
+        fid("term_a")
+    );
+    assert!(float_blurs(&applied).is_empty());
+}
+
+#[test]
+fn float_focus_control_is_dropped_on_the_next_layer_without_the_float() {
+    let mut state = shell_with_floats(vec![]);
+    receive_float_focus(&mut state, fid("term_a"));
+    state.set_float_layer(FloatsSurface::default());
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "a")],
+    });
+    let typed = state.handle_input_bytes(b"x");
+    assert!(float_inputs(&typed).is_empty());
+    assert!(
+        matches!(&typed.requests[..], [ClientMessage::ClientShellPaneInput { pane_id, .. }] if pane_id == "pane_1")
+    );
+}
+
+#[test]
+fn float_focus_control_never_blurs_the_previously_focused_float() {
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "a"),
+        float("term_b", 25, 3, "b"),
+    ]);
+    receive_float_focus(&mut state, fid("term_a"));
+    state.handle_input_bytes(b"x");
+    let outcome = receive_float_focus(&mut state, fid("term_b"));
+    assert!(float_blurs(&outcome).is_empty());
+    assert_eq!(
+        float_inputs(&state.handle_input_bytes(b"y"))[0].float_id,
+        fid("term_b")
+    );
+}

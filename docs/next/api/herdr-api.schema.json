@@ -2228,6 +2228,24 @@
           ],
           "type": "object"
         },
+        "FloatShowParams": {
+          "properties": {
+            "float_id": {
+              "type": "string"
+            },
+            "focus": {
+              "description": "Request keyboard focus in connected clients that can see the float.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "float_id"
+          ],
+          "type": "object"
+        },
         "FloatTarget": {
           "properties": {
             "float_id": {
@@ -6563,7 +6581,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/schemas/request/$defs/FloatTarget"
+              "$ref": "#/schemas/request/$defs/FloatShowParams"
             }
           },
           "required": [
@@ -6579,7 +6597,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/schemas/request/$defs/FloatTarget"
+              "$ref": "#/schemas/request/$defs/FloatShowParams"
             }
           },
           "required": [

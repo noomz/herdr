@@ -32,6 +32,17 @@ fn connect_shell(
     client_id: u64,
     floats: bool,
 ) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    connect_shell_with_controls(server, client_id, floats).1
+}
+
+fn connect_shell_with_controls(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    floats: bool,
+) -> (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
     let (writer, control_rx, render_rx) = test_client_writer();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellConnected {
@@ -53,7 +64,7 @@ fn connect_shell(
         })
     );
     let _snapshot = client_shell_snapshot(&control_rx);
-    render_rx
+    (control_rx, render_rx)
 }
 
 fn install_float(
@@ -463,4 +474,189 @@ async fn float_blur_hides_only_flagged_floats_visible_to_the_reporting_client() 
         );
         shutdown_test_runtimes(&mut server);
     }
+}
+
+fn float_api(
+    server: &mut HeadlessServer,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+        request: serde_json::from_value(serde_json::json!({
+            "id": "float-focus", "method": method, "params": params
+        }))
+        .unwrap(),
+        respond_to,
+        response_write_complete: None,
+    });
+    serde_json::from_str(&response_rx.recv().unwrap()).unwrap()
+}
+
+fn float_focus_controls(
+    server: &mut HeadlessServer,
+    client_id: u64,
+    rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+) -> Vec<serde_json::Value> {
+    const BARRIER: &str = "test.float-focus-barrier";
+    assert!(server.send_to_client(
+        client_id,
+        ServerMessage::EndpointControl {
+            kind: BARRIER.into(),
+            data: String::new(),
+        }
+    ));
+    let mut controls = Vec::new();
+    loop {
+        for message in read_server_messages(
+            rx.recv_timeout(Duration::from_secs(2))
+                .expect("float focus barrier"),
+        ) {
+            if let ServerMessage::EndpointControl { kind, data } = message {
+                if kind == BARRIER {
+                    return controls;
+                }
+                if kind == protocol::floats::FOCUS_KIND {
+                    controls.push(serde_json::from_str(&data).unwrap());
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn float_show_and_raise_focus_only_clients_that_see_the_float() {
+    for method in ["float.show", "float.raise"] {
+        let mut server = test_headless_server();
+        let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+        let source = server.app.state.workspaces[0].tabs[0].root_pane;
+        let (float_id, _, _input) = install_float(&mut server, b"FLOAT", None);
+        let (visible, _render) = connect_shell_with_controls(&mut server, 7, true);
+        let (unsupported, _render) = connect_shell_with_controls(&mut server, 8, false);
+        let (hidden, _render) = connect_shell_with_controls(&mut server, 9, true);
+        server
+            .app
+            .state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("other"));
+        server.app.state.ensure_test_terminals();
+        let workspace_id = server.app.public_workspace_id(1);
+        let tab_id = server.app.public_tab_id(1, 0).unwrap();
+        server.clients.get_mut(&7).unwrap().shell_location =
+            Some(crate::server::clients::ClientShellLocation {
+                focused_workspace_id: Some(workspace_id.clone()),
+                active_tab_ids: HashMap::from([(workspace_id, tab_id)]),
+            });
+        server
+            .app
+            .edit_float(float_id, FloatEdit::HideWhileFocused(Some(source)));
+        assert!(
+            server.shell_client_sees_float(7, server.app.state.float(float_id).unwrap().pane_id)
+        );
+        assert!(
+            !server.shell_client_sees_float(9, server.app.state.float(float_id).unwrap().pane_id)
+        );
+        server
+            .app
+            .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Hidden));
+        for focus in [None, Some(false), Some(true)] {
+            let mut params = serde_json::json!({"float_id": float_id.to_string()});
+            if let Some(focus) = focus {
+                params["focus"] = focus.into();
+            }
+            let response = float_api(&mut server, method, params);
+            assert!(response.get("result").is_some(), "{response}");
+            let controls = float_focus_controls(&mut server, 7, &visible);
+            // Raising does not show a hidden float.
+            let expected = focus == Some(true) && method == "float.show";
+            assert_eq!(
+                controls,
+                if expected {
+                    vec![serde_json::json!({"float_id": float_id.to_string()})]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(float_focus_controls(&mut server, 8, &unsupported).is_empty());
+            assert!(float_focus_controls(&mut server, 9, &hidden).is_empty());
+        }
+        server
+            .app
+            .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Shown));
+        let response = float_api(
+            &mut server,
+            method,
+            serde_json::json!({"float_id": float_id.to_string(), "focus": true}),
+        );
+        assert!(response.get("result").is_some(), "{response}");
+        assert_eq!(
+            float_focus_controls(&mut server, 7, &visible),
+            vec![serde_json::json!({"float_id": float_id.to_string()})]
+        );
+        let response = float_api(
+            &mut server,
+            method,
+            serde_json::json!({"float_id": "f99999", "focus": true}),
+        );
+        assert_eq!(response["error"]["code"], "float_not_found");
+        assert!(float_focus_controls(&mut server, 7, &visible).is_empty());
+        shutdown_test_runtimes(&mut server);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_float_open_with_focus_delivers_the_new_float_id() {
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
+    let (controls, _render) = connect_shell_with_controls(&mut server, 7, true);
+    let root = server
+        .client_socket_path
+        .parent()
+        .unwrap()
+        .join("focus-plugin");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("herdr-plugin.toml"),
+        r#"
+id = "example.float-focus"
+name = "Float focus"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+[[panes]]
+id = "peek"
+title = "Peek"
+placement = "float"
+command = ["sh", "-c", "sleep 5"]
+"#,
+    )
+    .unwrap();
+    let linked = float_api(
+        &mut server,
+        "plugin.link",
+        serde_json::json!({"path": root.display().to_string()}),
+    );
+    assert!(linked.get("result").is_some(), "{linked}");
+    for focus in [None, Some(false), Some(true)] {
+        let mut params = serde_json::json!({
+            "plugin_id": "example.float-focus", "entrypoint": "peek", "placement": "float"
+        });
+        if let Some(focus) = focus {
+            params["focus"] = focus.into();
+        }
+        let opened = float_api(&mut server, "plugin.pane.open", params);
+        assert_eq!(opened["result"]["type"], "float_opened", "{opened}");
+        let focus_controls = float_focus_controls(&mut server, 7, &controls);
+        assert_eq!(
+            focus_controls,
+            if focus == Some(true) {
+                vec![serde_json::json!({"float_id": opened["result"]["float"]["float_id"]})]
+            } else {
+                vec![]
+            }
+        );
+    }
+    shutdown_test_runtimes(&mut server);
+    std::fs::remove_dir_all(root).unwrap();
 }
