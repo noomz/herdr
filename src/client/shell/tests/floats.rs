@@ -116,6 +116,10 @@ fn hit(state: &ClientShellState, id: &str) -> super::super::floats::FloatHit {
 
 fn shadow_shell(enabled: bool, floats: Vec<FloatSurface>) -> ClientShellState {
     let config: Config = toml::from_str(&format!("[ui]\nfloat_shadow = {enabled}\n")).unwrap();
+    styled_shadow_shell(config, floats)
+}
+
+fn styled_shadow_shell(config: Config, floats: Vec<FloatSurface>) -> ClientShellState {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
     let area = state.layout(106, 20).pane_surface;
@@ -181,16 +185,82 @@ fn float_shadow_dims_exactly_the_offset_edges_without_changing_symbols_or_foregr
 }
 
 #[test]
+fn float_shadow_custom_bands_color_and_zero_sizes_cover_exact_cells() {
+    for (width, height) in [(2, 1), (0, 1), (2, 0), (0, 0), (4, 4)] {
+        let config: Config = toml::from_str(&format!(
+            "[ui.float_shadow]\nenabled = true\ncolor = \"#1d2021\"\nwidth = {width}\nheight = {height}"
+        )).unwrap();
+        let floats = vec![float("term_a", 10, 3, "pip")];
+        let mut on = styled_shadow_shell(config, floats.clone());
+        let mut off = shadow_shell(false, floats);
+        let outer = hit(&on, "term_a").outer;
+        let actual = on.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        let under = off.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        for y in 0..20 {
+            for x in 0..106 {
+                let mut expected = under[(x, y)].clone();
+                if (x >= outer.right()
+                    && x < outer.right() + width
+                    && y >= outer.y + height
+                    && y < outer.bottom() + height)
+                    || (y >= outer.bottom()
+                        && y < outer.bottom() + height
+                        && x >= outer.x + width
+                        && x < outer.right() + width)
+                {
+                    expected.set_style(
+                        Style::default()
+                            .bg(ratatui::style::Color::Rgb(29, 32, 33))
+                            .add_modifier(Modifier::DIM),
+                    );
+                }
+                assert_eq!(actual[(x, y)], expected, "{width}x{height} cell {x},{y}");
+            }
+        }
+    }
+}
+
+#[test]
+fn float_shadow_live_reload_changes_color_size_and_accepts_reset_colors() {
+    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    for (color, expected) in [
+        ("#1d2021", ratatui::style::Color::Rgb(29, 32, 33)),
+        ("none", ratatui::style::Color::Reset),
+        ("reset", ratatui::style::Color::Reset),
+    ] {
+        let config: Config = toml::from_str(&format!(
+            "[ui.float_shadow]\nenabled = true\ncolor = \"{color}\"\nwidth = 2\nheight = 1"
+        ))
+        .unwrap();
+        assert!(state.config.apply_live_config(&config, &[], &[]).is_empty());
+        let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        assert_eq!(actual[(outer.right() + 1, outer.y + 1)].bg, expected);
+        assert!(actual[(outer.right() + 1, outer.y + 1)]
+            .modifier
+            .contains(Modifier::DIM));
+        assert!(!actual[(outer.x + 1, outer.bottom())]
+            .modifier
+            .contains(Modifier::DIM));
+    }
+}
+
+#[test]
 fn float_shadow_clips_at_each_pane_surface_edge() {
     let fixture = shadow_shell(false, vec![]);
     let area = fixture.layout(106, 20).pane_surface;
     for (x, y) in [
+        (area.width - 14, 3),
+        (10, area.height - 7),
+        (area.width - 14, area.height - 7),
         (area.width - 12, 3),
         (10, area.height - 5),
         (area.width - 12, area.height - 5),
     ] {
         let floats = vec![float("term_a", x, y, "pip")];
-        let mut on = shadow_shell(true, floats.clone());
+        let config: Config =
+            toml::from_str("[ui.float_shadow]\nenabled = true\nwidth = 4\nheight = 4").unwrap();
+        let mut on = styled_shadow_shell(config, floats.clone());
         let mut off = shadow_shell(false, floats);
         let outer = hit(&on, "term_a").outer;
         let actual = on.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
@@ -241,35 +311,48 @@ fn higher_floats_cover_lower_shadows_and_cast_shadows_on_lower_floats() {
 
 #[test]
 fn clicking_a_float_shadow_blurs_without_hitting_the_float() {
-    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
-    state.floats.focused = Some(fid("term_a"));
+    let config: Config =
+        toml::from_str("[ui.float_shadow]\nenabled = true\nwidth = 2\nheight = 1").unwrap();
+    let mut state = styled_shadow_shell(config, vec![float("term_a", 10, 3, "pip")]);
     let a = hit(&state, "term_a");
     assert_eq!(a.pane.rect, a.outer);
-    let mut outcome = ClientShellInput::default();
-    assert!(!state.handle_float_mouse(
-        crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: a.outer.right(),
-            row: a.outer.y + 1,
-            modifiers: KeyModifiers::empty(),
-        },
-        &mut outcome
-    ));
-    assert_eq!(float_blurs(&outcome), vec![fid("term_a")]);
-    assert!(float_inputs(&outcome).is_empty());
-    assert!(state.floats.focused.is_none());
+    let points = (a.outer.y + 1..a.outer.bottom() + 1)
+        .flat_map(|y| (a.outer.right()..a.outer.right() + 2).map(move |x| (x, y)))
+        .chain((a.outer.x + 2..a.outer.right()).map(|x| (x, a.outer.bottom())));
+    for (column, row) in points {
+        state.floats.focused = Some(fid("term_a"));
+        let mut outcome = ClientShellInput::default();
+        assert!(!state.handle_float_mouse(
+            crossterm::event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::empty(),
+            },
+            &mut outcome
+        ));
+        assert_eq!(float_blurs(&outcome), vec![fid("term_a")]);
+        assert!(float_inputs(&outcome).is_empty());
+        assert!(state.floats.focused.is_none());
+    }
 }
 
 #[test]
 fn float_shadow_live_config_reload_turns_the_shadow_on_and_off() {
-    assert!(!Config::default().ui.float_shadow);
-    assert!(!toml::from_str::<Config>("[ui]\n").unwrap().ui.float_shadow);
+    assert!(!Config::default().ui.float_shadow.enabled);
+    assert!(
+        !toml::from_str::<Config>("[ui]\n")
+            .unwrap()
+            .ui
+            .float_shadow
+            .enabled
+    );
     let mut state = shadow_shell(false, vec![float("term_a", 10, 3, "pip")]);
     let outer = hit(&state, "term_a").outer;
     let original = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
     for enabled in [true, false] {
         let config: Config = toml::from_str(&format!("[ui]\nfloat_shadow = {enabled}\n")).unwrap();
-        assert_eq!(config.ui.float_shadow, enabled);
+        assert_eq!(config.ui.float_shadow.enabled, enabled);
         assert!(state.config.apply_live_config(&config, &[], &[]).is_empty());
         let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
         assert_eq!(
@@ -281,6 +364,49 @@ fn float_shadow_live_config_reload_turns_the_shadow_on_and_off() {
         if !enabled {
             assert_eq!(actual, original);
         }
+    }
+}
+
+#[test]
+fn float_shadow_invalid_live_reload_keeps_previous_style() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let previous_path = std::env::var_os(crate::config::CONFIG_PATH_ENV_VAR);
+    let path = std::env::temp_dir().join(format!(
+        "herdr-float-shadow-reload-{}.toml",
+        std::process::id()
+    ));
+    std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
+    std::fs::write(
+        &path,
+        "[ui.float_shadow]\nenabled = true\ncolor = \"#1d2021\"\nwidth = 2\nheight = 1",
+    )
+    .unwrap();
+    state.reload_client_config();
+    let previous = state.config.float_shadow;
+    let original = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    for key in ["width", "height"] {
+        std::fs::write(&path, format!("[ui.float_shadow]\n{key} = 5")).unwrap();
+        let loaded = crate::config::load_live_config().unwrap();
+        assert_eq!(loaded.invalid_sections, vec!["ui"]);
+        assert!(loaded
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains(key)));
+        state.reload_client_config();
+        assert_eq!(state.config.float_shadow, previous);
+        let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        let area = state.layout(106, 20).pane_surface;
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                assert_eq!(actual[(x, y)], original[(x, y)], "cell {x},{y}");
+            }
+        }
+    }
+    std::fs::remove_file(path).unwrap();
+    match previous_path {
+        Some(value) => std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, value),
+        None => std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR),
     }
 }
 
@@ -319,15 +445,31 @@ fn float_shadow_follows_move_and_resize_previews_and_repaints_the_old_cells() {
 
 #[test]
 fn pane_patches_under_float_shadows_recompose_but_patches_beside_them_stay_fast() {
-    for enabled in [false, true] {
-        for (x, y, shadow) in [
-            (22, 4, true),
-            (11, 8, true),
-            (22, 8, true),
-            (22, 3, false),
-            (10, 8, false),
+    for (enabled, width, height) in [
+        (false, 2, 1),
+        (true, 1, 1),
+        (true, 2, 1),
+        (true, 0, 1),
+        (true, 2, 0),
+        (true, 0, 0),
+    ] {
+        for (x, y) in [
+            (22, 4),
+            (23, 4),
+            (11, 8),
+            (12, 8),
+            (22, 8),
+            (23, 8),
+            (22, 3),
+            (10, 8),
         ] {
-            let mut state = shadow_shell(enabled, vec![float("term_a", 10, 3, "pip")]);
+            let shadow = (x >= 22 && x < 22 + width && y >= 3 + height && y < 8 + height)
+                || (y >= 8 && y < 8 + height && x >= 10 + width && x < 22 + width);
+            let config: Config = toml::from_str(&format!(
+                "[ui.float_shadow]\nenabled = {enabled}\nwidth = {width}\nheight = {height}"
+            ))
+            .unwrap();
+            let mut state = styled_shadow_shell(config, vec![float("term_a", 10, 3, "pip")]);
             let mut pane = state.pane_surface.as_ref().unwrap().panes[0].clone();
             pane.content_revision += 1;
             let patch = crate::protocol::PaneSurfacePatch {
@@ -389,7 +531,8 @@ fn float_shadow_render_scale_profile() {
     use std::time::Instant;
 
     for count in [1, 15] {
-        let mut state = shadow_shell(false, vec![float("term_a", 10, 3, "pip")]);
+        let config: Config = toml::from_str("[ui.float_shadow]\nwidth = 4\nheight = 4").unwrap();
+        let mut state = styled_shadow_shell(config, vec![float("term_a", 10, 3, "pip")]);
         let mut projection = snapshot();
         let mut surface = state.pane_surface.clone().unwrap();
         let area = state.layout(106, 20).pane_surface;
@@ -417,7 +560,7 @@ fn float_shadow_render_scale_profile() {
         let outer = hit(&state, "term_a").outer;
         for round in 0..6 {
             for enabled in [false, true] {
-                state.config.float_shadow = enabled;
+                state.config.float_shadow.enabled = enabled;
                 let started = Instant::now();
                 for _ in 0..40 {
                     black_box(state.compose(106, 20).expect("populated pane frame"));
@@ -439,7 +582,7 @@ fn float_shadow_render_scale_profile() {
         for sample in &mut samples {
             sample.sort_unstable();
         }
-        println!("float shadow panes={count} fixed=106x20 ns/frame off={} [{}..{}] on={} [{}..{}] runs=5 frames/run=40",
+        println!("float shadow size=4x4 panes={count} fixed=106x20 ns/frame off={} [{}..{}] on={} [{}..{}] runs=5 frames/run=40",
             samples[0][2], samples[0][0], samples[0][4], samples[1][2], samples[1][0], samples[1][4]);
     }
 }

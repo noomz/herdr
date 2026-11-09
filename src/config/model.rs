@@ -985,6 +985,89 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatShadowConfig {
+    pub enabled: bool,
+    pub color: String,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl Default for FloatShadowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: "#000000".into(),
+            width: 1,
+            height: 1,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FloatShadowConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FloatShadowVisitor;
+
+        impl<'de> de::Visitor<'de> for FloatShadowVisitor {
+            type Value = FloatShadowConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean or a float shadow table")
+            }
+
+            fn visit_bool<E: de::Error>(self, enabled: bool) -> Result<Self::Value, E> {
+                Ok(FloatShadowConfig {
+                    enabled,
+                    ..FloatShadowConfig::default()
+                })
+            }
+
+            fn visit_map<M: de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+                #[derive(Deserialize)]
+                #[serde(default)]
+                struct Fields {
+                    enabled: bool,
+                    color: String,
+                    width: i64,
+                    height: i64,
+                }
+
+                impl Default for Fields {
+                    fn default() -> Self {
+                        let config = FloatShadowConfig::default();
+                        Self {
+                            enabled: config.enabled,
+                            color: config.color,
+                            width: i64::from(config.width),
+                            height: i64::from(config.height),
+                        }
+                    }
+                }
+
+                let config = Fields::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                for (key, value) in [("width", config.width), ("height", config.height)] {
+                    if !(0..=4).contains(&value) {
+                        return Err(de::Error::custom(format!(
+                            "ui.float_shadow.{key} must be in 0..=4"
+                        )));
+                    }
+                }
+                Ok(FloatShadowConfig {
+                    enabled: config.enabled,
+                    color: config.color,
+                    width: config.width as u16,
+                    height: config.height as u16,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(FloatShadowVisitor)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -1011,8 +1094,8 @@ pub struct UiConfig {
     pub right_click_passthrough_modifier: RightClickPassthroughModifierConfig,
     /// Force a full host-terminal redraw when the outer terminal regains focus. Default: true.
     pub redraw_on_focus_gained: bool,
-    /// Draw a one-cell drop shadow under floating terminals in the client. Default: false.
-    pub float_shadow: bool,
+    /// Client-only float drop shadow. Also accepts a legacy boolean.
+    pub float_shadow: FloatShadowConfig,
     /// Lines to scroll per mouse wheel notch. Default: 3.
     pub mouse_scroll_lines: Option<NonZeroUsize>,
     /// Ask for confirmation before closing a workspace. Default: true.
@@ -1268,7 +1351,7 @@ impl Default for UiConfig {
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
             redraw_on_focus_gained: true,
-            float_shadow: false,
+            float_shadow: FloatShadowConfig::default(),
             mouse_scroll_lines: None,
             confirm_close: true,
             prompt_new_tab_name: true,
@@ -1394,6 +1477,46 @@ impl Default for AdvancedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_shadow_accepts_booleans_and_partial_tables() {
+        for enabled in [false, true] {
+            let config: Config =
+                toml::from_str(&format!("[ui]\nfloat_shadow = {enabled}")).unwrap();
+            assert_eq!(
+                config.ui.float_shadow,
+                FloatShadowConfig {
+                    enabled,
+                    ..FloatShadowConfig::default()
+                }
+            );
+        }
+        for source in ["", "[ui]", "[ui.float_shadow]"] {
+            let config: Config = toml::from_str(source).unwrap();
+            assert_eq!(config.ui.float_shadow, FloatShadowConfig::default());
+        }
+        let config: Config = toml::from_str("[ui.float_shadow]\nwidth = 2").unwrap();
+        assert_eq!(
+            config.ui.float_shadow,
+            FloatShadowConfig {
+                width: 2,
+                ..FloatShadowConfig::default()
+            }
+        );
+    }
+
+    #[test]
+    fn float_shadow_rejects_out_of_range_dimensions_with_the_key_name() {
+        for key in ["width", "height"] {
+            for value in [-1, 5, 65536] {
+                let error =
+                    toml::from_str::<Config>(&format!("[ui.float_shadow]\n{key} = {value}"))
+                        .unwrap_err()
+                        .to_string();
+                assert!(error.contains(key), "{error}");
+            }
+        }
+    }
 
     #[test]
     fn update_config_defaults_and_parses() {

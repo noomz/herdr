@@ -981,10 +981,28 @@
           "description": "Force a full host-terminal redraw when the outer terminal regains focus."
         },
         {
-          "key": "ui.float_shadow",
+          "key": "ui.float_shadow.enabled",
           "type": "boolean",
           "default": "false",
-          "description": "Draw a one-cell drop shadow under floating terminals. Uses a black background and dimmed existing text. Client-only; changes apply on config reload."
+          "description": "Draw a drop shadow under floating terminals. Client-only; changes apply on config reload. The legacy ui.float_shadow = true boolean enables the shadow with default color and size; false disables it."
+        },
+        {
+          "key": "ui.float_shadow.color",
+          "type": "string",
+          "default": "\"#000000\"",
+          "description": "Shadow background color, parsed like ui.accent. The shadow preserves existing text and dims it. Use none or reset for a dim-only shadow."
+        },
+        {
+          "key": "ui.float_shadow.width",
+          "type": "integer",
+          "default": "1",
+          "description": "Shadow columns to the right, from 0 to 4. Zero hides the right band. Invalid values keep the previous UI settings on reload."
+        },
+        {
+          "key": "ui.float_shadow.height",
+          "type": "integer",
+          "default": "1",
+          "description": "Shadow rows below the float, from 0 to 4. Zero hides the bottom band. The shadow is clipped at pane surface edges and does not capture clicks."
         },
         {
           "key": "ui.mouse_scroll_lines",

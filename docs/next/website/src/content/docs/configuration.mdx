@@ -311,7 +311,17 @@ The active palette is applied in this order: built-in theme, `[theme.custom]`, t
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
-Set `float_shadow = true` under `[ui]` to draw a one-cell drop shadow under floating terminals. The shadow keeps the existing text, dims it, and sets its background to black. It is clipped at the pane surface edges and does not capture clicks. The default is `false`. This client-only setting takes effect on config reload without a restart.
+Configure the client-only float drop shadow with a table:
+
+```toml
+[ui.float_shadow]
+enabled = true    # default false
+color = "#1d2021" # default "#000000"
+width = 2        # columns to the right, default 1, allowed 0..=4
+height = 1       # rows below, default 1, allowed 0..=4
+```
+
+Missing keys use their defaults. The boolean form `float_shadow = true` under `[ui]` still enables the shadow with the default color and size; `false` disables it. The shadow keeps the existing text, dims it, and uses `color` as its background, parsed like `ui.accent`. Set `color = "none"` or `"reset"` for dimming only. Zero width hides the right band; zero height hides the bottom band. The shadow is clipped at the pane surface edges and does not capture clicks. Changes take effect on config reload without a restart. Out-of-range dimensions keep the previous `[ui]` settings on reload.
 
 `ui.pane_borders` accepts `"auto"` (the default, borders only for split panes), `"always"` (also frame a single pane), or `"off"`. A single-pane frame requires `ui.pane_outer_borders = true`, because all its edges are outer edges. Existing boolean values remain valid: `true` means `"auto"` and `false` means `"off"`.
 

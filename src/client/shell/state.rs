@@ -12,6 +12,25 @@ pub(crate) enum ClientShellKeybindingSource {
     Endpoint,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FloatShadowStyle {
+    pub enabled: bool,
+    pub color: ratatui::style::Color,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl From<&crate::config::FloatShadowConfig> for FloatShadowStyle {
+    fn from(config: &crate::config::FloatShadowConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            color: crate::config::parse_color(&config.color),
+            width: config.width,
+            height: config.height,
+        }
+    }
+}
+
 pub(crate) struct ClientShellConfig {
     pub(super) sidebar_width: u16,
     pub(super) sidebar_min_width: u16,
@@ -47,7 +66,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) mouse_scroll_lines: usize,
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
-    pub(super) float_shadow: bool,
+    pub(super) float_shadow: FloatShadowStyle,
     pub(super) switch_ascii_input_source_in_prefix: bool,
     pub(super) local_config_path: std::path::PathBuf,
     pub(super) preferences_path: Option<std::path::PathBuf>,
