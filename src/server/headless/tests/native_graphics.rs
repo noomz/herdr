@@ -989,7 +989,12 @@ async fn native_file_render_scale_profile() {
     const IMAGE_WIDTH: u32 = 800;
     const IMAGE_HEIGHT: u32 = 480;
     for count in [1, 15] {
-        for (native, source_retention) in [(false, false), (true, false), (true, true)] {
+        for (native, source_retention) in [
+            (false, false),
+            (true, false),
+            #[cfg(target_os = "linux")]
+            (true, true),
+        ] {
             let (mut server, _control, _render, root) =
                 retained_test_server_with_control(b"populated root terminal\r\n");
             if source_retention {

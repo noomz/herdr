@@ -114,6 +114,336 @@ fn hit(state: &ClientShellState, id: &str) -> super::super::floats::FloatHit {
         .expect("float hit")
 }
 
+fn shadow_shell(enabled: bool, floats: Vec<FloatSurface>) -> ClientShellState {
+    let config: Config = toml::from_str(&format!("[ui]\nfloat_shadow = {enabled}\n")).unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    let area = state.layout(106, 20).pane_surface;
+    let mut cell = ratatui::buffer::Cell::new("x");
+    cell.set_style(
+        Style::default()
+            .fg(ratatui::style::Color::Yellow)
+            .bg(ratatui::style::Color::Blue)
+            .add_modifier(Modifier::ITALIC),
+    );
+    let mut buffer = Buffer::filled(Rect::new(0, 0, area.width, area.height), cell);
+    buffer[(0, 0)].set_symbol("s");
+    let mut pane_surface = surface();
+    pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+    pane_surface.panes[0].rect.width = area.width;
+    pane_surface.panes[0].rect.height = area.height;
+    pane_surface.panes[0].inner_rect = pane_surface.panes[0].rect;
+    state.set_pane_surface(pane_surface);
+    state.set_float_layer(FloatsSurface { floats });
+    state.compose(106, 20).expect("shadow fixture");
+    state
+}
+
+#[test]
+fn float_shadow_is_off_by_default_and_leaves_surrounding_cells_unchanged() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    state.set_float_layer(FloatsSurface::default());
+    let under = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    for y in outer.y + 1..=outer.bottom() {
+        assert_eq!(actual[(outer.right(), y)], under[(outer.right(), y)]);
+    }
+    for x in outer.x + 1..=outer.right() {
+        assert_eq!(actual[(x, outer.bottom())], under[(x, outer.bottom())]);
+    }
+}
+
+#[test]
+fn float_shadow_dims_exactly_the_offset_edges_without_changing_symbols_or_foreground() {
+    let floats = vec![float("term_a", 10, 3, "pip")];
+    let mut off = shadow_shell(false, floats.clone());
+    let mut on = shadow_shell(true, floats);
+    let outer = hit(&on, "term_a").outer;
+    let area = on.layout(106, 20).pane_surface;
+    let under = off.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    let actual = on.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let mut expected = under[(x, y)].clone();
+            if (x == outer.right() && y > outer.y && y <= outer.bottom())
+                || (y == outer.bottom() && x > outer.x && x <= outer.right())
+            {
+                expected.set_style(
+                    Style::default()
+                        .bg(ratatui::style::Color::Rgb(0, 0, 0))
+                        .add_modifier(Modifier::DIM),
+                );
+            }
+            assert_eq!(actual[(x, y)], expected, "cell {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn float_shadow_clips_at_each_pane_surface_edge() {
+    let fixture = shadow_shell(false, vec![]);
+    let area = fixture.layout(106, 20).pane_surface;
+    for (x, y) in [
+        (area.width - 12, 3),
+        (10, area.height - 5),
+        (area.width - 12, area.height - 5),
+    ] {
+        let floats = vec![float("term_a", x, y, "pip")];
+        let mut on = shadow_shell(true, floats.clone());
+        let mut off = shadow_shell(false, floats);
+        let outer = hit(&on, "term_a").outer;
+        let actual = on.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        let under = off.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        for row in 0..20 {
+            for col in 0..106 {
+                if !super::super::contains(area, (col, row))
+                    || (outer.right() == area.right() && outer.bottom() == area.bottom())
+                {
+                    assert_eq!(actual[(col, row)], under[(col, row)]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn higher_floats_cover_lower_shadows_and_cast_shadows_on_lower_floats() {
+    let floats = vec![
+        float("term_a", 10, 3, "low"),
+        float("term_b", 20, 4, "high"),
+    ];
+    let mut on = shadow_shell(true, floats.clone());
+    let mut off = shadow_shell(false, floats);
+    let low = hit(&on, "term_a").outer;
+    let high = hit(&on, "term_b").outer;
+    let actual = on.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    let under = off.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert_eq!(actual[(low.right(), high.y)], under[(low.right(), high.y)]);
+    assert!(!actual[(low.right(), high.y)]
+        .modifier
+        .contains(Modifier::DIM));
+
+    let mut state = shadow_shell(
+        true,
+        vec![float("term_a", 10, 3, "low"), float("term_b", 8, 2, "high")],
+    );
+    let high = hit(&state, "term_b").outer;
+    let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert_eq!(
+        actual[(high.right(), high.bottom())].bg,
+        ratatui::style::Color::Rgb(0, 0, 0)
+    );
+    assert!(actual[(high.right(), high.bottom())]
+        .modifier
+        .contains(Modifier::DIM));
+}
+
+#[test]
+fn clicking_a_float_shadow_blurs_without_hitting_the_float() {
+    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
+    state.floats.focused = Some(fid("term_a"));
+    let a = hit(&state, "term_a");
+    assert_eq!(a.pane.rect, a.outer);
+    let mut outcome = ClientShellInput::default();
+    assert!(!state.handle_float_mouse(
+        crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: a.outer.right(),
+            row: a.outer.y + 1,
+            modifiers: KeyModifiers::empty(),
+        },
+        &mut outcome
+    ));
+    assert_eq!(float_blurs(&outcome), vec![fid("term_a")]);
+    assert!(float_inputs(&outcome).is_empty());
+    assert!(state.floats.focused.is_none());
+}
+
+#[test]
+fn float_shadow_live_config_reload_turns_the_shadow_on_and_off() {
+    assert!(!Config::default().ui.float_shadow);
+    assert!(!toml::from_str::<Config>("[ui]\n").unwrap().ui.float_shadow);
+    let mut state = shadow_shell(false, vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let original = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    for enabled in [true, false] {
+        let config: Config = toml::from_str(&format!("[ui]\nfloat_shadow = {enabled}\n")).unwrap();
+        assert_eq!(config.ui.float_shadow, enabled);
+        assert!(state.config.apply_live_config(&config, &[], &[]).is_empty());
+        let actual = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        assert_eq!(
+            actual[(outer.right(), outer.bottom())]
+                .modifier
+                .contains(Modifier::DIM),
+            enabled
+        );
+        if !enabled {
+            assert_eq!(actual, original);
+        }
+    }
+}
+
+#[test]
+fn float_shadow_follows_move_and_resize_previews_and_repaints_the_old_cells() {
+    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
+    let original = hit(&state, "term_a").outer;
+    let grab = (original.x + 4, original.y);
+    preview_border_drag(&mut state, grab, (grab.0 + 15, grab.1 + 2));
+    let moved = hit(&state, "term_a").outer;
+    let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert_eq!(
+        frame[(original.right(), original.bottom())].bg,
+        ratatui::style::Color::Blue
+    );
+    assert!(!frame[(original.right(), original.bottom())]
+        .modifier
+        .contains(Modifier::DIM));
+    assert!(frame[(moved.right(), moved.bottom())]
+        .modifier
+        .contains(Modifier::DIM));
+
+    state.floats.drag = None;
+    state.compose(106, 20).unwrap();
+    let grab = (original.right() - 1, original.bottom() - 1);
+    preview_border_drag(&mut state, grab, (grab.0 + 4, grab.1 + 2));
+    let resized = hit(&state, "term_a").outer;
+    let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert!(frame[(resized.right(), resized.bottom())]
+        .modifier
+        .contains(Modifier::DIM));
+    assert!(!frame[(original.right(), original.bottom())]
+        .modifier
+        .contains(Modifier::DIM));
+}
+
+#[test]
+fn pane_patches_under_float_shadows_recompose_but_patches_beside_them_stay_fast() {
+    for enabled in [false, true] {
+        for (x, y, shadow) in [
+            (22, 4, true),
+            (11, 8, true),
+            (22, 8, true),
+            (22, 3, false),
+            (10, 8, false),
+        ] {
+            let mut state = shadow_shell(enabled, vec![float("term_a", 10, 3, "pip")]);
+            let mut pane = state.pane_surface.as_ref().unwrap().panes[0].clone();
+            pane.content_revision += 1;
+            let patch = crate::protocol::PaneSurfacePatch {
+                boot_id: "boot-1".into(),
+                projection_revision: 1,
+                base_surface_revision: 1,
+                surface_revision: 2,
+                rows: vec![crate::protocol::PaneSurfacePatchRow {
+                    x,
+                    y,
+                    cells: vec![crate::protocol::CellData {
+                        symbol: "N".into(),
+                        fg: 0,
+                        bg: 0,
+                        modifier: 0,
+                        skip: false,
+                        hyperlink: None,
+                    }],
+                }],
+                panes: vec![pane],
+                cursor: None,
+            };
+            let ClientPaneSurfacePatchOutcome::Applied(fast) =
+                state.apply_pane_surface_patch(patch)
+            else {
+                panic!("patch must apply");
+            };
+            assert_eq!(
+                fast.is_none(),
+                enabled && shadow,
+                "enabled={enabled}, cell={x},{y}"
+            );
+            let area = state.layout(106, 20).pane_surface;
+            let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+            let cell = &frame[(area.x + x, area.y + y)];
+            assert_eq!(cell.symbol(), "N");
+            assert_eq!(cell.modifier.contains(Modifier::DIM), enabled && shadow);
+        }
+    }
+}
+
+#[test]
+fn float_shadow_cells_do_not_occlude_kitty_graphics() {
+    let mut state = shadow_shell(true, vec![float("term_a", 10, 3, "pip")]);
+    let area = state.layout(106, 20).pane_surface;
+    let outer = hit(&state, "term_a").outer;
+    let at = (outer.right(), outer.bottom());
+    let mut surface = state.pane_surface.clone().unwrap();
+    super::graphics::add_main_image(&mut surface, state.layout(106, 20), at, 48);
+    state.set_pane_surface(surface);
+    assert!(placed(&mut state, at));
+    assert!(super::super::contains(area, at));
+}
+
+#[test]
+#[ignore = "manual client float shadow render scaling profile"]
+fn float_shadow_render_scale_profile() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    for count in [1, 15] {
+        let mut state = shadow_shell(false, vec![float("term_a", 10, 3, "pip")]);
+        let mut projection = snapshot();
+        let mut surface = state.pane_surface.clone().unwrap();
+        let area = state.layout(106, 20).pane_surface;
+        let pane = projection.panes[0].clone();
+        let geometry = surface.panes[0].clone();
+        projection.panes.clear();
+        surface.panes.clear();
+        for index in 0..count {
+            let id = format!("pane_{}", index + 1);
+            let mut pane = pane.clone();
+            pane.pane_id = id.clone();
+            pane.focused = index == 0;
+            projection.panes.push(pane);
+            let mut geometry = geometry.clone();
+            geometry.pane_id = id;
+            geometry.focused = index == 0;
+            geometry.rect.x = index * area.width / count;
+            geometry.rect.width = (index + 1) * area.width / count - geometry.rect.x;
+            geometry.inner_rect = geometry.rect;
+            surface.panes.push(geometry);
+        }
+        state.set_snapshot(Box::new(projection));
+        state.set_pane_surface(surface);
+        let mut samples = [Vec::new(), Vec::new()];
+        let outer = hit(&state, "term_a").outer;
+        for round in 0..6 {
+            for enabled in [false, true] {
+                state.config.float_shadow = enabled;
+                let started = Instant::now();
+                for _ in 0..40 {
+                    black_box(state.compose(106, 20).expect("populated pane frame"));
+                }
+                let elapsed = started.elapsed().as_nanos() / 40;
+                let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+                assert_eq!(
+                    frame[(outer.right(), outer.bottom())]
+                        .modifier
+                        .contains(Modifier::DIM),
+                    enabled
+                );
+                assert_eq!(state.hits.panes.len(), usize::from(count));
+                if round > 0 {
+                    samples[usize::from(enabled)].push(elapsed);
+                }
+            }
+        }
+        for sample in &mut samples {
+            sample.sort_unstable();
+        }
+        println!("float shadow panes={count} fixed=106x20 ns/frame off={} [{}..{}] on={} [{}..{}] runs=5 frames/run=40",
+            samples[0][2], samples[0][0], samples[0][4], samples[1][2], samples[1][0], samples[1][4]);
+    }
+}
+
 #[test]
 fn floats_draw_over_the_pane_surface_at_their_server_position() {
     let state = shell_with_floats(vec![float("term_a", 10, 3, "pip-live")]);

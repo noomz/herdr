@@ -311,6 +311,8 @@ The active palette is applied in this order: built-in theme, `[theme.custom]`, t
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
+Set `float_shadow = true` under `[ui]` to draw a one-cell drop shadow under floating terminals. The shadow keeps the existing text, dims it, and sets its background to black. It is clipped at the pane surface edges and does not capture clicks. The default is `false`. This client-only setting takes effect on config reload without a restart.
+
 `ui.pane_borders` accepts `"auto"` (the default, borders only for split panes), `"always"` (also frame a single pane), or `"off"`. A single-pane frame requires `ui.pane_outer_borders = true`, because all its edges are outer edges. Existing boolean values remain valid: `true` means `"auto"` and `false` means `"off"`.
 
 `[ui.focus_follows_mouse]` focuses the pane under the pointer after `delay_ms` (default 200) when `enabled` is true. It is off by default and needs mouse capture. `area` is `"body"` (pane content only) or `"borders"` (the frame and the one-cell gap, nearest pane, ties do nothing). `enter_cells` insets the body before a switch can arm; a pane whose inset is empty never hover-focuses. `travel_cells` is the Chebyshev cell distance required after a hover switch before the next one arms. Copy mode, Navigate mode, selections, overlays, clicks, and wheel scroll are unchanged. One client's hover changes focus for every attached client.

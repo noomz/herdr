@@ -134,11 +134,19 @@ fn clamp_resize(surface: Rect, position: (u16, u16), wanted: (i32, i32)) -> (u16
     )
 }
 
+fn float_shadow_areas(outer: Rect) -> [Rect; 2] {
+    [
+        Rect::new(outer.right(), outer.y.saturating_add(1), 1, outer.height),
+        Rect::new(outer.x.saturating_add(1), outer.bottom(), outer.width, 1),
+    ]
+}
+
 /// Draws floats bottom to top over the tiled surface and returns their hit targets.
 pub(super) fn compose_floats(
     floats: &ClientFloats,
     focused: Option<FloatId>,
     palette: &Palette,
+    shadow: bool,
     frame: &mut FrameData,
     pane_surface: Rect,
     occlusion: &mut crate::kitty_graphics::surface::Occlusion,
@@ -184,6 +192,14 @@ pub(super) fn compose_floats(
             .border_style(Style::default().fg(border_color))
             .title(float.title.clone())
             .style(Style::default().bg(palette.panel_bg));
+        if shadow {
+            let style = Style::default()
+                .bg(ratatui::style::Color::Rgb(0, 0, 0))
+                .add_modifier(Modifier::DIM);
+            for area in float_shadow_areas(outer) {
+                composed.set_style(area.intersection(pane_surface), style);
+            }
+        }
         ratatui::widgets::Widget::render(ratatui::widgets::Clear, outer, &mut composed);
         ratatui::widgets::Widget::render(block, outer, &mut composed);
         frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
@@ -308,10 +324,15 @@ impl ClientShellState {
             let outer = self.floats.outer(float);
             patch.rows.iter().any(|row| {
                 let width = row.cells.len().min(u16::MAX as usize) as u16;
-                row.y >= outer.y
-                    && row.y < outer.bottom()
-                    && row.x < outer.right()
-                    && row.x.saturating_add(width) > outer.x
+                let overlaps = |area: Rect| {
+                    row.y >= area.y
+                        && row.y < area.bottom()
+                        && row.x < area.right()
+                        && row.x.saturating_add(width) > area.x
+                };
+                overlaps(outer)
+                    || (self.config.float_shadow
+                        && float_shadow_areas(outer).into_iter().any(overlaps))
             })
         })
     }

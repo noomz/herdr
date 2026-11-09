@@ -466,6 +466,7 @@ impl ClientShellState {
             &self.floats,
             focused_float,
             &self.config.palette,
+            self.config.float_shadow,
             &mut frame,
             layout.pane_surface,
             &mut occlusion,

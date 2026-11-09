@@ -981,6 +981,12 @@
           "description": "Force a full host-terminal redraw when the outer terminal regains focus."
         },
         {
+          "key": "ui.float_shadow",
+          "type": "boolean",
+          "default": "false",
+          "description": "Draw a one-cell drop shadow under floating terminals. Uses a black background and dimmed existing text. Client-only; changes apply on config reload."
+        },
+        {
           "key": "ui.mouse_scroll_lines",
           "type": "integer",
           "default": "3",
