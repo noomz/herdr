@@ -17,7 +17,7 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn test_runs_agent_detection(&self) -> bool {
         self.0.test_runs_agent_detection()
     }

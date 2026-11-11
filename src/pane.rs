@@ -3932,6 +3932,7 @@ impl PaneRuntime {
         Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
     }
 
+    #[cfg(unix)]
     pub(crate) fn test_runs_agent_detection(&self) -> bool {
         self.detect_handle.is_some()
     }

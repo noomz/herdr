@@ -91,6 +91,7 @@ impl AppState {
     }
 
     /// Keeps the allocator past `next`, an id a previous server could have minted.
+    #[cfg(unix)]
     pub(crate) fn reserve_float_ids_below(&mut self, next: FloatId) {
         self.next_float_id = self.next_float_id.max(next);
     }

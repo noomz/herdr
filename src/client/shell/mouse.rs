@@ -2725,17 +2725,13 @@ fn chebyshev_to_rect(point: (u16, u16), rect: Rect) -> Option<u16> {
     let bottom = rect.bottom().saturating_sub(1);
     let dx = if point.0 < rect.x {
         rect.x - point.0
-    } else if point.0 > right {
-        point.0 - right
     } else {
-        0
+        point.0.saturating_sub(right)
     };
     let dy = if point.1 < rect.y {
         rect.y - point.1
-    } else if point.1 > bottom {
-        point.1 - bottom
     } else {
-        0
+        point.1.saturating_sub(bottom)
     };
     Some(dx.max(dy))
 }

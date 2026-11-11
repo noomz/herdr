@@ -324,8 +324,7 @@ pub(crate) fn render_sidebar(
         render_workspace_rows(
             buffer,
             rect,
-            status,
-            config.status_indicators,
+            (status, config.status_indicators),
             entry,
             rows,
             workspace.focused,
@@ -693,8 +692,10 @@ pub(in crate::client::shell) fn workspace_rows(
 pub(in crate::client::shell) fn render_workspace_rows(
     buffer: &mut Buffer,
     area: Rect,
-    status: crate::api::schema::AgentStatus,
-    indicators: crate::config::StatusIndicatorStyle,
+    status_indicator: (
+        crate::api::schema::AgentStatus,
+        crate::config::StatusIndicatorStyle,
+    ),
     entry: &WorkspaceEntry,
     rows: Vec<Vec<crate::ui::ResolvedToken>>,
     focused: bool,
@@ -704,6 +705,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
     palette: &Palette,
     separator: &str,
 ) {
+    let (status, indicators) = status_indicator;
     for (row_index, row) in rows.iter().enumerate() {
         let y = area.y + row_index as u16;
         if y >= area.bottom() {
