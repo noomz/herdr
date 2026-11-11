@@ -163,6 +163,76 @@ impl HeadlessServer {
         Some((layer, framed))
     }
 
+    pub(super) fn prepare_float_buttons(
+        &self,
+        client_id: u64,
+        next_layer: Option<&crate::protocol::floats::FloatsSurface>,
+    ) -> Option<(crate::protocol::endpoint::EndpointFloatButtons, Vec<u8>)> {
+        use crate::protocol::endpoint::{
+            EndpointFloatButtonSet, EndpointFloatButtons, FLOAT_BUTTONS_KIND,
+        };
+        let client = self.clients.get(&client_id)?;
+        if !client.shell_float_buttons_enabled {
+            return None;
+        }
+        let changed_layer = next_layer.is_some_and(|next| {
+            client.shell_floats.as_ref().is_none_or(|previous| {
+                !next
+                    .floats
+                    .iter()
+                    .map(|float| float.float_id)
+                    .eq(previous.floats.iter().map(|float| float.float_id))
+            })
+        });
+        if !changed_layer
+            && client.shell_float_buttons.is_some()
+            && client.shell_float_buttons_generation == self.app.state.float_controls_generation
+        {
+            return None;
+        }
+        let layer = next_layer.or(client.shell_floats.as_ref())?;
+        let floats = layer
+            .floats
+            .iter()
+            .filter_map(|surface| {
+                let float = self.app.state.float(surface.float_id)?;
+                let binding = float.plugin_binding.as_ref()?;
+                let controls = binding.controls.as_ref()?;
+                if controls.buttons.is_empty() {
+                    return None;
+                }
+                Some(EndpointFloatButtonSet {
+                    float_id: float.id,
+                    workspace_id: crate::api::schema::RequiredNullableString(
+                        float.workspace.clone(),
+                    ),
+                    plugin_id: binding.plugin_id.clone(),
+                    entrypoint: binding.entrypoint.clone(),
+                    controls_revision: binding.controls_revision.clone(),
+                    buttons: controls.buttons.clone(),
+                })
+            })
+            .collect();
+        let mut metadata = EndpointFloatButtons {
+            boot_id: self.client_shell_boot_id.clone(),
+            revision: client.shell_float_buttons_revision.saturating_add(1),
+            floats,
+        };
+        let frame = |metadata: &EndpointFloatButtons| {
+            let data = serde_json::to_string(metadata).ok()?;
+            Self::frame_server_message(&ServerMessage::EndpointControl {
+                kind: FLOAT_BUTTONS_KIND.into(),
+                data,
+            })
+            .ok()
+        };
+        let framed = frame(&metadata).or_else(|| {
+            metadata.floats.clear();
+            frame(&metadata)
+        })?;
+        Some((metadata, framed))
+    }
+
     /// Whether a pane the client shows asked for SGR pixel mouse reports. Host
     /// reports go to whichever pane is under the pointer, so an unfocused pane
     /// needs pixels from the host too (#4750); others get them as cells.
@@ -978,6 +1048,9 @@ impl HeadlessServer {
                     .and_then(|(_, _, _, graphics, delivery, sources)| {
                         self.prepare_native_scene(client_id, graphics, delivery, sources)
                     });
+            let float_buttons =
+                self.prepare_float_buttons(client_id, float_layer.as_ref().map(|(layer, _)| layer));
+            let float_controls_generation = self.app.state.float_controls_generation;
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
             };
@@ -1019,9 +1092,25 @@ impl HeadlessServer {
                 }
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
-                if let Some((layer, framed)) = float_layer {
+                if float_layer.is_some() || float_buttons.is_some() {
+                    let mut framed = Vec::new();
+                    if let Some((_, bytes)) = &float_layer {
+                        framed.extend_from_slice(bytes);
+                    }
+                    if let Some((_, bytes)) = &float_buttons {
+                        framed.extend_from_slice(bytes);
+                    }
                     match writer.render.try_send(framed) {
-                        Ok(()) => client.shell_floats = Some(layer),
+                        Ok(()) => {
+                            if let Some((layer, _)) = float_layer {
+                                client.shell_floats = Some(layer);
+                            }
+                            if let Some((buttons, _)) = float_buttons {
+                                client.shell_float_buttons_revision = buttons.revision;
+                                client.shell_float_buttons = Some(buttons);
+                                client.shell_float_buttons_generation = float_controls_generation;
+                            }
+                        }
                         Err(std::sync::mpsc::TrySendError::Full(_)) => client.defer_full_render(),
                         Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                             broken_clients.push(client_id);
@@ -1128,6 +1217,9 @@ impl HeadlessServer {
             if let Some((_, framed)) = &float_layer {
                 serialized.extend_from_slice(framed);
             }
+            if let Some((_, framed)) = &float_buttons {
+                serialized.extend_from_slice(framed);
+            }
             let send = if native_upload.is_some() || self.native_graphics.is_pending(client_id) {
                 writer.render.send_ordered(serialized)
             } else {
@@ -1153,6 +1245,11 @@ impl HeadlessServer {
                     client.render_state.commit_sent_frame(prepared);
                     if let Some((layer, _)) = float_layer {
                         client.shell_floats = Some(layer);
+                    }
+                    if let Some((buttons, _)) = float_buttons {
+                        client.shell_float_buttons_revision = buttons.revision;
+                        client.shell_float_buttons = Some(buttons);
+                        client.shell_float_buttons_generation = float_controls_generation;
                     }
                     if shell_graphics_pending || shell_assets_deferred || direct_graphics_pending {
                         client.defer_full_render();

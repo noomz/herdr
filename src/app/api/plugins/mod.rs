@@ -1,5 +1,6 @@
 mod context;
 mod env;
+mod float_controls;
 mod manifest;
 mod panes;
 mod runtime;
@@ -34,6 +35,7 @@ impl App {
             .into_iter()
             .map(|plugin| (plugin.plugin_id.clone(), plugin))
             .collect();
+        self.reconcile_float_plugin_bindings(false);
     }
 
     fn refresh_installed_plugins(&mut self) -> std::io::Result<()> {
@@ -50,7 +52,9 @@ impl App {
         mutation: impl FnOnce(&mut crate::app::state::InstalledPluginRegistry) -> T,
     ) -> std::io::Result<T> {
         if !self.policy.persist_plugin_registry {
-            return Ok(mutation(&mut self.state.installed_plugins));
+            let result = mutation(&mut self.state.installed_plugins);
+            self.reconcile_float_plugin_bindings(false);
+            return Ok(result);
         }
         let (result, _) = crate::persist::plugin_registry::update(|entries| {
             let mut registry = entries
@@ -70,6 +74,7 @@ impl App {
             Ok(plugin) => plugin,
             Err((code, message)) => return encode_error(id, code, message),
         };
+        plugin.installation_id = Some(uuid::Uuid::new_v4().to_string());
         if let Some(source) = params.source {
             match normalize_plugin_source(&plugin, source) {
                 Ok(source) => plugin.source = source,
@@ -79,11 +84,20 @@ impl App {
         if let Err(err) = env::ensure_plugin_user_dirs(&plugin) {
             return encode_error(id, "plugin_user_dir_create_failed", err.to_string());
         }
-        if let Err(err) = self.update_installed_plugins(|plugins| {
+        let plugin = match self.update_installed_plugins(|plugins| {
+            if let Some(existing) = plugins.get(&plugin.plugin_id) {
+                if existing.manifest_path == plugin.manifest_path {
+                    plugin.installation_id =
+                        existing.installation_id.clone().or(plugin.installation_id);
+                }
+            }
             plugins.insert(plugin.plugin_id.clone(), plugin.clone());
+            plugin
         }) {
-            return encode_error(id, "plugin_registry_save_failed", err.to_string());
-        }
+            Ok(plugin) => plugin,
+            Err(err) => return encode_error(id, "plugin_registry_save_failed", err.to_string()),
+        };
+        self.revise_float_plugin_bindings(&plugin.plugin_id);
         encode_success(id, ResponseResult::PluginLinked { plugin })
     }
 
@@ -444,7 +458,7 @@ impl App {
         let Some(plugin_id) = normalize_plugin_id(&params.plugin_id) else {
             return invalid_plugin_id(id);
         };
-        let Some(plugin) = self.state.installed_plugins.get(&plugin_id).cloned() else {
+        let Some(mut plugin) = self.state.installed_plugins.get(&plugin_id).cloned() else {
             return encode_error(id, "plugin_not_found", "plugin not found");
         };
         if !plugin_manifest_available(&plugin) {
@@ -557,6 +571,29 @@ impl App {
             }
         }
 
+        if placement == PluginPanePlacement::Float && plugin.installation_id.is_none() {
+            let identity = uuid::Uuid::new_v4().to_string();
+            let result = self.update_installed_plugins(|plugins| {
+                let entry = plugins.get_mut(&plugin_id)?;
+                if entry.installation_id.is_some() || entry.manifest_path != plugin.manifest_path {
+                    return None;
+                }
+                entry.installation_id = Some(identity.clone());
+                Some(identity)
+            });
+            match result {
+                Ok(Some(identity)) => plugin.installation_id = Some(identity),
+                Ok(None) => {
+                    return encode_error(id, "plugin_changed", "plugin installation changed; retry")
+                }
+                Err(err) if pane.buttons.is_empty() => {
+                    tracing::warn!(%err, plugin_id, "float controls unavailable because plugin identity could not be saved");
+                }
+                Err(err) => {
+                    return encode_error(id, "plugin_registry_save_failed", err.to_string())
+                }
+            }
+        }
         match placement {
             PluginPanePlacement::Overlay => {
                 self.open_plugin_overlay_pane(id, params, &plugin, pane)
@@ -1082,6 +1119,267 @@ action = "bootstrap"
             result.contains("plugin_linked"),
             "expected plugin_linked: {result}"
         );
+    }
+
+    #[test]
+    fn float_button_manifest_rejects_unknown_actions_before_linking() {
+        let root = unique_temp_path("float-buttons-invalid");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.bad-buttons"
+name = "Bad buttons"
+version = "1"
+min_herdr_version = "0.6.10"
+[[panes]]
+id = "shell"
+title = "Shell"
+command = ["true"]
+buttons = [{ id = "close", icon = "x", action = "missing" }]
+"#,
+        );
+        let (code, message) = load_plugin_manifest(&root.display().to_string(), true).unwrap_err();
+        assert_eq!(code, "invalid_plugin_button_action");
+        assert!(
+            message.contains("example.bad-buttons")
+                && message.contains("shell")
+                && message.contains("missing")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn float_button_dispatch_is_targeted_and_stale_bindings_fail_closed() {
+        use crate::api::schema::{FloatButtonInvokeParams, RequiredNullableString};
+        use crate::app::floats::{FloatState, FloatVisibility};
+        use crate::popup_size::FloatPosition;
+
+        let root = unique_temp_path("float-buttons");
+        let output = root.join("context.json");
+        let manifest = format!(
+            r#"
+id = "example.buttons"
+name = "Buttons"
+version = "1"
+min_herdr_version = "0.6.10"
+[[actions]]
+id = "close"
+title = "Close"
+command = ["/bin/sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > '{}'"]
+[[panes]]
+id = "shell"
+title = "Shell"
+placement = "float"
+command = ["/bin/sh"]
+buttons = [{{ id = "close", icon = "x", action = "close" }}]
+"#,
+            output.display()
+        );
+        write_manifest_content(&root, &manifest);
+        let mut app = test_app();
+        link_manifest(&mut app, &root);
+        let plugin = app
+            .state
+            .installed_plugins
+            .get("example.buttons")
+            .unwrap()
+            .clone();
+        let binding = super::float_controls::new_binding(&plugin, "shell").unwrap();
+        let float_id = app.state.mint_float_id();
+        app.state.floats.push(FloatState {
+            id: float_id,
+            pane_id: crate::layout::PaneId::alloc(),
+            terminal_id: crate::terminal::TerminalId::alloc(),
+            plugin_binding: Some(binding.clone()),
+            width: None,
+            height: None,
+            position: FloatPosition::Centered,
+            visibility: FloatVisibility::Hidden,
+            hide_while_focused: None,
+            hide_on_blur: false,
+            workspace: None,
+        });
+        let mut target = FloatButtonInvokeParams {
+            boot_id: app.state.server_boot_id.clone(),
+            float_id: float_id.to_string(),
+            workspace_id: RequiredNullableString(None),
+            plugin_id: plugin.plugin_id.clone(),
+            entrypoint: "shell".into(),
+            controls_revision: binding.controls_revision.clone(),
+            button_id: "close".into(),
+        };
+        let mut wrong = target.clone();
+        wrong.plugin_id = "example.other".into();
+        let rejected = app.handle_float_button_invoke("bad".into(), wrong);
+        assert!(rejected.contains("float_button_target_mismatch"));
+        let mut wrong = target.clone();
+        wrong.workspace_id = RequiredNullableString(Some("another-workspace".into()));
+        assert!(app
+            .handle_float_button_invoke("bad-workspace".into(), wrong)
+            .contains("float_button_target_mismatch"));
+        let mut wrong = target.clone();
+        wrong.boot_id = "old-boot".into();
+        assert!(app
+            .handle_float_button_invoke("old-boot".into(), wrong)
+            .contains("stale_boot"));
+        let mut wrong = target.clone();
+        wrong.button_id = "missing".into();
+        assert!(app
+            .handle_float_button_invoke("bad-button".into(), wrong)
+            .contains("unknown_float_button"));
+        assert!(app.state.plugin_command_logs.is_empty());
+        app.state.floats[0]
+            .plugin_binding
+            .as_mut()
+            .unwrap()
+            .controls
+            .as_mut()
+            .unwrap()
+            .actions[0]
+            .id = "another-action".into();
+        let corrupt = app.handle_float_button_invoke("bad-action".into(), target.clone());
+        assert!(corrupt.contains("plugin_unavailable"), "{corrupt}");
+        assert!(app.state.plugin_command_logs.is_empty());
+        app.state.floats[0]
+            .plugin_binding
+            .as_mut()
+            .unwrap()
+            .controls
+            .as_mut()
+            .unwrap()
+            .actions[0]
+            .id = "close".into();
+        let accepted = app.handle_float_button_invoke("good".into(), target.clone());
+        assert!(accepted.contains("float_button_invoked"), "{accepted}");
+        let captured = read_capture_when_ready(&output, || {});
+        let context: serde_json::Value = serde_json::from_str(&captured).unwrap();
+        assert_eq!(context["invocation_source"], "float_button");
+        assert_eq!(context["float_target"]["float_id"], float_id.to_string());
+        assert_eq!(
+            context["float_target"]["workspace_id"],
+            serde_json::Value::Null
+        );
+        assert!(context.get("focused_pane_id").is_none());
+        link_manifest(&mut app, &root);
+        let reloaded = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap();
+        assert_eq!(reloaded.installation_id, binding.installation_id);
+        assert_ne!(reloaded.controls_revision, target.controls_revision);
+        let new_revision = reloaded.controls_revision.clone();
+        assert!(app
+            .handle_float_button_invoke("before-reload".into(), target.clone())
+            .contains("stale_float_controls"));
+        target.controls_revision = new_revision;
+
+        let other_root = unique_temp_path("float-buttons-other");
+        let other_output = other_root.join("context.json");
+        let other_manifest = manifest
+            .replace("example.buttons", "example.other")
+            .replace(
+                &output.display().to_string(),
+                &other_output.display().to_string(),
+            );
+        write_manifest_content(&other_root, &other_manifest);
+        link_manifest(&mut app, &other_root);
+        let other_plugin = app
+            .state
+            .installed_plugins
+            .get("example.other")
+            .unwrap()
+            .clone();
+        let other_binding = super::float_controls::new_binding(&other_plugin, "shell").unwrap();
+        let other_id = app.state.mint_float_id();
+        let mut other_float = app.state.float(float_id).unwrap().clone();
+        other_float.id = other_id;
+        other_float.pane_id = crate::layout::PaneId::alloc();
+        other_float.terminal_id = crate::terminal::TerminalId::alloc();
+        other_float.plugin_binding = Some(other_binding.clone());
+        app.state.floats.push(other_float);
+        let mut other_target = target.clone();
+        other_target.float_id = other_id.to_string();
+        other_target.plugin_id = other_plugin.plugin_id;
+        other_target.controls_revision = other_binding.controls_revision;
+        let accepted = app.handle_float_button_invoke("other".into(), other_target);
+        assert!(accepted.contains("float_button_invoked"), "{accepted}");
+        let captured = read_capture_when_ready(&other_output, || {});
+        let other_context: serde_json::Value = serde_json::from_str(&captured).unwrap();
+        assert_eq!(other_context["float_target"]["plugin_id"], "example.other");
+        assert_eq!(
+            other_context["float_target"]["float_id"],
+            other_id.to_string()
+        );
+        let _ = std::fs::remove_dir_all(other_root);
+
+        let count = app.state.plugin_command_logs.len();
+        app.state
+            .installed_plugins
+            .get_mut("example.buttons")
+            .unwrap()
+            .enabled = false;
+        app.reconcile_float_plugin_bindings(false);
+        let rejected = app.handle_float_button_invoke("stale".into(), target.clone());
+        assert!(rejected.contains("stale_float_controls"), "{rejected}");
+        assert_eq!(app.state.plugin_command_logs.len(), count);
+        app.state
+            .installed_plugins
+            .get_mut("example.buttons")
+            .unwrap()
+            .enabled = true;
+        app.reconcile_float_plugin_bindings(false);
+        let old_revision = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap()
+            .controls_revision
+            .clone();
+        app.state
+            .installed_plugins
+            .get_mut("example.buttons")
+            .unwrap()
+            .plugin_root
+            .push_str("-updated");
+        app.reconcile_float_plugin_bindings(false);
+        let updated_revision = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap()
+            .controls_revision
+            .clone();
+        assert_ne!(updated_revision, old_revision);
+        let unlink = app.handle_api_request(Request {
+            id: "unlink".into(),
+            method: Method::PluginUnlink(PluginUnlinkParams {
+                plugin_id: "example.buttons".into(),
+            }),
+        });
+        assert!(unlink.contains("plugin_unlinked"), "{unlink}");
+        link_manifest(&mut app, &root);
+        let new_installation = app.state.installed_plugins["example.buttons"]
+            .installation_id
+            .as_deref()
+            .unwrap();
+        assert_ne!(new_installation, binding.installation_id);
+        let binding = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap();
+        assert!(binding.controls.is_none());
+        assert_ne!(binding.controls_revision, updated_revision);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

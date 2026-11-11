@@ -145,6 +145,7 @@ pub fn reload_manifests(
         match reload_fn(&entry.manifest_path, entry.enabled) {
             Ok(mut fresh) => {
                 fresh.enabled = entry.enabled;
+                fresh.installation_id = entry.installation_id.clone();
                 fresh.source = entry.source.clone();
                 *entry = fresh;
             }
@@ -178,6 +179,7 @@ mod tests {
     fn sample_plugin(id: &str) -> InstalledPluginInfo {
         InstalledPluginInfo {
             plugin_id: id.to_string(),
+            installation_id: None,
             name: "Test Plugin".to_string(),
             version: "0.1.0".to_string(),
             min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
@@ -250,6 +252,7 @@ mod tests {
     #[test]
     fn reload_manifests_uses_fresh_parse_and_keeps_enabled_flag() {
         let mut entry = sample_plugin("example.reload");
+        entry.installation_id = Some("installation-id".into());
         entry.enabled = false;
         entry.source = crate::api::schema::PluginSourceInfo {
             kind: crate::api::schema::PluginSourceKind::Github,
@@ -265,6 +268,7 @@ mod tests {
         let result = reload_manifests(vec![entry], |_path, _enabled| {
             Ok(InstalledPluginInfo {
                 plugin_id: "example.reload".to_string(),
+                installation_id: None,
                 name: "Fresh Name".to_string(),
                 version: "0.2.0".to_string(),
                 min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
@@ -286,6 +290,10 @@ mod tests {
 
         assert_eq!(result[0].name, "Fresh Name");
         assert_eq!(result[0].version, "0.2.0");
+        assert_eq!(
+            result[0].installation_id.as_deref(),
+            Some("installation-id")
+        );
         // enabled preserved from stored entry
         assert!(!result[0].enabled);
         assert_eq!(

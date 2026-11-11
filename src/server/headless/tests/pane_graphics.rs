@@ -766,14 +766,18 @@ fn terminal_attach_detach_deletes_forwarded_kitty_images() {
         assert!(server.handle_server_event(ServerEvent::ClientDetach { client_id: 7 }));
         let ServerMessage::Graphics { bytes } = read_server_message(
             control_rx
-                .try_recv()
+                .recv_timeout(Duration::from_secs(1))
                 .expect("detach clears forwarded images"),
         ) else {
             panic!("expected graphics cleanup before shutdown");
         };
         assert!(String::from_utf8_lossy(&bytes).contains("\x1b_Ga=d,d=I,i="));
         assert!(matches!(
-            read_server_message(control_rx.try_recv().expect("detach shutdown")),
+            read_server_message(
+                control_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("detach shutdown")
+            ),
             ServerMessage::ServerShutdown { .. }
         ));
     });

@@ -77,6 +77,9 @@ pub(super) struct FloatHit {
 #[derive(Default)]
 pub(super) struct ClientFloats {
     pub(super) layer: FloatsSurface,
+    pub(super) buttons: Option<crate::protocol::endpoint::EndpointFloatButtons>,
+    pub(super) buttons_revision: Option<(String, u64)>,
+    pub(super) pending_buttons: std::collections::HashMap<String, String>,
     pub(super) focused: Option<FloatId>,
     pub(super) pending_float_focus: Option<FloatId>,
     pub(super) drag: Option<ClientFloatDrag>,
@@ -274,6 +277,9 @@ impl ClientShellState {
         }) {
             self.pane_mouse_gesture = None;
         }
+        if let Some(metadata) = self.floats.buttons.as_mut() {
+            metadata.floats.retain(|entry| present(entry.float_id));
+        }
         self.floats.layer = layer;
         let mut outcome = ClientShellInput::default();
         if let Some(float_id) = self.floats.pending_float_focus.take() {
@@ -283,6 +289,80 @@ impl ClientShellState {
         }
         self.reconcile_input_source();
         outcome
+    }
+
+    pub(crate) fn set_float_buttons(
+        &mut self,
+        boot_id: &str,
+        metadata: Option<crate::protocol::endpoint::EndpointFloatButtons>,
+    ) {
+        let Some(mut metadata) = metadata else {
+            self.floats.buttons = None;
+            return;
+        };
+        if metadata.boot_id != boot_id {
+            return;
+        }
+        if self
+            .floats
+            .buttons_revision
+            .as_ref()
+            .is_some_and(|(boot, revision)| {
+                boot == &metadata.boot_id && *revision >= metadata.revision
+            })
+        {
+            return;
+        }
+        metadata.floats.retain(|entry| {
+            self.floats
+                .layer
+                .floats
+                .iter()
+                .any(|float| float.float_id == entry.float_id)
+        });
+        self.floats.buttons_revision = Some((metadata.boot_id.clone(), metadata.revision));
+        self.floats.buttons = Some(metadata);
+    }
+
+    pub(crate) fn receive_float_button_result(
+        &mut self,
+        result: crate::protocol::endpoint::EndpointFloatButtonResult,
+    ) -> bool {
+        if self
+            .snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.boot_id != result.boot_id)
+            || self.floats.pending_buttons.get(&result.log_id) != Some(&result.request_id)
+            || result.status == crate::api::schema::PluginCommandStatus::Running
+            || result.button_id.is_empty()
+            || result.button_id.len() > 120
+            || !result
+                .button_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+        {
+            return false;
+        }
+        self.floats.pending_buttons.remove(&result.log_id);
+        if result.status == crate::api::schema::PluginCommandStatus::Failed {
+            let detail = result
+                .error
+                .map(|error| {
+                    error
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(512)
+                        .collect()
+                })
+                .unwrap_or_else(|| format!("exit code {:?}", result.exit_code));
+            return self.push_endpoint_notice(
+                ClientEndpointNoticeKind::Rejected,
+                format!("float-button:{}:{}", result.float_id, result.button_id),
+                "Float action failed",
+                detail,
+            );
+        }
+        false
     }
 
     pub(crate) fn set_float_focus(

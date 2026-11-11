@@ -1,6 +1,6 @@
 # Float control contracts
 
-Status: T1 design for `SPEC-float-controls.md`. These contracts describe proposed behavior, not implemented features.
+Status: T1 design for `SPEC-float-controls.md`, with T2 implementation notes appended at the end. Contracts without a T2 note still describe proposed behavior, not implemented features.
 
 ## Scope and existing boundaries
 
@@ -8,7 +8,7 @@ Herdr owns float borders and input. Plugins declare ordered buttons that invoke 
 
 The current boundaries are:
 
-- `src/app/api/plugins/manifest.rs` parses YAML pane declarations and validates action references for link handlers.
+- `src/app/api/plugins/manifest.rs` parses TOML pane declarations and validates action references for link handlers.
 - `src/api/schema/plugins.rs` defines pane declarations, action invocation, and plugin context.
 - `src/app/api/plugins/panes.rs::open_plugin_float` spawns a float but does not retain a `PluginPaneRecord` for it.
 - `src/app/state.rs::PluginPaneRecord` associates ordinary plugin panes with a plugin ID and entrypoint.
@@ -27,28 +27,28 @@ T1 changes no Rust interfaces, published docs, plugin manifests, or endpoint fix
 
 Add an optional `buttons` list to each plugin pane declaration. Omission and an empty list mean no controls. The declaration order is the display order, left to right.
 
-```yaml
-panes:
-  - id: shell
-    title: Shell
-    placement: float
-    command: [./shell]
-    buttons:
-      - id: inspect
-        icon: "?"
-        action: inspect-shell
-      - id: close
-        icon: "×"
-        action: hide-shell
-actions:
-  - id: inspect-shell
-    title: Inspect shell
-    contexts: [workspace]
-    command: [./inspect-shell]
-  - id: hide-shell
-    title: Hide shell
-    contexts: [workspace]
-    command: [./hide-shell]
+```toml
+[[panes]]
+id = "shell"
+title = "Shell"
+placement = "float"
+command = ["./shell"]
+buttons = [
+  { id = "inspect", icon = "?", action = "inspect-shell" },
+  { id = "close", icon = "×", action = "hide-shell" },
+]
+
+[[actions]]
+id = "inspect-shell"
+title = "Inspect shell"
+contexts = ["workspace"]
+command = ["./inspect-shell"]
+
+[[actions]]
+id = "hide-shell"
+title = "Hide shell"
+contexts = ["workspace"]
+command = ["./hide-shell"]
 ```
 
 The example is illustrative, not a tabshell patch. Actions remain argv commands, not shell text supplied by the client.
@@ -239,3 +239,16 @@ Use existing pure state constructors and identity invariants for ownership and h
 T1 validation checks this document against the source boundaries listed above, checks that every T1 invariant has a verification row, and checks that only the T1 status changes in the spec. `git diff --check` validates tracked whitespace. The ignored local document also requires an explicit whitespace check.
 
 No protocol or manifest behavior is implemented by this document. T2 must turn these proposed JSON shapes into schema-backed contracts and tests before exposing them. T4 must establish terminal-specific OSC 22 behavior. T5 must inspect the actual tabshell source and wire its close action to `float.hide-target`. Completion of T1 does not mark those tasks complete.
+
+## T2 as built
+
+Where the implementation differs from or adds detail to the contracts above:
+
+- Button validation is shared, not duplicated. `src/protocol/endpoint.rs::valid_button_icon` is the single icon rule; `src/app/api/plugins/manifest.rs::validate_pane_buttons` applies it with the id grammar, per-pane uniqueness, and the same-plugin action reference before a plugin becomes available, and the client applies the same function to every metadata icon. Format-character and combining-mark checks need `unicode-general-category`; graphemes and widths still come from `unicode-segmentation` and `unicode-width`.
+- Installation identity and boot identity use `uuid`: `InstalledPluginInfo.installation_id` is minted when a plugin is first linked or first opened as a float, and preserved across reload and update while `manifest_path` is unchanged; `AppState.server_boot_id` is minted per server boot.
+- The binding lives in `src/app/api/plugins/float_controls.rs`. `open_plugin_float` creates it, `revise_float_plugin_bindings` gives affected floats a fresh `controls_revision` after a reload, and `reconcile_float_plugin_bindings` clears `controls` (leaving the terminal and identity intact) when the installation, entrypoint, action platform, or manifest availability no longer resolves.
+- Metadata is server-side (`HeadlessServer::prepare_float_buttons`) and is only prepared for a client that sent `float_buttons` together with `floats`. It is regenerated when the presented float set changes or `float_controls_generation` advances, and it is dropped when the client's float interest is cleared.
+- Completion is routed from the existing `PluginCommandFinished` event to clients with a pending log id, so the endpoint request lane is never held for the command's lifetime. The client reports a failed completion as an endpoint rejected notice and drops its pending entry; it never retries.
+- `App::handle_float_button_invoke` performs every identity check in the same server turn that resolves the action, and derives workspace and tab context from the float's own workspace. For a shared float it leaves workspace and tab context absent rather than substituting the active workspace.
+
+T3 through T6 remain open, and this note does not mark them complete: nothing draws or hit-tests a button, no pointer shape is set, and neither `float.hide-target` nor the tabshell close button exists yet.

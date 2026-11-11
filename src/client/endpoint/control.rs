@@ -13,6 +13,8 @@ pub(crate) enum EndpointControlMessage {
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
     Floats(crate::protocol::floats::FloatsSurface),
     FloatFocus(crate::protocol::floats::FloatFocus),
+    FloatButtons(Option<crate::protocol::endpoint::EndpointFloatButtons>),
+    FloatButtonResult(crate::protocol::endpoint::EndpointFloatButtonResult),
     Ignored,
 }
 
@@ -55,6 +57,18 @@ pub(crate) fn decode_endpoint_control(
             },
         ));
     }
+    if kind == crate::protocol::endpoint::FLOAT_BUTTONS_KIND {
+        let metadata =
+            serde_json::from_str::<crate::protocol::endpoint::EndpointFloatButtons>(data)
+                .ok()
+                .filter(valid_float_button_metadata);
+        return Ok(EndpointControlMessage::FloatButtons(metadata));
+    }
+    if kind == crate::protocol::endpoint::FLOAT_BUTTON_RESULT_KIND {
+        return Ok(serde_json::from_str(data)
+            .map(EndpointControlMessage::FloatButtonResult)
+            .unwrap_or(EndpointControlMessage::Ignored));
+    }
     if kind == crate::protocol::floats::FOCUS_KIND {
         return Ok(crate::protocol::floats::decode_float_focus(data)
             .map(EndpointControlMessage::FloatFocus)
@@ -84,6 +98,31 @@ pub(crate) fn decode_endpoint_control(
     Ok(EndpointControlMessage::Ignored)
 }
 
+fn valid_float_button_metadata(metadata: &crate::protocol::endpoint::EndpointFloatButtons) -> bool {
+    let mut floats = std::collections::HashSet::new();
+    metadata.floats.iter().all(|float| {
+        let mut buttons = std::collections::HashSet::new();
+        floats.insert(float.float_id)
+            && !float.plugin_id.is_empty()
+            && !float.entrypoint.is_empty()
+            && !float.controls_revision.is_empty()
+            && float.controls_revision.len() <= 256
+            && float.buttons.iter().all(|button| {
+                let valid_id = |id: &str| {
+                    !id.is_empty()
+                        && id.len() <= 120
+                        && id.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')
+                        })
+                };
+                valid_id(&button.id)
+                    && valid_id(&button.action)
+                    && buttons.insert(&button.id)
+                    && crate::protocol::endpoint::valid_button_icon(&button.icon)
+            })
+    })
+}
+
 pub(crate) fn protocol_failure_is_fatal(endpoint_id: &ClientEndpointId) -> bool {
     endpoint_id.is_local()
 }
@@ -92,6 +131,52 @@ pub(crate) fn protocol_failure_is_fatal(endpoint_id: &ClientEndpointId) -> bool 
 mod tests {
     use super::*;
     use crate::client::endpoint::ProfileId;
+
+    #[test]
+    fn float_button_metadata_rejects_invalid_icons_duplicates_and_missing_workspace() {
+        let mut value = serde_json::json!({
+            "boot_id": "boot", "revision": 1, "floats": [{
+                "float_id": "f1", "workspace_id": null, "plugin_id": "plugin", "entrypoint": "shell",
+                "controls_revision": uuid::Uuid::new_v4().to_string(),
+                "buttons": [{"id": "close", "icon": "x", "action": "hide"}]
+            }]
+        });
+        let decode = |value: &serde_json::Value| {
+            decode_endpoint_control(
+                crate::protocol::endpoint::FLOAT_BUTTONS_KIND,
+                &value.to_string(),
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            decode(&value),
+            EndpointControlMessage::FloatButtons(Some(_))
+        ));
+        value["floats"][0]["buttons"][0]["icon"] = "\u{1b}".into();
+        assert!(matches!(
+            decode(&value),
+            EndpointControlMessage::FloatButtons(None)
+        ));
+        value["floats"][0]["buttons"][0]["icon"] = "x".into();
+        let duplicate = value["floats"][0]["buttons"][0].clone();
+        value["floats"][0]["buttons"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(matches!(
+            decode(&value),
+            EndpointControlMessage::FloatButtons(None)
+        ));
+        value["floats"][0]["buttons"].as_array_mut().unwrap().pop();
+        value["floats"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("workspace_id");
+        assert!(matches!(
+            decode(&value),
+            EndpointControlMessage::FloatButtons(None)
+        ));
+    }
 
     #[test]
     fn unknown_optional_controls_are_ignored() {

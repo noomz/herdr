@@ -635,6 +635,13 @@ impl ClientShellState {
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
             return self.complete_link_hover(target, result);
         }
+        if pending.method_name == "float.button.invoke" {
+            if let Ok(crate::api::schema::ResponseResult::FloatButtonInvoked { log }) = &result {
+                self.floats
+                    .pending_buttons
+                    .insert(log.log_id.clone(), request_id.to_owned());
+            }
+        }
         if result.is_ok() {
             let timeout_key = ClientEndpointNoticeKey {
                 boot_id: boot_id.to_owned(),

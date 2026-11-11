@@ -41,7 +41,7 @@ The exact manifest syntax, action invocation context, protocol negotiation, and 
 | ID | Status | Task | Invariants |
 | --- | --- | --- | --- |
 | T1 | x | Design and document button declarations, ownership and handoff, invocation context, activation and cancellation, icon cell-width validation, overflow, failure feedback, and compatible metadata and invocation negotiation. | 1, 2, 3, 7, 8, 9 |
-| T2 | pending | Implement plugin button declarations and compatible float metadata and action dispatch. | 1, 2, 3, 8, 9 |
+| T2 | x | Implement plugin button declarations and compatible float metadata and action dispatch. | 1, 2, 3, 8, 9 |
 | T3 | pending | Render and hit-test buttons, including overlaps, narrow floats, and stacked floats. | 1, 3, 7, 9 |
 | T4 | pending | Implement and restore terminal pointer shapes for hover and active gestures. | 3, 5, 6 |
 | T5 | pending | Configure the tabshell close button to hide its float. | 1, 4 |

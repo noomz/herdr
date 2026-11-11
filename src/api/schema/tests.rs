@@ -1001,6 +1001,7 @@ fn plugin_link_list_unlink_round_trip() {
 
     let plugin = InstalledPluginInfo {
         plugin_id: "example.worktree-bootstrap".into(),
+        installation_id: None,
         name: "Worktree Bootstrap".into(),
         version: "0.1.0".into(),
         min_herdr_version: crate::build_info::BASE_VERSION.into(),
@@ -1029,6 +1030,7 @@ fn plugin_link_list_unlink_round_trip() {
         }],
         panes: vec![PluginManifestPane {
             hide_on_blur: false,
+            buttons: vec![],
             id: "board".into(),
             title: "Board".into(),
             description: None,

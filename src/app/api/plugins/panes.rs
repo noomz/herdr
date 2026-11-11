@@ -89,6 +89,16 @@ impl App {
                 Ok(float_id) => float_id,
                 Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
             };
+        if let Some(float) = self
+            .state
+            .floats
+            .iter_mut()
+            .find(|float| float.id == float_id)
+        {
+            float.plugin_binding = super::float_controls::new_binding(plugin, &pane.id);
+            self.state.float_controls_generation =
+                self.state.float_controls_generation.wrapping_add(1);
+        }
         if let Some(terminal) = self
             .state
             .float(float_id)

@@ -47,6 +47,67 @@ fn shell_with_floats(floats: Vec<FloatSurface>) -> ClientShellState {
     state
 }
 
+#[test]
+fn float_button_failure_notice_requires_the_original_pending_log() {
+    use crate::api::schema::PluginCommandStatus;
+    use crate::protocol::endpoint::EndpointFloatButtonResult;
+    let mut state = shell_with_floats(vec![float("term_a", 1, 1, "float")]);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state
+        .floats
+        .pending_buttons
+        .insert("log".into(), "request".into());
+    let mut result = EndpointFloatButtonResult {
+        boot_id: "old".into(),
+        request_id: "request".into(),
+        log_id: "log".into(),
+        float_id: fid("term_a"),
+        button_id: "close".into(),
+        status: PluginCommandStatus::Failed,
+        exit_code: Some(1),
+        error: Some("bad\u{1b}output".into()),
+    };
+    assert!(!state.receive_float_button_result(result.clone()));
+    assert!(state.floats.pending_buttons.contains_key("log"));
+    result.boot_id = boot;
+    assert!(state.receive_float_button_result(result));
+    let notice = state.visible_endpoint_notice.as_ref().unwrap();
+    assert_eq!(notice.body, "badoutput");
+    assert!(!state.floats.pending_buttons.contains_key("log"));
+}
+
+#[test]
+fn float_button_metadata_never_rebinds_old_or_removed_float_ids() {
+    use crate::protocol::endpoint::{EndpointFloatButtonSet, EndpointFloatButtons};
+    let mut state = shell_with_floats(vec![float("term_a", 1, 1, "float")]);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    let entry = EndpointFloatButtonSet {
+        float_id: fid("term_a"),
+        workspace_id: crate::api::schema::RequiredNullableString(None),
+        plugin_id: "plugin".into(),
+        entrypoint: "shell".into(),
+        controls_revision: uuid::Uuid::new_v4().to_string(),
+        buttons: vec![],
+    };
+    let metadata = EndpointFloatButtons {
+        boot_id: boot.clone(),
+        revision: 2,
+        floats: vec![entry],
+    };
+    state.set_float_buttons(&boot, Some(metadata.clone()));
+    assert_eq!(state.floats.buttons.as_ref().unwrap().floats.len(), 1);
+    state.set_float_layer(FloatsSurface::default());
+    assert!(state.floats.buttons.as_ref().unwrap().floats.is_empty());
+    state.set_float_buttons(&boot, None);
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 1, 1, "new")],
+    });
+    state.set_float_buttons(&boot, Some(metadata));
+    assert!(state.floats.buttons.is_none());
+    state.clear_float_projection();
+    assert!(state.floats.buttons_revision.is_none());
+}
+
 fn click(
     state: &mut ClientShellState,
     kind: MouseEventKind,

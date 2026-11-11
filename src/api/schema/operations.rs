@@ -206,6 +206,7 @@ mod tests {
             "plugin.pane.open",
             "plugin.pane.focus",
             "plugin.pane.close",
+            "float.button.invoke",
             "float.move",
             "float.resize",
             "float.hide",

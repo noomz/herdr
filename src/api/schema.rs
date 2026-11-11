@@ -157,6 +157,7 @@ operations::define_operations! {
     FloatRaise(#[schemars(with = "FloatTarget")] FloatShowParams) => "float.raise", true, true;
     FloatSetHideRule(FloatSetHideRuleParams) => "float.set_hide_rule", true, false;
     FloatClose(FloatTarget) => "float.close", true, false;
+    FloatButtonInvoke(FloatButtonInvokeParams) => "float.button.invoke", true, true;
 }
 
 #[cfg(test)]

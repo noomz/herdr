@@ -624,8 +624,6 @@ fn restore_tab(
         let handoff_terminal_id = imported_runtime
             .as_ref()
             .and_then(|imported| imported.state.terminal_id.clone());
-        #[cfg(not(unix))]
-        let handoff_terminal_id: Option<TerminalId> = None;
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -729,7 +727,10 @@ fn restore_tab(
 
         match runtime_result {
             Ok(runtime) => {
+                #[cfg(unix)]
                 let terminal_id = handoff_terminal_id.unwrap_or_else(TerminalId::alloc);
+                #[cfg(not(unix))]
+                let terminal_id = TerminalId::alloc();
                 let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
                 if was_imported {
                     if let Some(argv) = saved_launch_argv {

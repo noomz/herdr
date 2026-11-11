@@ -202,6 +202,7 @@ mod tests {
                     id,
                     pane_id: crate::layout::PaneId::alloc(),
                     terminal_id,
+                    plugin_binding: None,
                     width: Some(PopupSize::Cells(20)),
                     height: Some(PopupSize::Cells(8)),
                     position: FloatPosition::Centered,

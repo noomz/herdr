@@ -130,6 +130,11 @@ impl ClientShellLocation {
     }
 }
 
+pub(crate) struct PendingFloatButton {
+    pub(crate) request_id: String,
+    pub(crate) target: crate::api::schema::FloatButtonInvokeParams,
+}
+
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
     /// Whether this connection owns the Herdr shell or one direct terminal stream.
@@ -168,6 +173,12 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_mouse_capture: bool,
     /// Float layer last sent to a client that negotiated floats; `None` when not negotiated.
     pub(crate) shell_floats: Option<crate::protocol::floats::FloatsSurface>,
+    pub(crate) shell_float_buttons: Option<crate::protocol::endpoint::EndpointFloatButtons>,
+    pub(crate) shell_float_buttons_enabled: bool,
+    pub(crate) shell_float_buttons_generation: u64,
+    pub(crate) shell_float_buttons_revision: u64,
+    pub(crate) shell_float_button_response: Option<(PendingFloatButton, Vec<u8>)>,
+    pub(crate) shell_pending_float_buttons: HashMap<String, PendingFloatButton>,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
@@ -247,6 +258,12 @@ impl ClientConnection {
             shell_surface_active: true,
             shell_mouse_capture: false,
             shell_floats: None,
+            shell_float_buttons: None,
+            shell_float_buttons_enabled: false,
+            shell_float_buttons_generation: 0,
+            shell_float_buttons_revision: 0,
+            shell_float_button_response: None,
+            shell_pending_float_buttons: HashMap::new(),
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
             host_keyboard_protocol_active: None,

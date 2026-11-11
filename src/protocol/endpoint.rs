@@ -30,6 +30,9 @@ pub const HEALTH_PONG_KIND: &str = "endpoint.health.pong.v1";
 pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
+pub const FLOAT_BUTTONS_CAPABILITY: &str = "float_buttons_v1";
+pub const FLOAT_BUTTONS_KIND: &str = "endpoint.float-buttons.v1";
+pub const FLOAT_BUTTON_RESULT_KIND: &str = "endpoint.float-button-result.v1";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
 /// A direct terminal attach client asks the server to forward the attached terminal's Kitty
 /// images. Older servers ignore it, so old and new peers keep text-only attach.
@@ -40,6 +43,65 @@ pub struct EndpointAgentCompletions {
     pub boot_id: String,
     pub revision: u64,
     pub completions: std::collections::BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointFloatButtons {
+    pub boot_id: String,
+    pub revision: u64,
+    pub floats: Vec<EndpointFloatButtonSet>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointFloatButtonSet {
+    pub float_id: crate::protocol::floats::FloatId,
+    #[serde(deserialize_with = "crate::api::schema::floats::required_nullable")]
+    pub workspace_id: crate::api::schema::RequiredNullableString,
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub controls_revision: String,
+    pub buttons: Vec<crate::api::schema::PluginManifestButton>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointFloatButtonResult {
+    pub boot_id: String,
+    pub request_id: String,
+    pub log_id: String,
+    pub float_id: crate::protocol::floats::FloatId,
+    pub button_id: String,
+    pub status: crate::api::schema::PluginCommandStatus,
+    pub exit_code: Option<i32>,
+    pub error: Option<String>,
+}
+
+pub(crate) fn valid_button_icon(icon: &str) -> bool {
+    use unicode_general_category::{get_general_category, GeneralCategory};
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let mut graphemes = icon.graphemes(true);
+    if graphemes.next() != Some(icon) || graphemes.next().is_some() {
+        return false;
+    }
+    if icon.chars().any(|ch| {
+        ch.is_control()
+            || ch.is_whitespace()
+            || get_general_category(ch) == GeneralCategory::Format
+            || ('\u{fe00}'..='\u{fe0f}').contains(&ch)
+            || ('\u{e0100}'..='\u{e01ef}').contains(&ch)
+    }) {
+        return false;
+    }
+    matches!(icon.width(), 1 | 2)
+        && icon.chars().next().is_some_and(|ch| {
+            !matches!(
+                get_general_category(ch),
+                GeneralCategory::NonspacingMark
+                    | GeneralCategory::SpacingMark
+                    | GeneralCategory::EnclosingMark
+            )
+        })
 }
 
 fn default_true() -> bool {
@@ -70,6 +132,8 @@ pub struct EndpointClientHello {
     /// Accept the optional floating-terminal layer on this connection.
     #[serde(default)]
     pub floats: bool,
+    #[serde(default)]
+    pub float_buttons: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -181,6 +245,7 @@ impl EndpointServerWelcome {
                 AGENT_VIEW_PROJECTION_CAPABILITY.into(),
                 AGENT_COMPLETIONS_CAPABILITY.into(),
                 super::floats::CAPABILITY.into(),
+                FLOAT_BUTTONS_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -223,6 +288,7 @@ mod tests {
             surface_delta: false,
             surface_scroll: false,
             floats: false,
+            float_buttons: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -373,12 +439,14 @@ mod tests {
         value.as_object_mut().unwrap().remove("surface_delta");
         value.as_object_mut().unwrap().remove("surface_scroll");
         value.as_object_mut().unwrap().remove("floats");
+        value.as_object_mut().unwrap().remove("float_buttons");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
         assert!(!decoded.surface_delta);
         assert!(!decoded.surface_scroll);
         assert!(!decoded.floats);
+        assert!(!decoded.float_buttons);
     }
 
     #[test]
@@ -396,6 +464,7 @@ mod tests {
                 AGENT_VIEW_PROJECTION_CAPABILITY.to_string(),
                 AGENT_COMPLETIONS_CAPABILITY.to_string(),
                 super::super::floats::CAPABILITY.to_string(),
+                FLOAT_BUTTONS_CAPABILITY.to_string(),
             ]
         );
     }

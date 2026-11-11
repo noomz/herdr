@@ -330,11 +330,16 @@ fn install_github_plugin(
             ensure_manifest_unchanged_after_build(&preview_plugin, &plugin)?;
             source_info.managed_path = Some(final_checkout.display().to_string());
             plugin.source = source_info;
+            plugin.installation_id = Some(
+                updating_plugin
+                    .and_then(|existing| existing.installation_id.clone())
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            );
             activation_attempted = true;
             if let Some(expected) = updating_plugin {
                 persist_updated_plugin(&plugin, expected)?;
             } else {
-                persist_plugin_offline(&plugin, true)?;
+                plugin = persist_plugin_offline(&plugin, true)?;
             }
             Ok::<InstalledPluginInfo, io::Error>(plugin)
         })();
@@ -363,6 +368,8 @@ fn install_github_plugin(
                 return Err(err);
             }
         };
+        // Refresh a running server's cached declarations after the registry changes.
+        let _ = live_installed_plugin_info(&plugin.plugin_id);
         println!(
             "{} {} from {}.",
             if updating { "Updated" } else { "Installed" },
@@ -597,7 +604,9 @@ fn ensure_update_target_unchanged(
 }
 
 fn same_update_target(expected: &InstalledPluginInfo, current: &InstalledPluginInfo) -> bool {
-    current.manifest_path == expected.manifest_path && current.source == expected.source
+    current.manifest_path == expected.manifest_path
+        && current.source == expected.source
+        && current.installation_id == expected.installation_id
 }
 
 fn validate_github_segment(label: &str, value: &str) -> Result<(), String> {
@@ -701,22 +710,27 @@ fn load_cli_plugin_manifest(path: &Path, enabled: bool) -> std::io::Result<Insta
 fn persist_plugin_offline(
     plugin: &InstalledPluginInfo,
     preserve_enabled: bool,
-) -> std::io::Result<()> {
+) -> std::io::Result<InstalledPluginInfo> {
     crate::plugin_paths::ensure_plugin_user_dirs(&plugin.plugin_id)?;
-    crate::persist::plugin_registry::update(|plugins| {
+    let (plugin, _) = crate::persist::plugin_registry::update(|plugins| {
         let mut plugin = plugin.clone();
-        if preserve_enabled {
-            if let Some(existing) = plugins
-                .iter()
-                .find(|entry| entry.plugin_id == plugin.plugin_id)
-            {
+        if let Some(existing) = plugins
+            .iter()
+            .find(|entry| entry.plugin_id == plugin.plugin_id)
+        {
+            if preserve_enabled {
                 plugin.enabled = existing.enabled;
+            }
+            if existing.manifest_path == plugin.manifest_path {
+                plugin.installation_id =
+                    existing.installation_id.clone().or(plugin.installation_id);
             }
         }
         plugins.retain(|entry| entry.plugin_id != plugin.plugin_id);
-        plugins.push(plugin);
+        plugins.push(plugin.clone());
+        plugin
     })?;
-    Ok(())
+    Ok(plugin)
 }
 
 fn persist_updated_plugin(
@@ -849,8 +863,9 @@ fn plugin_matches_github_source(plugin: &InstalledPluginInfo, source: &GithubPlu
 }
 
 fn offline_plugin_link_response(params: &PluginLinkParams) -> std::io::Result<serde_json::Value> {
-    let plugin = load_cli_plugin_manifest(Path::new(&params.path), params.enabled)?;
-    persist_plugin_offline(&plugin, false)?;
+    let mut plugin = load_cli_plugin_manifest(Path::new(&params.path), params.enabled)?;
+    plugin.installation_id = Some(uuid::Uuid::new_v4().to_string());
+    let plugin = persist_plugin_offline(&plugin, false)?;
     serde_json::to_value(SuccessResponse {
         id: "cli:plugin".into(),
         result: ResponseResult::PluginLinked { plugin },
@@ -1397,6 +1412,7 @@ mod tests {
     ) -> InstalledPluginInfo {
         InstalledPluginInfo {
             plugin_id: id.to_string(),
+            installation_id: None,
             name: "Test Plugin".to_string(),
             version: "0.1.0".to_string(),
             min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
@@ -1606,6 +1622,9 @@ mod tests {
         assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
         current = expected.clone();
         current.manifest_path.push_str(".reinstalled");
+        assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
+        current = expected.clone();
+        current.installation_id = Some(uuid::Uuid::new_v4().to_string());
         assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
         assert!(ensure_update_target_unchanged(&expected, None).is_err());
     }

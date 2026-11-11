@@ -46,6 +46,12 @@ impl EndpointNegotiation {
         self.capabilities.contains(capability)
     }
 
+    pub(crate) fn supports_float_buttons(&self) -> bool {
+        self.supports_capability(crate::protocol::floats::CAPABILITY)
+            && self.supports_capability(crate::protocol::endpoint::FLOAT_BUTTONS_CAPABILITY)
+            && self.supports_method("float.button.invoke")
+    }
+
     pub(crate) fn supports_surface_interest(&self) -> bool {
         self.supports_capability(crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY)
             && self.supports_capability(
@@ -380,6 +386,28 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[test]
+    fn float_button_negotiation_requires_layer_metadata_and_method() {
+        let layer = crate::protocol::floats::CAPABILITY.to_owned();
+        let controls = crate::protocol::endpoint::FLOAT_BUTTONS_CAPABILITY.to_owned();
+        let method = "float.button.invoke".to_owned();
+        assert!(
+            !EndpointNegotiation::new(vec![], vec![layer.clone(), controls.clone()])
+                .supports_float_buttons()
+        );
+        assert!(
+            !EndpointNegotiation::new(vec![method.clone()], vec![layer.clone()])
+                .supports_float_buttons()
+        );
+        assert!(
+            !EndpointNegotiation::new(vec![method.clone()], vec![controls.clone()])
+                .supports_float_buttons()
+        );
+        assert!(
+            EndpointNegotiation::new(vec![method], vec![layer, controls]).supports_float_buttons()
+        );
+    }
 
     struct FakeTransport {
         sent: Arc<Mutex<Vec<ClientMessage>>>,

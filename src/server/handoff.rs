@@ -625,6 +625,7 @@ mod tests {
     fn test_float() -> crate::handoff_runtime::HandoffFloat {
         crate::handoff_runtime::HandoffFloat {
             id: None,
+            plugin_binding: None,
             runtime: crate::handoff_runtime::HandoffRuntimeState {
                 pane_id: 1,
                 terminal_id: None,
