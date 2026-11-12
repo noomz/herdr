@@ -43,6 +43,14 @@ pub struct FloatButtonInvokeParams {
     pub button_id: String,
 }
 
+/// Hides one exact float from one server boot. Never shows, creates, or retargets a float.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FloatHideTargetParams {
+    pub boot_id: String,
+    pub float_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RequiredNullableString(pub Option<String>);

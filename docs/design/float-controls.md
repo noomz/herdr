@@ -251,7 +251,7 @@ Where the implementation differs from or adds detail to the contracts above:
 - Completion is routed from the existing `PluginCommandFinished` event to clients with a pending log id, so the endpoint request lane is never held for the command's lifetime. The client reports a failed completion as an endpoint rejected notice and drops its pending entry; it never retries.
 - `App::handle_float_button_invoke` performs every identity check in the same server turn that resolves the action, and derives workspace and tab context from the float's own workspace. For a shared float it leaves workspace and tab context absent rather than substituting the active workspace.
 
-At the time of T2, T3 through T6 remained open. T3 (rendering and hit testing) and T4 (pointer shapes, below) have since landed. `float.hide-target` and the tabshell close button (T5) do not exist yet.
+At the time of T2, T3 through T6 remained open. T3 (rendering and hit testing), T4 (pointer shapes), and T5 (the tabshell close button) have since landed. See their sections below.
 
 ## T4 as built
 
@@ -273,3 +273,10 @@ At the time of T2, T3 through T6 remained open. T3 (rendering and hit testing) a
   - Silent host (the tmux and nested-Herdr case): 82 cell transitions produced zero OSC 22 bytes, the float still opened, and detach worked.
   - An interior cell outside the pane frame (the frame is one column narrower than the interior) shows `move`, because a press there already starts a move.
   - No real kitty window was driven: driving GUI apps on the host is off limits. Kitty's reply format comes from its source (`kitty/window.py`, `kitty/screen.c`). A pixel-level check in real kitty belongs to T6.
+
+## T5 as built
+
+- **Method.** The method is named `float.hide_target`, not `float.hide-target`, to match the underscore style of `float.set_hide_rule`. Its `FloatHideTargetParams` has required `boot_id` and `float_id` fields and rejects unknown fields. `App::handle_float_hide_target` rejects a different boot with `stale_boot`, then reuses the `float.hide` path. `edit_float` reports an already-hidden float as unchanged, so a repeat neither re-renders nor resizes it. A missing or closed float returns `float_not_found`. The method is `changes_ui` but not `client_shell`, so the endpoint method set and frozen codecs do not change. `float.hide` keeps its shape.
+- **Tabshell.** The manifest adds a `hide` action and gives the `shell` pane `buttons = [{ id = "close", icon = "x", action = "hide" }]`. The icon is ASCII because `×` (U+00D7) has East Asian Ambiguous width and may render two cells wide, out of step with the hit test. `herdr-tabshell hide` reads `float_target.boot_id` and `float_target.float_id` from `HERDR_PLUGIN_CONTEXT_JSON` and makes one `float.hide_target` call. It does not read `HERDR_FLOAT_ID`, which a float's own processes also inherit. Without a `float_target`, for example from the palette or `plugin.action.invoke`, it exits nonzero without an API call. It takes no lock, touches no tmux state, and never calls `float.show`, `plugin.pane.open`, or `float.close`.
+- **Reopen.** This uses the unchanged `toggle`. Its hidden branch selects the current tab's tmux window, then calls `float.show` on the saved float ID. A reopen after a hidden tab switch therefore shows the same float with the current tab's shell. A herdr without float buttons ignores the `buttons` key; the manifest parser has no `deny_unknown_fields`.
+- **Evidence.** Herdr tests cover hide, repeated hide with the whole float record unchanged, stale boot, missing and closed floats, and strict params. Tabshell tests cover the exact single call and refusal without a target. The live click in a real client belongs to T6.

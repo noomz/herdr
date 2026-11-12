@@ -152,6 +152,7 @@ operations::define_operations! {
     FloatMove(FloatMoveParams) => "float.move", true, true;
     FloatResize(FloatResizeParams) => "float.resize", true, true;
     FloatHide(FloatTarget) => "float.hide", true, false;
+    FloatHideTarget(FloatHideTargetParams) => "float.hide_target", true, false;
     FloatShow(FloatShowParams) => "float.show", true, false;
     // Keep the published endpoint schema frozen; socket docs expose the optional focus field.
     FloatRaise(#[schemars(with = "FloatTarget")] FloatShowParams) => "float.raise", true, true;

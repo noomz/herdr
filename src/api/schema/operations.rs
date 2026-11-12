@@ -210,6 +210,7 @@ mod tests {
             "float.move",
             "float.resize",
             "float.hide",
+            "float.hide_target",
             "float.show",
             "float.raise",
             "float.set_hide_rule",

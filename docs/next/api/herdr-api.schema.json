@@ -2190,6 +2190,23 @@
           ],
           "type": "object"
         },
+        "FloatHideTargetParams": {
+          "additionalProperties": false,
+          "description": "Hides one exact float from one server boot. Never shows, creates, or retargets a float.",
+          "properties": {
+            "boot_id": {
+              "type": "string"
+            },
+            "float_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "boot_id",
+            "float_id"
+          ],
+          "type": "object"
+        },
         "FloatMoveParams": {
           "properties": {
             "float_id": {
@@ -6605,6 +6622,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.hide_target",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatHideTargetParams"
             }
           },
           "required": [

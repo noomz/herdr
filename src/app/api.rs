@@ -1280,6 +1280,9 @@ impl App {
                     crate::app::floats::FloatVisibility::Hidden,
                 );
             }
+            Method::FloatHideTarget(params) => {
+                return self.handle_float_hide_target(request.id, params);
+            }
             Method::FloatShow(params) => return self.handle_float_show(request.id, params),
             Method::FloatRaise(target) => return self.handle_float_raise(request.id, target),
             Method::FloatSetHideRule(params) => {
