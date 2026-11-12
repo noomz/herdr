@@ -1665,6 +1665,7 @@ impl ClientShellState {
                         self.overlay = Some(ClientShellOverlay::ProductAnnouncement(
                             product_announcement_state(announcement),
                         ));
+                        self.floats.cancel_button_press();
                     }
                 }
                 None if matches!(
@@ -1691,6 +1692,7 @@ impl ClientShellState {
                     self.overlay =
                         Some(ClientShellOverlay::ReleaseNotes(release_notes_state(notes)));
                     self.chrome_drag = None;
+                    self.floats.cancel_button_press();
                 }
                 None => {
                     self.overlay = None;
@@ -1819,6 +1821,7 @@ impl ClientShellState {
                     .startup_onboarding
                     .then_some(ClientShellOverlay::Onboarding);
             }
+            self.floats.cancel_button_press();
             self.selection = None;
             self.last_pane_click = None;
             self.selection_autoscroll = None;

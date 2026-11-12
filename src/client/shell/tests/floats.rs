@@ -1688,3 +1688,414 @@ fn float_focus_control_never_blurs_the_previously_focused_float() {
         fid("term_b")
     );
 }
+
+fn manifest_button(id: &str, icon: &str) -> crate::api::schema::PluginManifestButton {
+    crate::api::schema::PluginManifestButton {
+        id: id.to_owned(),
+        icon: icon.to_owned(),
+        action: format!("{id}-action"),
+    }
+}
+
+fn buttons_entry(
+    float_id: FloatId,
+    plugin_id: &str,
+    controls_revision: &str,
+    buttons: Vec<crate::api::schema::PluginManifestButton>,
+) -> crate::protocol::endpoint::EndpointFloatButtonSet {
+    crate::protocol::endpoint::EndpointFloatButtonSet {
+        float_id,
+        workspace_id: crate::api::schema::RequiredNullableString(None),
+        plugin_id: plugin_id.to_owned(),
+        entrypoint: "shell".to_owned(),
+        controls_revision: controls_revision.to_owned(),
+        buttons,
+    }
+}
+
+fn negotiated_shell(
+    floats: Vec<FloatSurface>,
+    entries: Vec<crate::protocol::endpoint::EndpointFloatButtonSet>,
+) -> ClientShellState {
+    let mut state = shell_with_floats(floats);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state.set_float_buttons(
+        &boot,
+        Some(crate::protocol::endpoint::EndpointFloatButtons {
+            boot_id: boot.clone(),
+            revision: 1,
+            floats: entries,
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+    state
+}
+
+fn button_icon(hit: &super::super::floats::FloatHit, button_id: &str) -> (u16, u16) {
+    let (_, rect) = hit
+        .buttons
+        .iter()
+        .find(|(id, _)| id == button_id)
+        .expect("rendered button");
+    (rect.x + 1, rect.y)
+}
+
+#[test]
+fn buttons_render_right_aligned_and_the_hits_match_what_is_drawn() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let row = a.outer.y;
+    // Two one-cell buttons take 6 cells inside the 10-cell interior.
+    assert_eq!(
+        a.buttons,
+        vec![
+            (
+                "inspect".to_owned(),
+                Rect::new(a.outer.right() - 7, row, 3, 1)
+            ),
+            (
+                "close".to_owned(),
+                Rect::new(a.outer.right() - 4, row, 3, 1)
+            ),
+        ]
+    );
+    let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert_eq!(frame[(a.outer.right() - 6, row)].symbol(), "?");
+    assert_eq!(frame[(a.outer.right() - 3, row)].symbol(), "x");
+    assert_eq!(frame[(a.outer.right() - 7, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 5, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 2, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 1, row)].symbol(), "┐");
+    // The title yields its cells to the buttons and stops before the group.
+    assert_eq!(frame[(a.outer.x + 1, row)].symbol(), "t");
+    assert_eq!(frame[(a.outer.x + 4, row)].symbol(), "m");
+    // The group's left padding cell follows the title directly.
+    assert_eq!(frame[(a.outer.x + 5, row)].symbol(), " ");
+}
+
+#[test]
+fn a_button_click_invokes_exactly_the_clicked_float_and_button() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&down).is_empty());
+    assert!(float_inputs(&down).is_empty());
+    assert!(state.floats.focused.is_none());
+    assert!(state.floats.drag.is_none());
+
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&up)[..] else {
+        panic!("release invokes the button action");
+    };
+    assert_eq!(params.boot_id, "boot-1");
+    assert_eq!(params.float_id, "f1");
+    assert!(params.workspace_id.0.is_none());
+    assert_eq!(params.plugin_id, "plugin-a");
+    assert_eq!(params.entrypoint, "shell");
+    assert_eq!(params.controls_revision, "rev-1");
+    assert_eq!(params.button_id, "close");
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn a_button_press_that_leaves_the_button_never_activates() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let drag = click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        icon.0 + 5,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0 + 5,
+        icon.1,
+    );
+
+    assert!(endpoint_methods(&drag).is_empty());
+    assert!(endpoint_methods(&up).is_empty());
+    // The cancelled gesture keeps its release: nothing reaches the pane beneath.
+    assert!(float_inputs(&up).is_empty());
+    assert!(!endpoint_methods(&up)
+        .iter()
+        .any(|method| { matches!(method, crate::api::schema::Method::PaneFocus(_)) }));
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn non_left_input_on_a_button_cell_is_consumed_without_activation_or_focus() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Right),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&down).is_empty());
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.focused.is_none());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Right),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    let wheel = click(&mut state, MouseEventKind::ScrollDown, icon.0, icon.1);
+    assert!(endpoint_methods(&wheel).is_empty());
+    assert!(float_inputs(&wheel).is_empty());
+}
+
+#[test]
+fn stacked_floats_route_button_clicks_to_the_topmost_float_at_the_pointer() {
+    let mut state = negotiated_shell(
+        vec![
+            float("term_a", 1, 1, "under"),
+            float("term_b", 2, 2, "over"),
+        ],
+        vec![
+            buttons_entry(
+                fid("term_a"),
+                "plugin-a",
+                "rev-a",
+                vec![manifest_button("close", "x")],
+            ),
+            buttons_entry(
+                fid("term_b"),
+                "plugin-b",
+                "rev-b",
+                vec![manifest_button("close", "x")],
+            ),
+        ],
+    );
+    let a = hit(&state, "term_a");
+    let b = hit(&state, "term_b");
+    // term_b covers term_a's body but not term_a's title row.
+    let under_icon = (a.outer.right() - 3, a.outer.y);
+    let over_icon = (b.outer.right() - 3, b.outer.y);
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        under_icon.0,
+        under_icon.1,
+    );
+    let under_up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        under_icon.0,
+        under_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(under)] = &endpoint_methods(&under_up)[..]
+    else {
+        panic!("the visible button of the lower float stays clickable");
+    };
+    assert_eq!(under.float_id, "f1");
+    assert_eq!(under.plugin_id, "plugin-a");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        over_icon.0,
+        over_icon.1,
+    );
+    let over_up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        over_icon.0,
+        over_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(over)] = &endpoint_methods(&over_up)[..]
+    else {
+        panic!("the top float owns the click inside its own button");
+    };
+    assert_eq!(over.float_id, "f2");
+    assert_eq!(over.plugin_id, "plugin-b");
+}
+
+#[test]
+fn a_geometry_change_cancels_an_armed_button_press() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 3, 3, "float")],
+    });
+    state.compose(106, 20).expect("composed frame");
+    let moved = hit(&state, "term_a");
+    let moved_icon = button_icon(&moved, "close");
+
+    // Neither the old nor the new button position activates the cancelled press.
+    let up_old = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up_old).is_empty());
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        moved_icon.0,
+        moved_icon.1,
+    );
+    let up_new = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        moved_icon.0,
+        moved_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&up_new)[..]
+    else {
+        panic!("a fresh press on the moved button activates");
+    };
+    assert_eq!(params.float_id, "f1");
+}
+
+#[test]
+fn a_metadata_revision_change_cancels_an_armed_button_press() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state.set_float_buttons(
+        &boot,
+        Some(crate::protocol::endpoint::EndpointFloatButtons {
+            boot_id: boot.clone(),
+            revision: 2,
+            floats: vec![buttons_entry(
+                fid("term_a"),
+                "plugin-a",
+                "rev-2",
+                vec![manifest_button("close", "x")],
+            )],
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn floats_without_buttons_keep_their_existing_appearance_and_gestures() {
+    for metadata_buttons in [None, Some(Vec::new())] {
+        let entries = metadata_buttons
+            .map(|buttons| vec![buttons_entry(fid("term_a"), "plugin-a", "rev-1", buttons)])
+            .unwrap_or_default();
+        let mut state = negotiated_shell(vec![float("term_a", 10, 3, "pip")], entries);
+        let a = hit(&state, "term_a");
+        assert!(a.buttons.is_empty());
+        let row = a.outer.y;
+        let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        // The title keeps the whole interior, truncated as before.
+        let title: String = (a.outer.x + 1..a.outer.right() - 1)
+            .map(|col| frame[(col, row)].symbol())
+            .collect();
+        assert_eq!(title, "term_a tit");
+        // The border click still starts a move gesture.
+        click(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            a.outer.x + 4,
+            row,
+        );
+        assert!(state.floats.drag.is_some());
+    }
+}
