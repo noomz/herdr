@@ -251,4 +251,25 @@ Where the implementation differs from or adds detail to the contracts above:
 - Completion is routed from the existing `PluginCommandFinished` event to clients with a pending log id, so the endpoint request lane is never held for the command's lifetime. The client reports a failed completion as an endpoint rejected notice and drops its pending entry; it never retries.
 - `App::handle_float_button_invoke` performs every identity check in the same server turn that resolves the action, and derives workspace and tab context from the float's own workspace. For a shared float it leaves workspace and tab context absent rather than substituting the active workspace.
 
-T3 through T6 remain open, and this note does not mark them complete: nothing draws or hit-tests a button, no pointer shape is set, and neither `float.hide-target` nor the tabshell close button exists yet.
+At the time of T2, T3 through T6 remained open. T3 (rendering and hit testing) and T4 (pointer shapes, below) have since landed. `float.hide-target` and the tabshell close button (T5) do not exist yet.
+
+## T4 as built
+
+- **Negotiation.** The rendered client adds `OSC 22 ; ?pointer,move,ew-resize,ns-resize,nwse-resize ST` to its startup capability query, before DA1. `src/client/host_pointer.rs::HostPointerSupport::from_reply` accepts only an answer with exactly one `0` or `1` per name, the shape kitty's `window.py` sends. `consume_host_keyboard_probe_responses` drains that reply and counts it only when it arrives before DA1. Other OSC 22 strings stay as input. Direct attach and Windows never ask, so they never write OSC 22. A host that does not answer is unsupported, and Herdr writes no OSC 22 to it. A reply that arrives after the probe timeout is dropped by the input framer, whole or split by an idle gap, so it never reaches a pane.
+- **Push and pop only.** `HostPointer::sync` pushes (`>shape`) when Herdr starts overriding the pointer. It pops and pushes when the shape changes, and pops (`<`) when the override ends. It writes only shapes the host confirmed. Herdr never reads or replays the host's previous shape: the host's own stack restores it. Herdr also does not project the OSC 22 requests of pane applications.
+- **Desired shape.** `ClientShellState::host_pointer_shape` is pure:
+  - An active `Dragging` gesture keeps its gesture shape, even off the border.
+  - An armed button press shows `pointer`; a cancelled one shows nothing.
+  - A button held by any other gesture shows nothing.
+  - Otherwise the topmost float under the last reported pointer cell decides. A button shows `pointer` and content shows nothing. Borders use `ClientFloatGesture::for_border`, so the shape is always the gesture a press would start.
+  - `floats_own_point` is shared by mouse routing and the pointer. Overlays, the modal popup, and the notification toast suppress the override.
+  - Mouse-up ends the gesture override even while the commit is pending (`Committing`).
+- **Recompute and restore.** The client loop calls `shell_runtime::sync_host_pointer` once before every wait. It therefore runs after every input, layer, metadata, endpoint, overlay, or config change, including when the pointer does not move. Without host mouse capture, or without a shell, there is no override. A frozen presentation skips the sync. `TerminalGuard` owns the applied shape. Restore, drop, and panic pop it **before** leaving the alternate screen, because kitty keeps one stack per screen. A host that resets itself empties its own stacks; the later pop then has no effect.
+- **Live evidence.** A pty harness ran the debug client against a fake kitty-protocol host and a silent host. The harness used an isolated `HOME`, a float plugin, and SGR motion over every cell.
+  - Fake kitty-protocol host:
+    - The title row gives `move`. Body rows give `move` at the left border and `ew-resize` at the right. The bottom row gives `ns-resize`, then `nwse-resize` at the corner.
+    - A resize drag that leaves the border writes nothing until release.
+    - On detach, the pop came before `CSI ? 1049 l`.
+  - Silent host (the tmux and nested-Herdr case): 82 cell transitions produced zero OSC 22 bytes, the float still opened, and detach worked.
+  - An interior cell outside the pane frame (the frame is one column narrower than the interior) shows `move`, because a press there already starts a move.
+  - No real kitty window was driven: driving GUI apps on the host is off limits. Kitty's reply format comes from its source (`kitty/window.py`, `kitty/screen.c`). A pixel-level check in real kitty belongs to T6.

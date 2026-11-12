@@ -7,6 +7,7 @@
 use super::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
+use crate::client::host_pointer::HostPointerShape;
 use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +43,18 @@ impl ClientFloatGesture {
         Self::Resize {
             width: right,
             height: bottom,
+        }
+    }
+
+    fn pointer_shape(self) -> HostPointerShape {
+        match self {
+            Self::Move { .. } => HostPointerShape::Move,
+            Self::Resize {
+                width: true,
+                height: true,
+            } => HostPointerShape::NwseResize,
+            Self::Resize { width: true, .. } => HostPointerShape::EwResize,
+            Self::Resize { .. } => HostPointerShape::NsResize,
         }
     }
 }
@@ -634,7 +647,7 @@ impl ClientShellState {
         if let Some(press) = self.floats.button_press.clone() {
             return self.continue_float_button_press(press, mouse, outcome);
         }
-        if self.overlay.is_some() {
+        if !self.floats_own_point(point) {
             return false;
         }
         if matches!(mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
@@ -727,6 +740,62 @@ impl ClientShellState {
             _ => {}
         }
         true
+    }
+
+    /// Whether a new pointer gesture at `point` belongs to the float layer: no overlay or
+    /// modal popup owns the pointer and the notification toast is not on top. Mouse routing
+    /// and the host pointer shape share this, so a shape always promises the gesture a press
+    /// would start.
+    fn floats_own_point(&self, point: (u16, u16)) -> bool {
+        self.overlay.is_none()
+            && !self.popup_pending
+            && self.hits.popup.is_none()
+            && self.popup_terminal_id.is_none()
+            && !super::contains(self.hits.notification_toast, point)
+    }
+
+    /// The host pointer shape for float interactions, or `None` to leave the host's own
+    /// pointer. An active move or resize keeps its gesture shape until the button is up, even
+    /// off the border; otherwise the shape follows the topmost float under the pointer with
+    /// the same rules as a press there.
+    pub(in crate::client) fn host_pointer_shape(&self) -> Option<HostPointerShape> {
+        if let Some(drag) = self
+            .floats
+            .drag
+            .as_ref()
+            .filter(|drag| drag.phase == ClientFloatDragPhase::Dragging)
+        {
+            return Some(drag.gesture.pointer_shape());
+        }
+        if let Some(press) = self.floats.button_press.as_ref() {
+            return (press.state == ClientFloatButtonPressState::Armed)
+                .then_some(HostPointerShape::Pointer);
+        }
+        // Another gesture (selection, pane drag, rearrangement) owns a held button.
+        if self.pointer_held {
+            return None;
+        }
+        let point = self.pointer_position?;
+        if !self.floats_own_point(point) {
+            return None;
+        }
+        let hit = self
+            .hits
+            .floats
+            .iter()
+            .rev()
+            .find(|hit| super::contains(hit.outer, point))?;
+        if hit
+            .buttons
+            .iter()
+            .any(|(_, rect)| super::contains(*rect, point))
+        {
+            return Some(HostPointerShape::Pointer);
+        }
+        if super::contains(hit.pane.inner_rect, point) {
+            return None;
+        }
+        Some(ClientFloatGesture::for_border(hit.outer, point).pointer_shape())
     }
 
     /// Continues an armed or cancelled button gesture until its release. All pointer

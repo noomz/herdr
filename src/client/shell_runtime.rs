@@ -141,6 +141,30 @@ pub(super) fn sync_client_shell_keyboard_report_all(
     Ok(())
 }
 
+/// Brings the host pointer in line with the shell. Without host mouse capture Herdr cannot see
+/// the pointer, so it overrides nothing; a frozen presentation keeps the current shape until
+/// the frame it belongs to is shown.
+pub(super) fn sync_host_pointer(state: &ClientState, terminal_guard: &super::TerminalGuard) {
+    if state.presentation_frozen {
+        return;
+    }
+    if let Err(err) =
+        terminal_guard.sync_host_pointer(&mut io::stdout(), desired_host_pointer(state))
+    {
+        tracing::debug!(%err, "host pointer shape update failed");
+    }
+}
+
+pub(super) fn desired_host_pointer(
+    state: &ClientState,
+) -> Option<super::host_pointer::HostPointerShape> {
+    state
+        .shell
+        .as_ref()
+        .filter(|_| state.mouse_capture_active)
+        .and_then(shell::ClientShellState::host_pointer_shape)
+}
+
 pub(super) fn clear_endpoint_host_effects(
     state: &mut ClientState,
     host_mouse_capture_active: &std::sync::atomic::AtomicBool,

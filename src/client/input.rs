@@ -758,6 +758,33 @@ mod tests {
     }
 
     #[test]
+    fn a_late_pointer_support_reply_never_reaches_input() {
+        // A probe that timed out (a slow SSH link) receives the OSC 22 reply as input.
+        let mut framer = confirmed_disambiguation_framer();
+        assert!(framer.push(b"\x1b]22;1,1").is_empty());
+        assert!(
+            reader_chunks_across_gap(
+                &mut framer,
+                true,
+                std::time::Duration::from_secs(1),
+                b",1,1,1\x1b\\x"
+            ) == vec![b"x".to_vec()],
+            "a reply split by an idle gap is dropped, tail included"
+        );
+
+        let mut framer = confirmed_disambiguation_framer();
+        let chunks = framer.push(b"\x1b]22;1,1,1,1,1\x1b\\");
+        let events: Vec<_> = chunks
+            .iter()
+            .flat_map(|chunk| crate::raw_input::parse_framed_input(chunk))
+            .collect();
+        assert!(
+            matches!(events[..], [crate::raw_input::RawInputEvent::Unsupported]),
+            "a whole late reply is dropped as unsupported: {events:?}"
+        );
+    }
+
+    #[test]
     fn confirmed_disambiguation_mouse_wait_does_not_consume_later_reply_hold() {
         let mut framer = confirmed_disambiguation_framer();
         framer.enable_host_appearance_query_on_focus();

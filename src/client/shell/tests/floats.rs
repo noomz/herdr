@@ -2099,3 +2099,277 @@ fn floats_without_buttons_keep_their_existing_appearance_and_gestures() {
         assert!(state.floats.drag.is_some());
     }
 }
+
+use crate::client::host_pointer::HostPointerShape;
+
+fn hover(state: &mut ClientShellState, point: (u16, u16)) -> Option<HostPointerShape> {
+    click(state, MouseEventKind::Moved, point.0, point.1);
+    state.host_pointer_shape()
+}
+
+#[test]
+fn the_pointer_follows_the_border_gesture_rules() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    assert_eq!(state.host_pointer_shape(), None, "no pointer position yet");
+    let outer = hit(&state, "term_a").outer;
+    let (left, top) = (outer.x, outer.y);
+    let (right, bottom) = (outer.right() - 1, outer.bottom() - 1);
+    let middle = (left + 5, top + 2);
+    for (point, expected, case) in [
+        ((left + 4, top), Some(HostPointerShape::Move), "title row"),
+        ((left, top + 2), Some(HostPointerShape::Move), "left border"),
+        ((left, top), Some(HostPointerShape::Move), "top-left corner"),
+        (
+            (right, top),
+            Some(HostPointerShape::Move),
+            "top-right corner",
+        ),
+        (
+            (right, top + 2),
+            Some(HostPointerShape::EwResize),
+            "right border",
+        ),
+        (
+            (left + 4, bottom),
+            Some(HostPointerShape::NsResize),
+            "bottom border",
+        ),
+        (
+            (right, bottom),
+            Some(HostPointerShape::NwseResize),
+            "bottom-right corner",
+        ),
+        // An existing rule: the bottom-left corner resizes the height only.
+        (
+            (left, bottom),
+            Some(HostPointerShape::NsResize),
+            "bottom-left corner",
+        ),
+        (middle, None, "content"),
+        ((right + 3, top + 2), None, "outside"),
+    ] {
+        assert_eq!(hover(&mut state, point), expected, "{case}");
+    }
+}
+
+#[test]
+fn every_hovered_shape_matches_the_gesture_a_press_there_starts() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    for row in outer.y..outer.bottom() {
+        for col in outer.x..outer.right() {
+            let shape = hover(&mut state, (col, row));
+            click(
+                &mut state,
+                MouseEventKind::Down(MouseButton::Left),
+                col,
+                row,
+            );
+            let gesture = state.floats.drag.as_ref().map(|drag| drag.gesture);
+            let expected = gesture.map(|gesture| match gesture {
+                super::super::floats::ClientFloatGesture::Move { .. } => HostPointerShape::Move,
+                super::super::floats::ClientFloatGesture::Resize {
+                    width: true,
+                    height: true,
+                } => HostPointerShape::NwseResize,
+                super::super::floats::ClientFloatGesture::Resize { width: true, .. } => {
+                    HostPointerShape::EwResize
+                }
+                super::super::floats::ClientFloatGesture::Resize { .. } => {
+                    HostPointerShape::NsResize
+                }
+            });
+            assert_eq!(shape, expected, "cell ({col}, {row})");
+            click(&mut state, MouseEventKind::Up(MouseButton::Left), col, row);
+            state.floats.drag = None;
+            state.compose(106, 20).expect("recompose");
+        }
+    }
+}
+
+#[test]
+fn the_topmost_float_decides_the_pointer() {
+    // term_b is drawn above term_a; its content covers term_a's right border.
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "low"),
+        float("term_b", 16, 2, "high"),
+    ]);
+    let a = hit(&state, "term_a").outer;
+    let covered = (a.right() - 1, a.y + 2);
+    assert!(super::contains(
+        hit(&state, "term_b").pane.inner_rect,
+        covered
+    ));
+    assert_eq!(hover(&mut state, covered), None);
+    assert_eq!(
+        hover(&mut state, (a.x + 2, a.y)),
+        Some(HostPointerShape::Move),
+        "the uncovered part of the lower float still shows its own gesture"
+    );
+}
+
+#[test]
+fn an_active_drag_keeps_its_shape_off_the_border_until_mouse_up() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let corner = (outer.right() - 1, outer.bottom() - 1);
+    hover(&mut state, corner);
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        corner.0,
+        corner.1,
+    );
+    click(&mut state, MouseEventKind::Drag(MouseButton::Left), 90, 18);
+    state.compose(106, 20).expect("preview");
+    assert_eq!(
+        state.host_pointer_shape(),
+        Some(HostPointerShape::NwseResize)
+    );
+
+    // Mouse-up ends the override while the geometry commit is still pending.
+    click(&mut state, MouseEventKind::Up(MouseButton::Left), 104, 19);
+    assert!(matches!(
+        state.floats.drag.as_ref().map(|drag| drag.phase),
+        Some(super::super::floats::ClientFloatDragPhase::Committing { .. })
+    ));
+    assert_eq!(state.host_pointer_shape(), None);
+}
+
+#[test]
+fn a_stationary_pointer_follows_layer_visibility_and_overlay_changes() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let title = (outer.x + 4, outer.y);
+    assert_eq!(hover(&mut state, title), Some(HostPointerShape::Move));
+
+    // The server moves the float out from under the pointer.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 40, 10, "pip")],
+    });
+    state.compose(106, 20).expect("moved");
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // It comes back, then is hidden.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+    state.compose(106, 20).expect("back");
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Move));
+    state.set_float_layer(FloatsSurface::default());
+    state.compose(106, 20).expect("hidden");
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // An overlay or the modal popup takes the pointer from the float layer.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+    state.compose(106, 20).expect("shown");
+    state.overlay = Some(ClientShellOverlay::Onboarding);
+    assert_eq!(state.host_pointer_shape(), None);
+    state.overlay = None;
+    state.popup_terminal_id = Some("popup-test".into());
+    assert_eq!(state.host_pointer_shape(), None);
+    state.popup_terminal_id = None;
+
+    // Leaving the endpoint clears the projection.
+    state.clear_float_projection();
+    assert_eq!(state.host_pointer_shape(), None);
+}
+
+#[test]
+fn another_gesture_holding_the_button_shows_no_float_shape() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    click(&mut state, MouseEventKind::Down(MouseButton::Left), 2, 18);
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        outer.x + 4,
+        outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), None);
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        outer.x + 4,
+        outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Move));
+}
+
+#[test]
+fn buttons_show_the_button_affordance_and_never_a_drag_shape() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 10, 3, "pip")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    let (_, rect) = a.buttons[0].clone();
+    for col in rect.x..rect.right() {
+        assert_eq!(
+            hover(&mut state, (col, rect.y)),
+            Some(HostPointerShape::Pointer),
+            "padding and icon cells are one button"
+        );
+    }
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+    // Leaving the button cancels the press; it never becomes a move.
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        a.outer.x + 2,
+        a.outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), None);
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), None, "re-entry stays cancelled");
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+}
+
+#[test]
+fn mouse_capture_off_or_no_shell_means_no_pointer_override() {
+    let mut shell = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&shell, "term_a").outer;
+    hover(&mut shell, (outer.x + 4, outer.y));
+    let mut client = crate::client::state::ClientState::test_new();
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        None
+    );
+    client.shell = Some(shell);
+    client.mouse_capture_active = true;
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        Some(HostPointerShape::Move)
+    );
+    client.mouse_capture_active = false;
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        None
+    );
+}
