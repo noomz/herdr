@@ -888,6 +888,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn legacy_handoff_float_without_a_binding_claims_no_plugin() {
+        let mut json = serde_json::to_value(handoff_float(None)).unwrap();
+        assert!(json.get("plugin_binding").is_none());
+        json.as_object_mut().unwrap().remove("plugin_binding");
+        let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
+        assert!(decoded.plugin_binding.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn legacy_handoff_float_defaults_workspace_to_none() {
         let mut json = serde_json::to_value(handoff_float(None)).unwrap();
         json.as_object_mut().unwrap().remove("workspace");

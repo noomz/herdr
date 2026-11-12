@@ -677,7 +677,7 @@ mod button_tests {
 
     #[test]
     fn button_icon_accepts_visible_graphemes_only() {
-        for icon in ["x", "界", "e\u{301}"] {
+        for icon in ["x", "界", "e\u{301}", "\u{1f980}", "a\u{301}\u{323}"] {
             assert!(valid_button_icon(icon), "{icon:?}");
         }
         for icon in [
@@ -685,11 +685,20 @@ mod button_tests {
             "xy",
             " ",
             "\t",
+            "\n",
+            "\r\n",
             "\x1b",
+            "\x1b[31m",
+            "\u{7f}",
+            "\u{9b}",
+            "\u{feff}",
             "\u{301}",
             "x\u{fe0f}",
+            "x\u{e0100}",
             "x\u{200d}",
             "x\u{200e}",
+            "\u{1f468}\u{200d}\u{1f469}",
+            "\u{200b}",
         ] {
             assert!(!valid_button_icon(icon), "{icon:?}");
         }
@@ -758,6 +767,24 @@ mod button_tests {
         assert_eq!(error.0, "invalid_plugin_button_action");
         assert!(error.1.contains("missing"));
         pane.buttons[1].action = "hide".into();
+        for id in ["Bad Id", "a.b", ""] {
+            pane.buttons[1].id = id.into();
+            let error = validate_pane_buttons(
+                "plugin",
+                std::slice::from_ref(&pane),
+                std::slice::from_ref(&action),
+            )
+            .unwrap_err();
+            assert_eq!(error.0, "invalid_plugin_button_id", "{id:?}");
+            assert!(
+                error.1.contains("plugin 'plugin'")
+                    && error.1.contains("pane 'shell'")
+                    && error.1.contains("button 1"),
+                "{}",
+                error.1
+            );
+        }
+        pane.buttons[1].id = "other".into();
         pane.buttons[1].icon = "\u{1b}".into();
         assert_eq!(
             validate_pane_buttons("plugin", &[pane], &[action])

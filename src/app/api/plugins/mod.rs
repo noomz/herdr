@@ -1382,6 +1382,153 @@ buttons = [{{ id = "close", icon = "x", action = "close" }}]
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn float_button_on_a_background_workspace_float_targets_that_workspace() {
+        use crate::api::schema::{FloatButtonInvokeParams, RequiredNullableString};
+        use crate::app::floats::{FloatState, FloatVisibility};
+        use crate::popup_size::FloatPosition;
+
+        let root = unique_temp_path("float-buttons-workspace");
+        let output = root.join("context.json");
+        write_manifest_content(
+            &root,
+            &format!(
+                r#"
+id = "example.buttons"
+name = "Buttons"
+version = "1"
+min_herdr_version = "0.6.10"
+[[actions]]
+id = "close"
+title = "Close"
+command = ["/bin/sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > '{}'"]
+[[actions]]
+id = "broken"
+title = "Broken"
+command = ["/nonexistent/herdr-float-button-action"]
+[[panes]]
+id = "shell"
+title = "Shell"
+placement = "float"
+command = ["/bin/sh"]
+buttons = [
+  {{ id = "close", icon = "x", action = "close" }},
+  {{ id = "broken", icon = "!", action = "broken" }},
+]
+"#,
+                output.display()
+            ),
+        );
+        let mut app = test_app();
+        app.state.workspaces = vec![
+            crate::workspace::Workspace::test_new("active"),
+            crate::workspace::Workspace::test_new("background"),
+        ];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        link_manifest(&mut app, &root);
+        let active_workspace = app.public_workspace_id(0);
+        let background_workspace = app.public_workspace_id(1);
+        let background_tab = app
+            .public_tab_id(1, app.state.workspaces[1].active_tab_index())
+            .unwrap();
+        let plugin = app.state.installed_plugins["example.buttons"].clone();
+        let binding = super::float_controls::new_binding(&plugin, "shell").unwrap();
+        let float_id = app.state.mint_float_id();
+        app.state.floats.push(FloatState {
+            id: float_id,
+            pane_id: crate::layout::PaneId::alloc(),
+            terminal_id: crate::terminal::TerminalId::alloc(),
+            plugin_binding: Some(binding.clone()),
+            width: None,
+            height: None,
+            position: FloatPosition::Centered,
+            visibility: FloatVisibility::Shown,
+            hide_while_focused: None,
+            hide_on_blur: false,
+            workspace: Some(background_workspace.clone()),
+        });
+        let target = FloatButtonInvokeParams {
+            boot_id: app.state.server_boot_id.clone(),
+            float_id: float_id.to_string(),
+            workspace_id: RequiredNullableString(Some(background_workspace.clone())),
+            plugin_id: plugin.plugin_id.clone(),
+            entrypoint: "shell".into(),
+            controls_revision: binding.controls_revision.clone(),
+            button_id: "close".into(),
+        };
+
+        // The active workspace is not the float's workspace, and a shared-float target is not
+        // either: both fail closed without spawning anything.
+        for workspace in [Some(active_workspace.clone()), None] {
+            let mut wrong = target.clone();
+            wrong.workspace_id = RequiredNullableString(workspace);
+            let rejected = app.handle_float_button_invoke("wrong-workspace".into(), wrong);
+            assert!(
+                rejected.contains("float_button_target_mismatch"),
+                "{rejected}"
+            );
+        }
+        assert!(app.state.plugin_command_logs.is_empty());
+
+        // At the plugin command limit the click fails and runs no action, not even a fallback.
+        app.state.plugin_commands_in_flight = MAX_PLUGIN_COMMANDS_IN_FLIGHT;
+        let limited = app.handle_float_button_invoke("limited".into(), target.clone());
+        assert!(
+            limited.contains("plugin_command_limit_reached"),
+            "{limited}"
+        );
+        assert!(app
+            .state
+            .plugin_command_logs
+            .iter()
+            .all(|log| log.status == PluginCommandStatus::Failed
+                && log.action_id.as_deref() == Some("close")));
+        app.state.plugin_commands_in_flight = 0;
+        assert!(!output.exists());
+
+        let accepted = app.handle_float_button_invoke("good".into(), target.clone());
+        assert!(accepted.contains("float_button_invoked"), "{accepted}");
+        let context: serde_json::Value =
+            serde_json::from_str(&read_capture_when_ready(&output, || {
+                app.drain_all_internal_events();
+            }))
+            .unwrap();
+        assert_eq!(context["workspace_id"], background_workspace.as_str());
+        assert_eq!(context["tab_id"], background_tab.as_str());
+        assert_eq!(
+            context["float_target"]["workspace_id"],
+            background_workspace.as_str()
+        );
+        assert!(context.get("focused_pane_id").is_none());
+
+        // A command that cannot start reports failure for its own button only.
+        let before = app.state.plugin_command_logs.len();
+        let mut broken = target.clone();
+        broken.button_id = "broken".into();
+        let response = app.handle_float_button_invoke("broken".into(), broken);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            app.drain_all_internal_events();
+            let new_logs = &app.state.plugin_command_logs[before..];
+            if new_logs
+                .iter()
+                .all(|log| log.status != PluginCommandStatus::Running)
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{response}");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let new_logs = &app.state.plugin_command_logs[before..];
+        assert_eq!(new_logs.len(), 1, "{response}");
+        assert_eq!(new_logs[0].action_id.as_deref(), Some("broken"));
+        assert_eq!(new_logs[0].status, PluginCommandStatus::Failed);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn plugin_link_creates_stable_config_and_state_dirs() {
         let mut app = test_app();

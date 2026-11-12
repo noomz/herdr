@@ -280,3 +280,31 @@ At the time of T2, T3 through T6 remained open. T3 (rendering and hit testing), 
 - **Tabshell.** The manifest adds a `hide` action and gives the `shell` pane `buttons = [{ id = "close", icon = "x", action = "hide" }]`. The icon is ASCII because `×` (U+00D7) has East Asian Ambiguous width and may render two cells wide, out of step with the hit test. `herdr-tabshell hide` reads `float_target.boot_id` and `float_target.float_id` from `HERDR_PLUGIN_CONTEXT_JSON` and makes one `float.hide_target` call. It does not read `HERDR_FLOAT_ID`, which a float's own processes also inherit. Without a `float_target`, for example from the palette or `plugin.action.invoke`, it exits nonzero without an API call. It takes no lock, touches no tmux state, and never calls `float.show`, `plugin.pane.open`, or `float.close`.
 - **Reopen.** This uses the unchanged `toggle`. Its hidden branch selects the current tab's tmux window, then calls `float.show` on the saved float ID. A reopen after a hidden tab switch therefore shows the same float with the current tab's shell. A herdr without float buttons ignores the `buttons` key; the manifest parser has no `deny_unknown_fields`.
 - **Evidence.** Herdr tests cover hide, repeated hide with the whole float record unchanged, stale boot, missing and closed floats, and strict params. Tabshell tests cover the exact single call and refusal without a target. The live click in a real client belongs to T6.
+
+## T6 as built
+
+- **New unit tests.**
+  - Icon validation now covers a two-cell emoji, `\n`, `\r\n`, DEL, C1 CSI, BOM, ZWSP, supplementary variation selectors, and ZWJ sequences.
+  - Invalid button IDs report the plugin, pane, and button index.
+  - A button on a background-workspace float uses that workspace and its current tab, not the active one. A target naming the active workspace, or a shared float, fails with `float_button_target_mismatch`.
+  - At the plugin command limit, a button fails with `plugin_command_limit_reached`. A command that cannot start fails only its own button's log.
+  - A legacy handoff record without `plugin_binding` claims no plugin.
+  - On the client:
+    - A server-rejected invoke shows a notice, sends no other request, and never retries.
+    - A float that disappears under an armed press consumes the release.
+    - Switching to an endpoint that reuses `f1` clears the metadata, the press, pending results, and the pointer override. Late metadata from the old boot never attaches.
+- **Existing coverage relied on.**
+  - Partial negotiation: `float_button_negotiation_requires_layer_metadata_and_method`.
+  - Opt-in and old clients: the server tests send no metadata or invoke lane without `float_buttons`, and the hello field defaults to off.
+  - Identical action IDs in two plugins, and reload, disable, re-enable, unlink, and relink: `float_button_dispatch_is_targeted_and_stale_bindings_fail_closed`.
+  - Handoff revalidation: `float_plugin_binding_handoff_revalidates_installation`.
+  - The T3 and T4 layout, press, and pointer tests.
+- **Compatibility.** `git diff 3302e00b..HEAD -- src/protocol/floats.rs tests/fixtures/` is empty.
+- **Live tabshell.** A pty harness ran the debug server and client with an isolated `HOME`, XDG tree, and `TMUX_TMPDIR`. It clicked the rendered `x` with SGR mouse input. All 18 checks passed:
+  - The click hides the clicked float. The float keeps its ID and geometry, stays hidden, and no float is created.
+  - Two clicks in one input batch send two invokes (two `float.hide_target` calls). One float remains, and it stays hidden.
+  - After a hidden tab switch, toggle reopens the same float and geometry on the second tab's tmux window. The first tab's shell process survives.
+  - In two workspaces, clicking `x` hides only that workspace's float.
+  - After `herdr server live-handoff` and a reattach, the float, its geometry, and its shells survive, and the close button still works. Live handoff drops attached clients by design.
+  - A host that does not answer the probe receives no OSC 22.
+- **Real kitty.** kitty cannot run in the tart VM: it needs OpenGL 3.3, and the virtual GPU has no suitable pixel format. Ghostty 1.3.1 answers DA1 but ignores the OSC 22 query, so it gets no shapes. The check therefore ran in the user's host kitty, with an isolated debug Herdr and a float with two buttons. Every shape matched invariant 5: `move` on the title row, left border, and top-right corner; `ew-resize` and `ns-resize` on the right and bottom borders; a diagonal resize at the bottom-right corner; a pointing hand on the buttons; and the I-beam on content and outside the float. A right-border drag held `ew-resize` off the border until release, and detach restored the I-beam.

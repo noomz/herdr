@@ -2373,3 +2373,175 @@ fn mouse_capture_off_or_no_shell_means_no_pointer_override() {
         None
     );
 }
+
+#[test]
+fn a_rejected_button_invoke_shows_a_notice_and_never_retries_or_substitutes() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &up.actions[..] else {
+        panic!("release sends float.button.invoke");
+    };
+
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("stale_float_controls".into()),
+            message: "float f1 button close controls changed".into(),
+        }),
+    );
+
+    assert!(repaint);
+    assert!(actions.is_empty(), "a rejection triggers no other request");
+    assert!(state.floats.pending_buttons.is_empty());
+    let notice = state.visible_endpoint_notice.as_ref().expect("notice");
+    assert!(notice.body.contains("close"), "{}", notice.body);
+    // The client stays usable: the next deliberate click sends one fresh invoke.
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let again = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&again)[..]
+    else {
+        panic!("a new click invokes once");
+    };
+    assert_eq!(params.button_id, "close");
+}
+
+#[test]
+fn a_float_that_disappears_under_an_armed_press_consumes_the_release() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(state.floats.button_press.is_some());
+
+    state.set_float_layer(FloatsSurface::default());
+    state.compose(106, 20).expect("composed frame");
+
+    assert!(state.floats.buttons.as_ref().unwrap().floats.is_empty());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    assert!(float_inputs(&up).is_empty());
+    assert!(up.requests.is_empty(), "the release never reaches the pane");
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.focused.is_none());
+}
+
+#[test]
+fn switching_endpoints_drops_button_metadata_presses_and_pending_results() {
+    use crate::protocol::endpoint::EndpointFloatButtons;
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let local_metadata = state.floats.buttons.clone().unwrap();
+    let profile = super::endpoints::remote_profile();
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+    let mut remote_snapshot = snapshot();
+    remote_snapshot.boot_id = "remote-boot".into();
+    state.set_endpoint_snapshot(&remote, Box::new(remote_snapshot));
+
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(&mut state, MouseEventKind::Moved, icon.0, icon.1);
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    state
+        .floats
+        .pending_buttons
+        .insert("plugin-log-1".into(), "request".into());
+
+    assert!(state.activate_endpoint_projection(&remote));
+
+    assert!(state.floats.buttons.is_none());
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.pending_buttons.is_empty());
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // The remote server reuses `f1`. The local metadata never attaches to it, even if it
+    // arrives late, and the held button's release is not an activation.
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 1, 1, "remote")],
+    });
+    state.set_float_buttons("remote-boot", Some(local_metadata.clone()));
+    state.set_float_buttons(
+        "remote-boot",
+        Some(EndpointFloatButtons {
+            boot_id: "boot-1".into(),
+            ..local_metadata
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+    assert!(state.floats.buttons.is_none());
+    assert!(hit(&state, "term_a").buttons.is_empty());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+}
