@@ -48,7 +48,7 @@ The exact manifest syntax, action invocation context, protocol negotiation, and 
 | T5 | x | Configure the tabshell close button to hide its float. | 1, 4 |
 | T6 | x | Verify manifest validation, protocol compatibility, action routing, pointer transitions, and the live tabshell interaction. Cover old and new client-server combinations, partial capability support, two plugins with identical action IDs, multiple workspaces, live handoff, and unavailable plugins. Exercise button press cancellation, disappearing floats, non-left buttons, narrow titles, and wide, combining, and control characters. | 1-9 |
 | T7 | x | Close the T6 review gaps before merging noomz/herdr#4. On `feat/float-title-buttons`, run the remaining `just test` scripts (maintenance, ui-hot-path-architecture, integration-assets, docs-contract) and `just bench-render-scale`. Run an old-client/new-server pair and a new-client/old-server pair. Exercise a late asynchronous button failure, a timeout, and a disconnect end to end through the client. Verify that typing reaches the float after reopen and after live handoff. The harness is in `.local/float-controls/`. | 3, 6, 8, 9 |
-| T8 | pending | Clear the client's post-timeout quarantine when a late `float.button.invoke` response settles, since the invocation changes no snapshot. Add a client test, and extend `live_failures.py` section C to require that a click after the late response runs. See B1. | 9, 10 |
+| T8 | x | Clear the client's post-timeout quarantine when a late `float.button.invoke` response settles, since the invocation changes no snapshot. Add a client test, and extend `live_failures.py` section C to require that a click after the late response runs. See B1. | 9, 10 |
 
 ## Bugs
 

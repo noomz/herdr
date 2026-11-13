@@ -2497,6 +2497,62 @@ fn a_timed_out_button_invoke_is_never_retried_and_a_late_result_is_ignored() {
     };
     assert!(!state.receive_float_button_result(late));
     assert!(state.floats.pending_buttons.is_empty());
+
+    // Before the late response settles, a click stays quarantined.
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let blocked = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(
+        endpoint_methods(&blocked).is_empty(),
+        "quarantined click sends nothing"
+    );
+
+    // The late response settles the quarantine without a newer snapshot,
+    // because a button invoke changes none.
+    let revision = state.snapshot.as_deref().expect("snapshot").revision;
+    state.handle_late_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(crate::api::schema::ResponseResult::Ok {}),
+    );
+    assert!(state.timed_out_endpoint.is_none());
+    assert_eq!(
+        state.snapshot.as_deref().expect("snapshot").revision,
+        revision
+    );
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let again = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&again)[..]
+    else {
+        panic!("a click after the late response invokes exactly once");
+    };
+    assert_eq!(params.button_id, "close");
+    let [ClientShellAction::Endpoint { request: fresh, .. }] = &again.actions[..] else {
+        panic!("one endpoint action");
+    };
+    assert_ne!(
+        fresh.id, request.id,
+        "the timed-out request is never replayed"
+    );
 }
 
 #[test]
