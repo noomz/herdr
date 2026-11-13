@@ -2440,6 +2440,66 @@ fn a_rejected_button_invoke_shows_a_notice_and_never_retries_or_substitutes() {
 }
 
 #[test]
+fn a_timed_out_button_invoke_is_never_retried_and_a_late_result_is_ignored() {
+    use crate::protocol::endpoint::EndpointFloatButtonResult;
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &up.actions[..] else {
+        panic!("release sends float.button.invoke");
+    };
+
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "float.button.invoke timed out".into(),
+        }),
+    );
+
+    assert!(actions.is_empty(), "a timeout never retries or substitutes");
+    assert!(state.floats.pending_buttons.is_empty());
+    assert!(state.timed_out_endpoint.is_some());
+    // The server may still have run the action; its completion arrives with a
+    // log the client never accepted, so it cannot surface or settle anything.
+    let late = EndpointFloatButtonResult {
+        boot_id: "boot-1".into(),
+        request_id: request.id.clone(),
+        log_id: "log-late".into(),
+        float_id: fid("term_a"),
+        button_id: "close".into(),
+        status: crate::api::schema::PluginCommandStatus::Failed,
+        exit_code: Some(3),
+        error: Some("late".into()),
+    };
+    assert!(!state.receive_float_button_result(late));
+    assert!(state.floats.pending_buttons.is_empty());
+}
+
+#[test]
 fn a_float_that_disappears_under_an_armed_press_consumes_the_release() {
     let mut state = negotiated_shell(
         vec![float("term_a", 1, 1, "float")],
