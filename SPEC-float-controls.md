@@ -55,6 +55,7 @@ The exact manifest syntax, action invocation context, protocol negotiation, and 
 | ID | Date | Cause | Fix |
 | --- | --- | --- | --- |
 | B1 | 2026-11-13 | Found in T7. A timed-out `float.button.invoke` quarantines the client. The quarantine clears only after the late response settles and a newer snapshot revision arrives (`src/client/shell/state.rs`, from the pane-rearrangement branch). A button invocation changes no snapshot, so buttons and other endpoint actions stay blocked until an unrelated state change or a reconnect. | V10, T8 |
+| B2 | 2026-11-13 | Known issue, not verified. T8 releases the quarantine on a late response only for `float.button.invoke`, matched by name in `handle_late_endpoint_result` (`src/client/shell/actions.rs`). Other requests that change no snapshot, such as `plugin.action.invoke` from a keybinding, may still stay blocked after their late response until an unrelated state change or a reconnect. | Deferred. Fix only when a reported bug disrupts use. Likely fix: release on late response for every method that changes no snapshot. |
 
 ## Open design questions
 
