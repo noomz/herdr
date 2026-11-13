@@ -681,6 +681,12 @@ impl ClientShellState {
     /// Hit-test order determines which overlapping control receives the event;
     /// the sidebar toggle takes precedence over the agent scrollbar beneath it.
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
+        self.pointer_position = Some((mouse.column, mouse.row));
+        match mouse.kind {
+            MouseEventKind::Down(_) | MouseEventKind::Drag(_) => self.pointer_held = true,
+            MouseEventKind::Up(_) | MouseEventKind::Moved => self.pointer_held = false,
+            _ => {}
+        }
         if mouse.kind != MouseEventKind::Moved {
             self.hover_focus_dwell = None;
         }
@@ -2725,17 +2731,13 @@ fn chebyshev_to_rect(point: (u16, u16), rect: Rect) -> Option<u16> {
     let bottom = rect.bottom().saturating_sub(1);
     let dx = if point.0 < rect.x {
         rect.x - point.0
-    } else if point.0 > right {
-        point.0 - right
     } else {
-        0
+        point.0.saturating_sub(right)
     };
     let dy = if point.1 < rect.y {
         rect.y - point.1
-    } else if point.1 > bottom {
-        point.1 - bottom
     } else {
-        0
+        point.1.saturating_sub(bottom)
     };
     Some(dx.max(dy))
 }

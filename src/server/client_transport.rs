@@ -422,8 +422,14 @@ pub(crate) enum ServerEvent {
         floats: bool,
         writer: ClientWriter,
     },
+    ClientShellFloatButtons {
+        client_id: u64,
+    },
     /// A client sent an input message.
-    ClientInput { client_id: u64, data: Vec<u8> },
+    ClientInput {
+        client_id: u64,
+        data: Vec<u8>,
+    },
     /// A client reported the one armed Kitty regular-file response.
     GraphicsTransmissionResult {
         client_id: u64,
@@ -456,9 +462,14 @@ pub(crate) enum ServerEvent {
         takeover: bool,
     },
     /// A direct terminal client asked to receive the terminal's Kitty images.
-    ClientAttachGraphics { client_id: u64 },
+    ClientAttachGraphics {
+        client_id: u64,
+    },
     /// A client requested read-only observation of one terminal.
-    ClientObserveTerminal { client_id: u64, target: String },
+    ClientObserveTerminal {
+        client_id: u64,
+        target: String,
+    },
     /// A client requested writable control of one terminal.
     ClientControlTerminal {
         client_id: u64,
@@ -530,11 +541,20 @@ pub(crate) enum ServerEvent {
         update: crate::protocol::ClientHostThemeUpdate,
     },
     /// A client-owned shell reported whether its outer terminal has focus.
-    ClientShellFocus { client_id: u64, focused: bool },
+    ClientShellFocus {
+        client_id: u64,
+        focused: bool,
+    },
     /// A client-owned shell updated its local mouse-capture preference.
-    ClientShellMouseCapture { client_id: u64, enabled: bool },
+    ClientShellMouseCapture {
+        client_id: u64,
+        enabled: bool,
+    },
     /// The committed shell asks the server to replay presentation effects before input resumes.
-    ClientShellPresentationSync { client_id: u64, token: String },
+    ClientShellPresentationSync {
+        client_id: u64,
+        token: String,
+    },
     /// A client-owned shell invoked one endpoint operation through this connection.
     ClientShellEndpointRequest {
         client_id: u64,
@@ -558,11 +578,17 @@ pub(crate) enum ServerEvent {
         data: Vec<u8>,
     },
     /// A client detached gracefully.
-    ClientDetach { client_id: u64 },
+    ClientDetach {
+        client_id: u64,
+    },
     /// A client connection was lost.
-    ClientDisconnected { client_id: u64 },
+    ClientDisconnected {
+        client_id: u64,
+    },
     /// A client writer drained its render slot and can accept another render.
-    ClientWriterDrained { client_id: u64 },
+    ClientWriterDrained {
+        client_id: u64,
+    },
     /// Ctrl+C or external shutdown signal received.
     QuitSignal,
 }
@@ -846,6 +872,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_delta,
                     hello.surface_scroll,
                     hello.floats,
+                    hello.float_buttons && hello.floats,
                 )),
             )
         }
@@ -934,6 +961,7 @@ pub(crate) fn handle_client_handshake(
 
     // Notify the main loop about the new client.
     let endpoint_control_writer = shell_options.as_ref().map(|_| writer.control.clone());
+    let float_buttons = shell_options.as_ref().is_some_and(|options| options.9);
     let connected = if let Some((
         pixel_mouse,
         direct_graphics,
@@ -944,6 +972,7 @@ pub(crate) fn handle_client_handshake(
         surface_delta,
         surface_scroll,
         floats,
+        _,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -982,6 +1011,10 @@ pub(crate) fn handle_client_handshake(
             }
             _ => {}
         }
+    }
+
+    if float_buttons {
+        let _ = server_event_tx.blocking_send(ServerEvent::ClientShellFloatButtons { client_id });
     }
 
     // Enter read loop — read client messages and forward to main loop.
@@ -1558,6 +1591,7 @@ mod tests {
             surface_delta: false,
             surface_scroll: false,
             floats: false,
+            float_buttons: false,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],

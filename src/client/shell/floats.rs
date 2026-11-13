@@ -7,6 +7,7 @@
 use super::*;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
+use crate::client::host_pointer::HostPointerShape;
 use crate::protocol::floats::{FloatId, FloatSurface, FloatsSurface};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +45,18 @@ impl ClientFloatGesture {
             height: bottom,
         }
     }
+
+    fn pointer_shape(self) -> HostPointerShape {
+        match self {
+            Self::Move { .. } => HostPointerShape::Move,
+            Self::Resize {
+                width: true,
+                height: true,
+            } => HostPointerShape::NwseResize,
+            Self::Resize { width: true, .. } => HostPointerShape::EwResize,
+            Self::Resize { .. } => HostPointerShape::NsResize,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,16 +85,120 @@ pub(super) struct FloatHit {
     pub(super) float_id: FloatId,
     pub(super) outer: Rect,
     pub(super) pane: PaneHit,
+    /// Rendered buttons as `(button id, hit rectangle)` in declaration order. The same
+    /// layout drove the drawing, so hit testing cannot drift from what is on screen.
+    pub(super) buttons: Vec<(String, Rect)>,
+}
+
+/// One rendered title-bar button. Declaration order is display order, left to right.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RenderedFloatButton {
+    pub(super) id: String,
+    pub(super) icon: String,
+    pub(super) rect: Rect,
+}
+
+/// Lays out `buttons` inside the top border of `outer`, right-aligned as one group with
+/// no gaps. Each button takes its icon width plus one blank cell on each side. Only the
+/// largest declaration-order prefix that fits is rendered; a button is never drawn or
+/// hit-tested partially. Returns the rendered buttons and the cell budget left for the
+/// title. Pure: no terminal state, no registry, no I/O.
+pub(super) fn layout_float_buttons(
+    outer: Rect,
+    buttons: &[crate::api::schema::PluginManifestButton],
+) -> (Vec<RenderedFloatButton>, u16) {
+    let interior = outer.width.saturating_sub(2);
+    let mut widths = Vec::with_capacity(buttons.len());
+    let mut used = 0u16;
+    for button in buttons {
+        let width = u16::try_from(unicode_width::UnicodeWidthStr::width(button.icon.as_str()))
+            .unwrap_or(u16::MAX);
+        let total = width.saturating_add(2);
+        if total > interior.saturating_sub(used) {
+            break;
+        }
+        used = used.saturating_add(total);
+        widths.push(total);
+    }
+    if widths.is_empty() {
+        return (Vec::new(), interior);
+    }
+    // The group's half-open right edge sits on the right border column, so the last
+    // interior cell belongs to the last button's right padding.
+    let group_end = outer.x.saturating_add(outer.width.saturating_sub(1));
+    let group_start = group_end.saturating_sub(used);
+    let mut rendered = Vec::with_capacity(widths.len());
+    let mut cell = group_start;
+    for (button, width) in buttons.iter().zip(widths) {
+        rendered.push(RenderedFloatButton {
+            id: button.id.clone(),
+            icon: button.icon.clone(),
+            rect: Rect::new(cell, outer.y, width, 1),
+        });
+        cell = cell.saturating_add(width);
+    }
+    (rendered, interior - used)
+}
+
+/// Truncates `text` to at most `max_cells` terminal cells without splitting a grapheme
+/// cluster. A cluster that does not fit ends the title.
+fn truncate_to_cells(text: &str, max_cells: u16) -> String {
+    let mut truncated = String::with_capacity(text.len());
+    let mut used = 0u16;
+    for cluster in unicode_segmentation::UnicodeSegmentation::graphemes(text, true) {
+        let Ok(width) = u16::try_from(unicode_width::UnicodeWidthStr::width(cluster)) else {
+            break;
+        };
+        if used.saturating_add(width) > max_cells {
+            break;
+        }
+        truncated.push_str(cluster);
+        used = used.saturating_add(width);
+    }
+    truncated
+}
+
+/// A left press on a float title-bar button. Separate from the move/resize drag state:
+/// activation happens on release inside the same rectangle, and a cancelled press keeps
+/// consuming pointer events until its release so nothing reaches the pane beneath.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClientFloatButtonPress {
+    pub(super) float_id: FloatId,
+    pub(super) button_id: String,
+    /// Button rectangle at press time, relative to the pane surface.
+    pub(super) rect: Rect,
+    pub(super) state: ClientFloatButtonPressState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClientFloatButtonPressState {
+    Armed,
+    /// Cancelled for this press; its release is still consumed.
+    Cancelled,
 }
 
 #[derive(Default)]
 pub(super) struct ClientFloats {
     pub(super) layer: FloatsSurface,
+    pub(super) buttons: Option<crate::protocol::endpoint::EndpointFloatButtons>,
+    pub(super) buttons_revision: Option<(String, u64)>,
+    pub(super) pending_buttons: std::collections::HashMap<String, String>,
     pub(super) focused: Option<FloatId>,
     pub(super) pending_float_focus: Option<FloatId>,
     pub(super) drag: Option<ClientFloatDrag>,
     /// A button went down on a float; its Drag and Up belong to the float.
     pub(super) pressed: bool,
+    pub(super) button_press: Option<ClientFloatButtonPress>,
+}
+
+impl ClientFloats {
+    /// Cancels an armed button press while keeping it as the gesture owner until its
+    /// release. Every geometry, stacking, revision, or availability change calls this.
+    pub(super) fn cancel_button_press(&mut self) {
+        if let Some(press) = self.button_press.as_mut() {
+            press.state = ClientFloatButtonPressState::Cancelled;
+        }
+    }
 }
 
 impl ClientFloats {
@@ -132,6 +249,26 @@ fn clamp_resize(surface: Rect, position: (u16, u16), wanted: (i32, i32)) -> (u16
         wanted.0.max(i32::from(min_width)).min(max_width) as u16,
         wanted.1.max(i32::from(min_height)).min(max_height) as u16,
     )
+}
+
+/// The rendered buttons of one float inside its clipped outer rect, or an empty list
+/// when the float has no negotiated controls.
+fn float_button_layout(
+    floats: &ClientFloats,
+    float_id: FloatId,
+    outer: Rect,
+) -> Vec<RenderedFloatButton> {
+    floats
+        .buttons
+        .as_ref()
+        .and_then(|buttons| {
+            buttons
+                .floats
+                .iter()
+                .find(|set| set.float_id == float_id)
+                .map(|set| layout_float_buttons(outer, &set.buttons).0)
+        })
+        .unwrap_or_default()
 }
 
 fn float_shadow_areas(outer: Rect, width: u16, height: u16) -> [Rect; 2] {
@@ -197,10 +334,20 @@ pub(super) fn compose_floats(
         } else {
             palette.overlay0
         };
+        let buttons = float_button_layout(floats, float.float_id, outer);
+        let title = if buttons.is_empty() {
+            float.title.clone()
+        } else {
+            // The title starts inside the left border and must stop before the group.
+            let budget = buttons.first().map_or(0, |first| {
+                first.rect.x.saturating_sub(outer.x).saturating_sub(1)
+            });
+            truncate_to_cells(&float.title, budget)
+        };
         let block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .title(float.title.clone())
+            .title(title)
             .style(Style::default().bg(palette.panel_bg));
         if shadow.enabled {
             let style = Style::default()
@@ -212,6 +359,20 @@ pub(super) fn compose_floats(
         }
         ratatui::widgets::Widget::render(ratatui::widgets::Clear, outer, &mut composed);
         ratatui::widgets::Widget::render(block, outer, &mut composed);
+        for button in &buttons {
+            let style = Style::default().fg(border_color);
+            for cell in button.rect.x..button.rect.right() {
+                composed[(cell, button.rect.y)]
+                    .set_char(' ')
+                    .set_style(style);
+            }
+            composed.set_string(
+                button.rect.x.saturating_add(1),
+                button.rect.y,
+                &button.icon,
+                style,
+            );
+        }
         frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
         blit_pane_surface(frame, &float.frame, inner);
         if is_focused {
@@ -225,6 +386,10 @@ pub(super) fn compose_floats(
         hits.push(FloatHit {
             float_id: float.float_id,
             outer,
+            buttons: buttons
+                .iter()
+                .map(|button| (button.id.clone(), button.rect))
+                .collect(),
             pane: PaneHit {
                 rect: outer,
                 inner_rect: inner,
@@ -274,6 +439,21 @@ impl ClientShellState {
         }) {
             self.pane_mouse_gesture = None;
         }
+        if let Some(metadata) = self.floats.buttons.as_mut() {
+            metadata.floats.retain(|entry| present(entry.float_id));
+        }
+        if let Some(press) = self.floats.button_press.as_ref() {
+            let geometry = |floats: &[FloatSurface]| {
+                floats
+                    .iter()
+                    .position(|float| float.float_id == press.float_id)
+                    .map(|index| (index, outer_geometry(&floats[index])))
+            };
+            // A geometry or stacking change invalidates the armed press.
+            if geometry(&self.floats.layer.floats) != geometry(&layer.floats) {
+                self.floats.cancel_button_press();
+            }
+        }
         self.floats.layer = layer;
         let mut outcome = ClientShellInput::default();
         if let Some(float_id) = self.floats.pending_float_focus.take() {
@@ -283,6 +463,82 @@ impl ClientShellState {
         }
         self.reconcile_input_source();
         outcome
+    }
+
+    pub(crate) fn set_float_buttons(
+        &mut self,
+        boot_id: &str,
+        metadata: Option<crate::protocol::endpoint::EndpointFloatButtons>,
+    ) {
+        let Some(mut metadata) = metadata else {
+            self.floats.buttons = None;
+            return;
+        };
+        if metadata.boot_id != boot_id {
+            return;
+        }
+        if self
+            .floats
+            .buttons_revision
+            .as_ref()
+            .is_some_and(|(boot, revision)| {
+                boot == &metadata.boot_id && *revision >= metadata.revision
+            })
+        {
+            return;
+        }
+        metadata.floats.retain(|entry| {
+            self.floats
+                .layer
+                .floats
+                .iter()
+                .any(|float| float.float_id == entry.float_id)
+        });
+        self.floats.buttons_revision = Some((metadata.boot_id.clone(), metadata.revision));
+        // New metadata invalidates an armed press: the gesture's binding may be gone.
+        self.floats.cancel_button_press();
+        self.floats.buttons = Some(metadata);
+    }
+
+    pub(crate) fn receive_float_button_result(
+        &mut self,
+        result: crate::protocol::endpoint::EndpointFloatButtonResult,
+    ) -> bool {
+        if self
+            .snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.boot_id != result.boot_id)
+            || self.floats.pending_buttons.get(&result.log_id) != Some(&result.request_id)
+            || result.status == crate::api::schema::PluginCommandStatus::Running
+            || result.button_id.is_empty()
+            || result.button_id.len() > 120
+            || !result
+                .button_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-'))
+        {
+            return false;
+        }
+        self.floats.pending_buttons.remove(&result.log_id);
+        if result.status == crate::api::schema::PluginCommandStatus::Failed {
+            let detail = result
+                .error
+                .map(|error| {
+                    error
+                        .chars()
+                        .filter(|ch| !ch.is_control())
+                        .take(512)
+                        .collect()
+                })
+                .unwrap_or_else(|| format!("exit code {:?}", result.exit_code));
+            return self.push_endpoint_notice(
+                ClientEndpointNoticeKind::Rejected,
+                format!("float-button:{}:{}", result.float_id, result.button_id),
+                "Float action failed",
+                detail,
+            );
+        }
+        false
     }
 
     pub(crate) fn set_float_focus(
@@ -385,8 +641,13 @@ impl ClientShellState {
         }
         if matches!(mouse.kind, MouseEventKind::Down(_)) {
             self.floats.pressed = false;
+            // A new press supersedes any armed button gesture.
+            self.floats.button_press = None;
         }
-        if self.overlay.is_some() {
+        if let Some(press) = self.floats.button_press.clone() {
+            return self.continue_float_button_press(press, mouse, outcome);
+        }
+        if !self.floats_own_point(point) {
             return false;
         }
         if matches!(mouse.kind, MouseEventKind::Drag(_) | MouseEventKind::Up(_)) {
@@ -413,6 +674,24 @@ impl ClientShellState {
         let in_content = super::contains(hit.pane.inner_rect, point);
         match mouse.kind {
             MouseEventKind::Down(button) => {
+                if let Some((button_id, rect)) = hit
+                    .buttons
+                    .iter()
+                    .find(|(_, rect)| super::contains(*rect, point))
+                {
+                    // A press on a button is owned by the button: it neither focuses nor
+                    // raises the float, starts no drag, and reaches no pane.
+                    self.floats.pressed = true;
+                    if button == MouseButton::Left {
+                        self.floats.button_press = Some(ClientFloatButtonPress {
+                            float_id: hit.float_id,
+                            button_id: button_id.clone(),
+                            rect: *rect,
+                            state: ClientFloatButtonPressState::Armed,
+                        });
+                    }
+                    return true;
+                }
                 self.floats.pressed = true;
                 let previously_focused = self.floats.focused;
                 self.focus_float(hit.float_id, outcome);
@@ -461,6 +740,158 @@ impl ClientShellState {
             _ => {}
         }
         true
+    }
+
+    /// Whether a new pointer gesture at `point` belongs to the float layer: no overlay or
+    /// modal popup owns the pointer and the notification toast is not on top. Mouse routing
+    /// and the host pointer shape share this, so a shape always promises the gesture a press
+    /// would start.
+    fn floats_own_point(&self, point: (u16, u16)) -> bool {
+        self.overlay.is_none()
+            && !self.popup_pending
+            && self.hits.popup.is_none()
+            && self.popup_terminal_id.is_none()
+            && !super::contains(self.hits.notification_toast, point)
+    }
+
+    /// The host pointer shape for float interactions, or `None` to leave the host's own
+    /// pointer. An active move or resize keeps its gesture shape until the button is up, even
+    /// off the border; otherwise the shape follows the topmost float under the pointer with
+    /// the same rules as a press there.
+    pub(in crate::client) fn host_pointer_shape(&self) -> Option<HostPointerShape> {
+        if let Some(drag) = self
+            .floats
+            .drag
+            .as_ref()
+            .filter(|drag| drag.phase == ClientFloatDragPhase::Dragging)
+        {
+            return Some(drag.gesture.pointer_shape());
+        }
+        if let Some(press) = self.floats.button_press.as_ref() {
+            return (press.state == ClientFloatButtonPressState::Armed)
+                .then_some(HostPointerShape::Pointer);
+        }
+        // Another gesture (selection, pane drag, rearrangement) owns a held button.
+        if self.pointer_held {
+            return None;
+        }
+        let point = self.pointer_position?;
+        if !self.floats_own_point(point) {
+            return None;
+        }
+        let hit = self
+            .hits
+            .floats
+            .iter()
+            .rev()
+            .find(|hit| super::contains(hit.outer, point))?;
+        if hit
+            .buttons
+            .iter()
+            .any(|(_, rect)| super::contains(*rect, point))
+        {
+            return Some(HostPointerShape::Pointer);
+        }
+        if super::contains(hit.pane.inner_rect, point) {
+            return None;
+        }
+        Some(ClientFloatGesture::for_border(hit.outer, point).pointer_shape())
+    }
+
+    /// Continues an armed or cancelled button gesture until its release. All pointer
+    /// events belong to the press while it exists, so nothing reaches the pane beneath.
+    fn continue_float_button_press(
+        &mut self,
+        press: ClientFloatButtonPress,
+        mouse: MouseEvent,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        let point = (mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if press.state == ClientFloatButtonPressState::Armed
+                    && !super::contains(press.rect, point)
+                {
+                    // Leaving the rectangle cancels permanently for this press, even
+                    // after re-entry.
+                    self.floats.cancel_button_press();
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.floats.button_press = None;
+                self.floats.pressed = false;
+                if press.state == ClientFloatButtonPressState::Armed
+                    && super::contains(press.rect, point)
+                {
+                    self.activate_float_button(&press, point, outcome);
+                }
+                outcome.repaint = true;
+            }
+            // Right, middle, wheel, and unmatched releases are consumed without
+            // activation, focus, or drag.
+            _ => {}
+        }
+        true
+    }
+
+    /// Sends `float.button.invoke` for the pressed button after re-checking, against the
+    /// current compose, that the same topmost float still shows the same button under
+    /// the pointer. A failed check invokes nothing.
+    fn activate_float_button(
+        &mut self,
+        press: &ClientFloatButtonPress,
+        point: (u16, u16),
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::api::schema::{FloatButtonInvokeParams, Method, RequiredNullableString};
+
+        let Some(hit) = self
+            .hits
+            .floats
+            .iter()
+            .rev()
+            .find(|hit| super::contains(hit.outer, point))
+        else {
+            return;
+        };
+        if hit.float_id != press.float_id
+            || !hit.buttons.iter().any(|(id, rect)| {
+                *id == press.button_id && *rect == press.rect && super::contains(*rect, point)
+            })
+        {
+            return;
+        }
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return;
+        };
+        let Some(set) = self.floats.buttons.as_ref().and_then(|buttons| {
+            buttons
+                .floats
+                .iter()
+                .find(|set| set.float_id == press.float_id)
+        }) else {
+            return;
+        };
+        let Some(button) = set
+            .buttons
+            .iter()
+            .find(|button| button.id == press.button_id)
+        else {
+            return;
+        };
+        self.push_endpoint_method_with_kind(
+            Method::FloatButtonInvoke(FloatButtonInvokeParams {
+                boot_id: snapshot.boot_id.clone(),
+                float_id: press.float_id.to_string(),
+                workspace_id: RequiredNullableString(set.workspace_id.0.clone()),
+                plugin_id: set.plugin_id.clone(),
+                entrypoint: set.entrypoint.clone(),
+                controls_revision: set.controls_revision.clone(),
+                button_id: button.id.clone(),
+            }),
+            PendingEndpointKind::Generic,
+            outcome,
+        );
     }
 
     fn float_pane_surface(&self) -> Rect {
@@ -617,6 +1048,7 @@ impl ClientShellState {
 
     /// Returns typed input to the tiled layout and releases keys the float saw pressed.
     pub(super) fn blur_float(&mut self, outcome: &mut ClientShellInput) {
+        self.floats.cancel_button_press();
         if let Some(focused) = self.floats.focused.take() {
             let leases = self
                 .input_leases
@@ -630,6 +1062,7 @@ impl ClientShellState {
     /// Returns typed input to the tiled layout when the server moves pane focus. Held keys keep
     /// their lease, so the host's own release still reaches the float that saw the press.
     pub(super) fn yield_float_focus(&mut self) {
+        self.floats.cancel_button_press();
         if self.floats.focused.take().is_some() {
             self.reconcile_input_source();
         }
@@ -638,8 +1071,73 @@ impl ClientShellState {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_drag_position, clamp_resize};
+    use super::{clamp_drag_position, clamp_resize, layout_float_buttons, truncate_to_cells};
+    use crate::api::schema::PluginManifestButton;
     use ratatui::layout::Rect;
+
+    fn button(id: &str, icon: &str) -> PluginManifestButton {
+        PluginManifestButton {
+            id: id.to_owned(),
+            icon: icon.to_owned(),
+            action: format!("{id}-action"),
+        }
+    }
+
+    #[test]
+    fn buttons_form_a_right_aligned_gapless_group_in_declaration_order() {
+        let outer = Rect::new(10, 4, 20, 6);
+        let (rendered, title_budget) =
+            layout_float_buttons(outer, &[button("a", "?"), button("b", "x")]);
+
+        assert_eq!(rendered.len(), 2);
+        // Interior spans columns 11..=28; two one-cell icons take 6 cells, so the group
+        // starts at column 23.
+        assert_eq!(rendered[0].rect, Rect::new(23, 4, 3, 1));
+        assert_eq!(rendered[1].rect, Rect::new(26, 4, 3, 1));
+        assert_eq!(rendered[0].icon, "?");
+        assert_eq!(title_budget, 18 - 6);
+    }
+
+    #[test]
+    fn buttons_show_the_largest_prefix_that_fits_and_never_a_partial_button() {
+        let outer = Rect::new(0, 0, 12, 5);
+        let buttons: Vec<_> = (0..4)
+            .map(|index| button(&format!("b{index}"), "?"))
+            .collect();
+        let (rendered, title_budget) = layout_float_buttons(outer, &buttons);
+
+        // Interior is 10 cells; each button takes 3, so three fit and the fourth is
+        // omitted whole.
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(rendered[2].id, "b2");
+        assert_eq!(title_budget, 1);
+    }
+
+    #[test]
+    fn a_button_that_cannot_fit_is_omitted_and_the_border_is_unchanged() {
+        let outer = Rect::new(0, 0, 4, 3);
+        let (rendered, title_budget) = layout_float_buttons(outer, &[button("a", "?")]);
+
+        assert!(rendered.is_empty());
+        assert_eq!(title_budget, 2);
+    }
+
+    #[test]
+    fn a_two_cell_icon_occupies_two_cells_plus_padding() {
+        let outer = Rect::new(0, 0, 12, 5);
+        let (rendered, _) = layout_float_buttons(outer, &[button("wide", "中")]);
+
+        assert_eq!(rendered[0].rect, Rect::new(7, 0, 4, 1));
+    }
+
+    #[test]
+    fn truncation_never_splits_a_grapheme_cluster() {
+        assert_eq!(truncate_to_cells("abc", 2), "ab");
+        assert_eq!(truncate_to_cells("a中", 2), "a");
+        assert_eq!(truncate_to_cells("a中x", 3), "a中");
+        assert_eq!(truncate_to_cells("é", 1), "é");
+        assert_eq!(truncate_to_cells("", 3), "");
+    }
 
     #[test]
     fn drag_position_stays_inside_the_pane_surface() {

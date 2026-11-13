@@ -695,6 +695,21 @@ impl HeadlessServer {
 
                 true
             }
+            AppEvent::PluginCommandFinished {
+                log_id,
+                exit_code,
+                error,
+                stderr,
+                ..
+            } => {
+                let log_id = log_id.clone();
+                let exit_code = *exit_code;
+                let error = error.clone();
+                let stderr = stderr.clone();
+                let changed = self.app.handle_internal_event_with_render_impact(ev);
+                self.finish_float_button_command(&log_id, exit_code, error, stderr);
+                changed
+            }
             _ => self.app.handle_internal_event_with_render_impact(ev),
         }
     }

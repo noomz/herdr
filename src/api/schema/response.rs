@@ -282,6 +282,9 @@ pub enum ResponseResult {
     FloatClosed {
         float_id: String,
     },
+    FloatButtonInvoked {
+        log: super::plugins::PluginCommandLogInfo,
+    },
     ConfigReload {
         status: crate::config::ConfigReloadStatus,
         diagnostics: Vec<String>,

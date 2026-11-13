@@ -7,7 +7,7 @@ use crate::client::endpoint::{
 };
 use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 
-fn remote_profile() -> SavedSshEndpoint {
+pub(super) fn remote_profile() -> SavedSshEndpoint {
     SavedSshEndpoint {
         id: ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         label: "Build".into(),

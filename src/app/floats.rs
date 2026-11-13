@@ -23,6 +23,23 @@ pub(crate) enum FloatVisibility {
     Hidden,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct FloatPluginBinding {
+    pub plugin_id: String,
+    pub installation_id: String,
+    pub entrypoint: String,
+    pub controls_revision: String,
+    pub controls: Option<FloatPluginControls>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct FloatPluginControls {
+    pub plugin_root: String,
+    pub plugin_version: String,
+    pub buttons: Vec<crate::api::schema::PluginManifestButton>,
+    pub actions: Vec<crate::api::schema::PluginManifestAction>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FloatState {
     pub id: FloatId,
@@ -30,6 +47,7 @@ pub(crate) struct FloatState {
     pub pane_id: PaneId,
     /// Runtime-only: live handoff gives the float a new terminal id.
     pub terminal_id: TerminalId,
+    pub plugin_binding: Option<FloatPluginBinding>,
     pub width: Option<PopupSize>,
     pub height: Option<PopupSize>,
     pub position: FloatPosition,
@@ -91,6 +109,7 @@ impl AppState {
     }
 
     /// Keeps the allocator past `next`, an id a previous server could have minted.
+    #[cfg(unix)]
     pub(crate) fn reserve_float_ids_below(&mut self, next: FloatId) {
         self.next_float_id = self.next_float_id.max(next);
     }
@@ -181,6 +200,7 @@ impl App {
             id,
             pane_id,
             terminal_id,
+            plugin_binding: None,
             width: spec.width,
             height: spec.height,
             position: spec.position,
@@ -248,6 +268,7 @@ impl App {
                     float.terminal_id.clone(),
                     crate::handoff_runtime::HandoffFloat {
                         id: Some(float.id),
+                        plugin_binding: float.plugin_binding.clone(),
                         runtime: handoff_runtime,
                         cwd: terminal.cwd.clone(),
                         title: terminal.manual_label.clone(),
@@ -335,6 +356,7 @@ impl App {
                 id,
                 pane_id,
                 terminal_id,
+                plugin_binding: float.plugin_binding,
                 width: float.width,
                 height: float.height,
                 position: float
@@ -350,6 +372,7 @@ impl App {
                 workspace: float.workspace,
             });
         }
+        self.reconcile_float_plugin_bindings(true);
     }
 }
 
@@ -400,6 +423,7 @@ impl App {
             id,
             pane_id,
             terminal_id: terminal_id.clone(),
+            plugin_binding: None,
             width: spec.width,
             height: spec.height,
             position: spec.position,
@@ -445,6 +469,7 @@ mod tests {
                     id,
                     pane_id: PaneId::alloc(),
                     terminal_id,
+                    plugin_binding: None,
                     width: spec().width,
                     height: spec().height,
                     position: spec().position,
@@ -471,6 +496,7 @@ mod tests {
             id: FloatId::FIRST,
             pane_id: PaneId::alloc(),
             terminal_id: TerminalId::alloc(),
+            plugin_binding: None,
             width: None,
             height: None,
             position: FloatPosition::Centered,
@@ -545,6 +571,7 @@ mod tests {
             id: FloatId::FIRST,
             pane_id: PaneId::alloc(),
             terminal_id: TerminalId::alloc(),
+            plugin_binding: None,
             width: None,
             height: None,
             position: FloatPosition::Centered,
@@ -735,6 +762,7 @@ mod tests {
     fn handoff_float(hide_while_focused: Option<u32>) -> crate::handoff_runtime::HandoffFloat {
         crate::handoff_runtime::HandoffFloat {
             id: None,
+            plugin_binding: None,
             runtime: crate::handoff_runtime::HandoffRuntimeState {
                 pane_id: 0,
                 terminal_id: None,
@@ -764,12 +792,108 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn float_plugin_binding_handoff_revalidates_installation() {
+        let (mut app, _, _, float_id) = app_with_float();
+        let plugin: crate::api::schema::InstalledPluginInfo = serde_json::from_value(serde_json::json!({
+            "plugin_id": "example.shell", "installation_id": "install-1", "name": "Shell", "version": "1",
+            "manifest_path": "/tmp/herdr-plugin.toml", "plugin_root": "/tmp", "enabled": true,
+            "actions": [{"id": "hide", "title": "Hide", "command": ["true"]}],
+            "panes": [{"id": "shell", "title": "Shell", "placement": "float", "command": ["true"],
+                "buttons": [{"id": "close", "icon": "x", "action": "hide"}]}]
+        })).unwrap();
+        app.state
+            .installed_plugins
+            .insert(plugin.plugin_id.clone(), plugin);
+        app.state
+            .floats
+            .iter_mut()
+            .find(|float| float.id == float_id)
+            .unwrap()
+            .plugin_binding = Some(FloatPluginBinding {
+            plugin_id: "example.shell".into(),
+            installation_id: "install-1".into(),
+            entrypoint: "shell".into(),
+            controls_revision: "old-revision".into(),
+            controls: None,
+        });
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let mut exported = handoff_float(None);
+        exported.id = Some(float_id);
+        exported.plugin_binding = app.state.float(float_id).unwrap().plugin_binding.clone();
+        let encoded = serde_json::to_string(&exported).unwrap();
+        let exported: crate::handoff_runtime::HandoffFloat =
+            serde_json::from_str(&encoded).unwrap();
+        app.close_float(float_id);
+        let (fd, _slave) = handoff_pty();
+        app.restore_handoff_floats(
+            &snapshot,
+            crate::handoff_runtime::HandoffFloats {
+                floats: vec![exported],
+                next_float_id: None,
+            },
+            vec![fd],
+        );
+        let binding = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap();
+        assert_ne!(binding.controls_revision, "old-revision");
+        assert_eq!(binding.controls.as_ref().unwrap().buttons[0].id, "close");
+        let exported = app.handoff_floats().pop().unwrap().1;
+        app.close_float(float_id);
+        app.state
+            .installed_plugins
+            .get_mut("example.shell")
+            .unwrap()
+            .installation_id = Some("install-2".into());
+        let (fd, _slave) = handoff_pty();
+        app.restore_handoff_floats(
+            &snapshot,
+            crate::handoff_runtime::HandoffFloats {
+                floats: vec![exported],
+                next_float_id: None,
+            },
+            vec![fd],
+        );
+        let binding = app
+            .state
+            .float(float_id)
+            .unwrap()
+            .plugin_binding
+            .as_ref()
+            .unwrap();
+        assert_eq!(binding.installation_id, "install-1");
+        assert!(binding.controls.is_none());
+        app.close_float(float_id);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn legacy_handoff_float_defaults_hide_on_blur_to_false() {
         let mut json = serde_json::to_value(handoff_float(None)).unwrap();
         json.as_object_mut().unwrap().remove("hide_on_blur");
         let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
         assert!(!decoded.hide_on_blur);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_handoff_float_without_a_binding_claims_no_plugin() {
+        let mut json = serde_json::to_value(handoff_float(None)).unwrap();
+        assert!(json.get("plugin_binding").is_none());
+        json.as_object_mut().unwrap().remove("plugin_binding");
+        let decoded: crate::handoff_runtime::HandoffFloat = serde_json::from_value(json).unwrap();
+        assert!(decoded.plugin_binding.is_none());
     }
 
     #[cfg(unix)]

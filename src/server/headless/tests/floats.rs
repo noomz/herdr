@@ -102,6 +102,220 @@ fn type_into_float(server: &mut HeadlessServer, client_id: u64, float_id: FloatI
 }
 
 #[tokio::test]
+async fn float_button_endpoint_rejects_clients_without_opt_in() {
+    let mut server = test_headless_server();
+    let (control_rx, _render_rx) = connect_shell_with_controls(&mut server, 7, true);
+    let request: api::schema::Request = serde_json::from_value(serde_json::json!({
+        "id": "click", "method": "float.button.invoke", "params": {
+            "boot_id": server.client_shell_boot_id, "float_id": "f1", "workspace_id": null,
+            "plugin_id": "plugin", "entrypoint": "shell", "controls_revision": "revision", "button_id": "close"
+        }
+    })).unwrap();
+    server.handle_client_shell_endpoint_request(
+        7,
+        server.client_shell_boot_id.clone(),
+        Box::new(request),
+    );
+    let message = read_server_messages(control_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    let ServerMessage::ClientShellEndpointResponseChunk { data, .. } = &message[0] else {
+        panic!("endpoint response")
+    };
+    let response: serde_json::Value = serde_json::from_slice(data).unwrap();
+    assert_eq!(response["error"]["code"], "unsupported_endpoint_command");
+    assert!(server.app.state.plugin_command_logs.is_empty());
+    assert!(server.clients.contains_key(&7));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn float_button_completion_goes_only_to_the_initiating_client() {
+    use crate::api::schema::{
+        FloatButtonInvokeParams, PluginCommandLogInfo, PluginCommandStatus, RequiredNullableString,
+        ResponseResult, SuccessResponse,
+    };
+    use crate::server::clients::PendingFloatButton;
+    let mut server = test_headless_server();
+    let (first_control, _) = connect_shell_with_controls(&mut server, 7, true);
+    let (other_control, _) = connect_shell_with_controls(&mut server, 8, true);
+    let log = PluginCommandLogInfo {
+        log_id: "plugin-log-1".into(),
+        plugin_id: "plugin".into(),
+        action_id: Some("hide".into()),
+        event: None,
+        command: vec!["false".into()],
+        status: PluginCommandStatus::Running,
+        started_unix_ms: 1,
+        finished_unix_ms: None,
+        exit_code: None,
+        stdout: None,
+        stderr: None,
+        error: None,
+    };
+    server.app.state.plugin_command_logs.push(log.clone());
+    server.app.state.plugin_commands_in_flight = 1;
+    let target = FloatButtonInvokeParams {
+        boot_id: server.client_shell_boot_id.clone(),
+        float_id: "f1".into(),
+        workspace_id: RequiredNullableString(None),
+        plugin_id: "plugin".into(),
+        entrypoint: "shell".into(),
+        controls_revision: "revision".into(),
+        button_id: "close".into(),
+    };
+    let response = serde_json::to_vec(&SuccessResponse {
+        id: "request".into(),
+        result: ResponseResult::FloatButtonInvoked { log },
+    })
+    .unwrap();
+    server.finish_float_button_response(
+        7,
+        PendingFloatButton {
+            request_id: "request".into(),
+            target: target.clone(),
+        },
+        &response,
+    );
+    assert!(first_control.try_recv().is_err());
+    assert!(server.clients[&7]
+        .shell_pending_float_buttons
+        .contains_key("plugin-log-1"));
+    server.handle_internal_event_with_forwarding(crate::events::AppEvent::PluginCommandFinished {
+        log_id: "plugin-log-1".into(),
+        finished_unix_ms: 2,
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: "failed".into(),
+        error: None,
+    });
+    assert_eq!(
+        server.app.state.plugin_command_logs[0].status,
+        PluginCommandStatus::Failed
+    );
+    assert!(!server.clients[&7]
+        .shell_pending_float_buttons
+        .contains_key("plugin-log-1"));
+    let messages = read_server_messages(
+        first_control
+            .recv_timeout(Duration::from_secs(1))
+            .expect("completion"),
+    );
+    let ServerMessage::EndpointControl { kind, data } = &messages[0] else {
+        panic!("completion control")
+    };
+    assert_eq!(kind, crate::protocol::endpoint::FLOAT_BUTTON_RESULT_KIND);
+    let result: crate::protocol::endpoint::EndpointFloatButtonResult =
+        serde_json::from_str(data).unwrap();
+    assert_eq!(result.request_id, "request");
+    assert_eq!(result.status, PluginCommandStatus::Failed);
+    assert_eq!(result.error.as_deref(), Some("failed"));
+    server.finish_float_button_response(
+        7,
+        PendingFloatButton {
+            request_id: "late".into(),
+            target,
+        },
+        &response,
+    );
+    let messages = read_server_messages(
+        first_control
+            .recv_timeout(Duration::from_secs(1))
+            .expect("already-finished completion"),
+    );
+    let ServerMessage::EndpointControl { data, .. } = &messages[0] else {
+        panic!("completion control")
+    };
+    let result: crate::protocol::endpoint::EndpointFloatButtonResult =
+        serde_json::from_str(data).unwrap();
+    assert_eq!(result.request_id, "late");
+    assert_eq!(result.status, PluginCommandStatus::Failed);
+    assert!(other_control.try_recv().is_err());
+    assert!(server.clients.contains_key(&7));
+    assert!(server.clients.contains_key(&8));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn float_button_metadata_is_optional_ordered_and_cleared_on_hide() {
+    use crate::api::schema::PluginManifestButton;
+    use crate::app::floats::{FloatPluginBinding, FloatPluginControls};
+    use crate::protocol::endpoint::{EndpointFloatButtons, FLOAT_BUTTONS_KIND};
+
+    let mut server = test_headless_server();
+    let _pane_input = install_focused_test_runtime(&mut server, b"base");
+    let (float_id, _, _) = install_float(&mut server, b"float", None);
+    server.app.state.floats[0].plugin_binding = Some(FloatPluginBinding {
+        plugin_id: "plugin".into(),
+        installation_id: "install".into(),
+        entrypoint: "shell".into(),
+        controls_revision: uuid::Uuid::new_v4().to_string(),
+        controls: Some(FloatPluginControls {
+            plugin_root: "/plugin".into(),
+            plugin_version: "1".into(),
+            buttons: vec![PluginManifestButton {
+                id: "close".into(),
+                icon: "x".into(),
+                action: "hide".into(),
+            }],
+            actions: vec![],
+        }),
+    });
+    let old_client = connect_shell(&mut server, 7, true);
+    let new_client = connect_shell(&mut server, 8, true);
+    server.handle_server_event(ServerEvent::ClientShellFloatButtons { client_id: 8 });
+    server.render_and_stream();
+    let old = read_server_messages(old_client.recv().unwrap());
+    assert!(!old.iter().any(|message| matches!(message, ServerMessage::EndpointControl {kind, ..} if kind == FLOAT_BUTTONS_KIND)));
+    let new = read_server_messages(new_client.recv().unwrap());
+    let float_pos = new.iter().position(|message| matches!(message, ServerMessage::EndpointControl {kind, ..} if kind == protocol::floats::SURFACE_KIND)).unwrap();
+    let button_pos = new.iter().position(|message| matches!(message, ServerMessage::EndpointControl {kind, ..} if kind == FLOAT_BUTTONS_KIND)).unwrap();
+    assert!(float_pos < button_pos);
+    let ServerMessage::EndpointControl { data, .. } = &new[button_pos] else {
+        unreachable!()
+    };
+    assert!(!data.contains("/plugin"));
+    let first: EndpointFloatButtons = serde_json::from_str(data).unwrap();
+    assert_eq!(first.floats[0].float_id, float_id);
+    let revision = uuid::Uuid::new_v4().to_string();
+    server.app.state.floats[0]
+        .plugin_binding
+        .as_mut()
+        .unwrap()
+        .controls_revision = revision.clone();
+    server.app.state.float_controls_generation += 1;
+    server.app.render_dirty.request_generic();
+    server.render_and_stream();
+    let changed = read_server_messages(new_client.recv().unwrap());
+    let updated = changed
+        .iter()
+        .find_map(|message| match message {
+            ServerMessage::EndpointControl { kind, data } if kind == FLOAT_BUTTONS_KIND => {
+                Some(serde_json::from_str::<EndpointFloatButtons>(data).unwrap())
+            }
+            _ => None,
+        })
+        .expect("metadata for changed binding");
+    assert_eq!(updated.floats[0].controls_revision, revision);
+    assert!(updated.revision > first.revision);
+    server
+        .app
+        .edit_float(float_id, FloatEdit::Visibility(FloatVisibility::Hidden));
+    server.render_and_stream();
+    let new = read_server_messages(new_client.recv().unwrap());
+    let metadata = new
+        .iter()
+        .find_map(|message| match message {
+            ServerMessage::EndpointControl { kind, data } if kind == FLOAT_BUTTONS_KIND => {
+                Some(serde_json::from_str::<EndpointFloatButtons>(data).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(metadata.floats.is_empty());
+    assert!(metadata.revision > updated.revision);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn negotiated_client_receives_positioned_float_layer_beside_the_pane_surface() {
     let mut server = test_headless_server();
     let _pane_input = install_focused_test_runtime(&mut server, b"base-pane");
@@ -873,6 +1087,56 @@ async fn workspace_float_render_scale_profile() {
                 if background { "background" } else { "active" },
                 samples[0][2], samples[0][0], samples[0][4],
                 samples[1][2], samples[1][0], samples[1][4],
+            );
+            let _render_rx = connect_shell(&mut server, 97, true);
+            let layer = crate::server::client_shell::render_float_layer(
+                &server.app,
+                Some(focused),
+                Some(&workspace),
+                area,
+                cell,
+            )
+            .expect("float layer for metadata profile");
+            {
+                let client = server.clients.get_mut(&97).unwrap();
+                client.shell_floats = Some(layer.clone());
+                client.shell_float_buttons =
+                    Some(crate::protocol::endpoint::EndpointFloatButtons {
+                        boot_id: server.client_shell_boot_id.clone(),
+                        revision: 1,
+                        floats: vec![],
+                    });
+                client.shell_float_buttons_generation = server.app.state.float_controls_generation;
+            }
+            let mut metadata_samples = [Vec::new(), Vec::new()];
+            for round in 0..6 {
+                for enabled in [false, true] {
+                    server
+                        .clients
+                        .get_mut(&97)
+                        .unwrap()
+                        .shell_float_buttons_enabled = enabled;
+                    let started = Instant::now();
+                    for _ in 0..100_000 {
+                        assert!(black_box(
+                            black_box(&server).prepare_float_buttons(97, Some(black_box(&layer)))
+                        )
+                        .is_none());
+                    }
+                    if round > 0 {
+                        metadata_samples[usize::from(enabled)]
+                            .push(started.elapsed().as_nanos() / 100_000);
+                    }
+                }
+            }
+            for sample in &mut metadata_samples {
+                sample.sort_unstable();
+            }
+            println!(
+                "float metadata cache {} count={count} fixed=80x24 ns/check disabled={} [{}..{}] enabled={} [{}..{}] runs=5 checks/run=100000",
+                if background { "background" } else { "active" },
+                metadata_samples[0][2], metadata_samples[0][0], metadata_samples[0][4],
+                metadata_samples[1][2], metadata_samples[1][0], metadata_samples[1][4],
             );
             shutdown_test_runtimes(&mut server);
         }

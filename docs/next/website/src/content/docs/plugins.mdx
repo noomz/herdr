@@ -451,6 +451,7 @@ Control a float through the socket API:
 | `float.move` | `float_id`, `x`, `y` | Moves the outer top-left cell. |
 | `float.resize` | `float_id`, `width`, `height` | Sets the size. An omitted dimension returns to the default. |
 | `float.hide` | `float_id` | Hides the float. Its process keeps running. |
+| `float.hide_target` | `boot_id`, `float_id` | Hides exactly this float from this server boot. A hidden float stays hidden and unchanged. A stale `boot_id` returns `stale_boot`. It never shows or creates a float. A float button action reads both values from `float_target` in `HERDR_PLUGIN_CONTEXT_JSON`. |
 | `float.show` | `float_id`, optional `focus` | Shows a hidden float and optionally requests focus. |
 | `float.raise` | `float_id`, optional `focus` | Brings the float to the front and optionally requests focus. |
 | `float.set_hide_rule` | `float_id`, `pane_id` | Hides the float while `pane_id` is focused. Send `null` to remove the rule. |

@@ -1,7 +1,7 @@
 use super::responses::{encode_error, encode_success};
 use crate::api::schema::{
-    FloatInfo, FloatMoveParams, FloatResizeParams, FloatSetHideRuleParams, FloatShowParams,
-    FloatTarget, FloatVisibilityInfo, ResponseResult,
+    FloatHideTargetParams, FloatInfo, FloatMoveParams, FloatResizeParams, FloatSetHideRuleParams,
+    FloatShowParams, FloatTarget, FloatVisibilityInfo, ResponseResult,
 };
 use crate::app::floats::{FloatEdit, FloatId, FloatState, FloatVisibility};
 use crate::app::App;
@@ -88,6 +88,28 @@ impl App {
         )
     }
 
+    /// Hides one exact float from this boot. An already-hidden float succeeds unchanged.
+    pub(super) fn handle_float_hide_target(
+        &mut self,
+        id: String,
+        params: FloatHideTargetParams,
+    ) -> String {
+        if params.boot_id != self.state.server_boot_id {
+            return encode_error(
+                id,
+                "stale_boot",
+                format!("float {} targeted an earlier server boot", params.float_id),
+            );
+        }
+        self.handle_float_visibility(
+            id,
+            FloatTarget {
+                float_id: params.float_id,
+            },
+            FloatVisibility::Hidden,
+        )
+    }
+
     pub(super) fn handle_float_show(&mut self, id: String, params: FloatShowParams) -> String {
         self.handle_float_edit(
             id,
@@ -171,8 +193,8 @@ fn float_not_found(id: String) -> String {
 #[cfg(test)]
 mod tests {
     use crate::api::schema::{
-        FloatMoveParams, FloatSetHideRuleParams, FloatShowParams, FloatTarget, Method, Request,
-        ResponseResult, SuccessResponse,
+        FloatHideTargetParams, FloatMoveParams, FloatSetHideRuleParams, FloatShowParams,
+        FloatTarget, Method, Request, ResponseResult, SuccessResponse,
     };
     use crate::app::floats::FloatVisibility;
     use crate::app::App;
@@ -202,6 +224,7 @@ mod tests {
                     id,
                     pane_id: crate::layout::PaneId::alloc(),
                     terminal_id,
+                    plugin_binding: None,
                     width: Some(PopupSize::Cells(20)),
                     height: Some(PopupSize::Cells(8)),
                     position: FloatPosition::Centered,
@@ -356,6 +379,86 @@ mod tests {
             Method::FloatRaise(show_params(&ids[0])),
         ] {
             assert_eq!(call(&mut app, method)["error"]["code"], "float_not_found");
+        }
+    }
+
+    fn hide_target(app: &mut App, float_id: &str) -> serde_json::Value {
+        let boot_id = app.state.server_boot_id.clone();
+        call(
+            app,
+            Method::FloatHideTarget(FloatHideTargetParams {
+                boot_id,
+                float_id: float_id.into(),
+            }),
+        )
+    }
+
+    #[test]
+    fn hide_target_hides_exact_float_and_repeats_without_mutation() {
+        let (mut app, ids) = app_with_floats(2);
+        call(
+            &mut app,
+            Method::FloatMove(FloatMoveParams {
+                float_id: ids[0].clone(),
+                x: 4,
+                y: 2,
+            }),
+        );
+
+        let hidden = hide_target(&mut app, &ids[0]);
+        assert_eq!(hidden["result"]["float"]["float_id"], ids[0]);
+        assert_eq!(hidden["result"]["float"]["visibility"], "hidden");
+        assert_eq!(app.state.floats[1].visibility, FloatVisibility::Shown);
+        assert!(app
+            .state
+            .terminals
+            .contains_key(&app.state.floats[0].terminal_id));
+
+        let before = app.state.floats.clone();
+        for _ in 0..2 {
+            let again = hide_target(&mut app, &ids[0]);
+            assert_eq!(again["result"]["float"]["visibility"], "hidden");
+        }
+        assert_eq!(
+            app.state.floats, before,
+            "repeat hide keeps id, geometry, stacking, and terminal"
+        );
+    }
+
+    #[test]
+    fn hide_target_rejects_stale_boot_and_missing_float_without_changes() {
+        let (mut app, ids) = app_with_floats(1);
+        app.state.floats[0].visibility = FloatVisibility::Hidden;
+        let before = app.state.floats.clone();
+
+        let stale = call(
+            &mut app,
+            Method::FloatHideTarget(FloatHideTargetParams {
+                boot_id: "earlier-boot".into(),
+                float_id: ids[0].clone(),
+            }),
+        );
+        assert_eq!(stale["error"]["code"], "stale_boot");
+
+        let missing = hide_target(&mut app, "f999");
+        assert_eq!(missing["error"]["code"], "float_not_found");
+        assert_eq!(app.state.floats, before, "no float shown or created");
+
+        let closed = ids[0].clone();
+        call(&mut app, Method::FloatClose(target(&closed)));
+        let after_close = hide_target(&mut app, &closed);
+        assert_eq!(after_close["error"]["code"], "float_not_found");
+        assert!(app.state.floats.is_empty(), "hide never recreates a float");
+    }
+
+    #[test]
+    fn hide_target_params_require_both_fields() {
+        for params in [
+            serde_json::json!({"float_id": "f1"}),
+            serde_json::json!({"boot_id": "b"}),
+            serde_json::json!({"boot_id": "b", "float_id": "f1", "focus": true}),
+        ] {
+            assert!(serde_json::from_value::<FloatHideTargetParams>(params).is_err());
         }
     }
 }

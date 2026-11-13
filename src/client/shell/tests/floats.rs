@@ -47,6 +47,67 @@ fn shell_with_floats(floats: Vec<FloatSurface>) -> ClientShellState {
     state
 }
 
+#[test]
+fn float_button_failure_notice_requires_the_original_pending_log() {
+    use crate::api::schema::PluginCommandStatus;
+    use crate::protocol::endpoint::EndpointFloatButtonResult;
+    let mut state = shell_with_floats(vec![float("term_a", 1, 1, "float")]);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state
+        .floats
+        .pending_buttons
+        .insert("log".into(), "request".into());
+    let mut result = EndpointFloatButtonResult {
+        boot_id: "old".into(),
+        request_id: "request".into(),
+        log_id: "log".into(),
+        float_id: fid("term_a"),
+        button_id: "close".into(),
+        status: PluginCommandStatus::Failed,
+        exit_code: Some(1),
+        error: Some("bad\u{1b}output".into()),
+    };
+    assert!(!state.receive_float_button_result(result.clone()));
+    assert!(state.floats.pending_buttons.contains_key("log"));
+    result.boot_id = boot;
+    assert!(state.receive_float_button_result(result));
+    let notice = state.visible_endpoint_notice.as_ref().unwrap();
+    assert_eq!(notice.body, "badoutput");
+    assert!(!state.floats.pending_buttons.contains_key("log"));
+}
+
+#[test]
+fn float_button_metadata_never_rebinds_old_or_removed_float_ids() {
+    use crate::protocol::endpoint::{EndpointFloatButtonSet, EndpointFloatButtons};
+    let mut state = shell_with_floats(vec![float("term_a", 1, 1, "float")]);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    let entry = EndpointFloatButtonSet {
+        float_id: fid("term_a"),
+        workspace_id: crate::api::schema::RequiredNullableString(None),
+        plugin_id: "plugin".into(),
+        entrypoint: "shell".into(),
+        controls_revision: uuid::Uuid::new_v4().to_string(),
+        buttons: vec![],
+    };
+    let metadata = EndpointFloatButtons {
+        boot_id: boot.clone(),
+        revision: 2,
+        floats: vec![entry],
+    };
+    state.set_float_buttons(&boot, Some(metadata.clone()));
+    assert_eq!(state.floats.buttons.as_ref().unwrap().floats.len(), 1);
+    state.set_float_layer(FloatsSurface::default());
+    assert!(state.floats.buttons.as_ref().unwrap().floats.is_empty());
+    state.set_float_buttons(&boot, None);
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 1, 1, "new")],
+    });
+    state.set_float_buttons(&boot, Some(metadata));
+    assert!(state.floats.buttons.is_none());
+    state.clear_float_projection();
+    assert!(state.floats.buttons_revision.is_none());
+}
+
 fn click(
     state: &mut ClientShellState,
     kind: MouseEventKind,
@@ -1626,4 +1687,977 @@ fn float_focus_control_never_blurs_the_previously_focused_float() {
         float_inputs(&state.handle_input_bytes(b"y"))[0].float_id,
         fid("term_b")
     );
+}
+
+fn manifest_button(id: &str, icon: &str) -> crate::api::schema::PluginManifestButton {
+    crate::api::schema::PluginManifestButton {
+        id: id.to_owned(),
+        icon: icon.to_owned(),
+        action: format!("{id}-action"),
+    }
+}
+
+fn buttons_entry(
+    float_id: FloatId,
+    plugin_id: &str,
+    controls_revision: &str,
+    buttons: Vec<crate::api::schema::PluginManifestButton>,
+) -> crate::protocol::endpoint::EndpointFloatButtonSet {
+    crate::protocol::endpoint::EndpointFloatButtonSet {
+        float_id,
+        workspace_id: crate::api::schema::RequiredNullableString(None),
+        plugin_id: plugin_id.to_owned(),
+        entrypoint: "shell".to_owned(),
+        controls_revision: controls_revision.to_owned(),
+        buttons,
+    }
+}
+
+fn negotiated_shell(
+    floats: Vec<FloatSurface>,
+    entries: Vec<crate::protocol::endpoint::EndpointFloatButtonSet>,
+) -> ClientShellState {
+    let mut state = shell_with_floats(floats);
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state.set_float_buttons(
+        &boot,
+        Some(crate::protocol::endpoint::EndpointFloatButtons {
+            boot_id: boot.clone(),
+            revision: 1,
+            floats: entries,
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+    state
+}
+
+fn button_icon(hit: &super::super::floats::FloatHit, button_id: &str) -> (u16, u16) {
+    let (_, rect) = hit
+        .buttons
+        .iter()
+        .find(|(id, _)| id == button_id)
+        .expect("rendered button");
+    (rect.x + 1, rect.y)
+}
+
+#[test]
+fn buttons_render_right_aligned_and_the_hits_match_what_is_drawn() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let row = a.outer.y;
+    // Two one-cell buttons take 6 cells inside the 10-cell interior.
+    assert_eq!(
+        a.buttons,
+        vec![
+            (
+                "inspect".to_owned(),
+                Rect::new(a.outer.right() - 7, row, 3, 1)
+            ),
+            (
+                "close".to_owned(),
+                Rect::new(a.outer.right() - 4, row, 3, 1)
+            ),
+        ]
+    );
+    let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+    assert_eq!(frame[(a.outer.right() - 6, row)].symbol(), "?");
+    assert_eq!(frame[(a.outer.right() - 3, row)].symbol(), "x");
+    assert_eq!(frame[(a.outer.right() - 7, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 5, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 2, row)].symbol(), " ");
+    assert_eq!(frame[(a.outer.right() - 1, row)].symbol(), "┐");
+    // The title yields its cells to the buttons and stops before the group.
+    assert_eq!(frame[(a.outer.x + 1, row)].symbol(), "t");
+    assert_eq!(frame[(a.outer.x + 4, row)].symbol(), "m");
+    // The group's left padding cell follows the title directly.
+    assert_eq!(frame[(a.outer.x + 5, row)].symbol(), " ");
+}
+
+#[test]
+fn a_button_click_invokes_exactly_the_clicked_float_and_button() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&down).is_empty());
+    assert!(float_inputs(&down).is_empty());
+    assert!(state.floats.focused.is_none());
+    assert!(state.floats.drag.is_none());
+
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&up)[..] else {
+        panic!("release invokes the button action");
+    };
+    assert_eq!(params.boot_id, "boot-1");
+    assert_eq!(params.float_id, "f1");
+    assert!(params.workspace_id.0.is_none());
+    assert_eq!(params.plugin_id, "plugin-a");
+    assert_eq!(params.entrypoint, "shell");
+    assert_eq!(params.controls_revision, "rev-1");
+    assert_eq!(params.button_id, "close");
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn a_button_press_that_leaves_the_button_never_activates() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let drag = click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        icon.0 + 5,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0 + 5,
+        icon.1,
+    );
+
+    assert!(endpoint_methods(&drag).is_empty());
+    assert!(endpoint_methods(&up).is_empty());
+    // The cancelled gesture keeps its release: nothing reaches the pane beneath.
+    assert!(float_inputs(&up).is_empty());
+    assert!(!endpoint_methods(&up)
+        .iter()
+        .any(|method| { matches!(method, crate::api::schema::Method::PaneFocus(_)) }));
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn non_left_input_on_a_button_cell_is_consumed_without_activation_or_focus() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+
+    let down = click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Right),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&down).is_empty());
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.focused.is_none());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Right),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    let wheel = click(&mut state, MouseEventKind::ScrollDown, icon.0, icon.1);
+    assert!(endpoint_methods(&wheel).is_empty());
+    assert!(float_inputs(&wheel).is_empty());
+}
+
+#[test]
+fn stacked_floats_route_button_clicks_to_the_topmost_float_at_the_pointer() {
+    let mut state = negotiated_shell(
+        vec![
+            float("term_a", 1, 1, "under"),
+            float("term_b", 2, 2, "over"),
+        ],
+        vec![
+            buttons_entry(
+                fid("term_a"),
+                "plugin-a",
+                "rev-a",
+                vec![manifest_button("close", "x")],
+            ),
+            buttons_entry(
+                fid("term_b"),
+                "plugin-b",
+                "rev-b",
+                vec![manifest_button("close", "x")],
+            ),
+        ],
+    );
+    let a = hit(&state, "term_a");
+    let b = hit(&state, "term_b");
+    // term_b covers term_a's body but not term_a's title row.
+    let under_icon = (a.outer.right() - 3, a.outer.y);
+    let over_icon = (b.outer.right() - 3, b.outer.y);
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        under_icon.0,
+        under_icon.1,
+    );
+    let under_up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        under_icon.0,
+        under_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(under)] = &endpoint_methods(&under_up)[..]
+    else {
+        panic!("the visible button of the lower float stays clickable");
+    };
+    assert_eq!(under.float_id, "f1");
+    assert_eq!(under.plugin_id, "plugin-a");
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        over_icon.0,
+        over_icon.1,
+    );
+    let over_up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        over_icon.0,
+        over_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(over)] = &endpoint_methods(&over_up)[..]
+    else {
+        panic!("the top float owns the click inside its own button");
+    };
+    assert_eq!(over.float_id, "f2");
+    assert_eq!(over.plugin_id, "plugin-b");
+}
+
+#[test]
+fn a_geometry_change_cancels_an_armed_button_press() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 3, 3, "float")],
+    });
+    state.compose(106, 20).expect("composed frame");
+    let moved = hit(&state, "term_a");
+    let moved_icon = button_icon(&moved, "close");
+
+    // Neither the old nor the new button position activates the cancelled press.
+    let up_old = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up_old).is_empty());
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        moved_icon.0,
+        moved_icon.1,
+    );
+    let up_new = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        moved_icon.0,
+        moved_icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&up_new)[..]
+    else {
+        panic!("a fresh press on the moved button activates");
+    };
+    assert_eq!(params.float_id, "f1");
+}
+
+#[test]
+fn a_metadata_revision_change_cancels_an_armed_button_press() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+
+    let boot = state.snapshot.as_ref().unwrap().boot_id.clone();
+    state.set_float_buttons(
+        &boot,
+        Some(crate::protocol::endpoint::EndpointFloatButtons {
+            boot_id: boot.clone(),
+            revision: 2,
+            floats: vec![buttons_entry(
+                fid("term_a"),
+                "plugin-a",
+                "rev-2",
+                vec![manifest_button("close", "x")],
+            )],
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    assert!(state.floats.button_press.is_none());
+}
+
+#[test]
+fn floats_without_buttons_keep_their_existing_appearance_and_gestures() {
+    for metadata_buttons in [None, Some(Vec::new())] {
+        let entries = metadata_buttons
+            .map(|buttons| vec![buttons_entry(fid("term_a"), "plugin-a", "rev-1", buttons)])
+            .unwrap_or_default();
+        let mut state = negotiated_shell(vec![float("term_a", 10, 3, "pip")], entries);
+        let a = hit(&state, "term_a");
+        assert!(a.buttons.is_empty());
+        let row = a.outer.y;
+        let frame = state.compose(106, 20).unwrap().to_ratatui_buffer().unwrap();
+        // The title keeps the whole interior, truncated as before.
+        let title: String = (a.outer.x + 1..a.outer.right() - 1)
+            .map(|col| frame[(col, row)].symbol())
+            .collect();
+        assert_eq!(title, "term_a tit");
+        // The border click still starts a move gesture.
+        click(
+            &mut state,
+            MouseEventKind::Down(MouseButton::Left),
+            a.outer.x + 4,
+            row,
+        );
+        assert!(state.floats.drag.is_some());
+    }
+}
+
+use crate::client::host_pointer::HostPointerShape;
+
+fn hover(state: &mut ClientShellState, point: (u16, u16)) -> Option<HostPointerShape> {
+    click(state, MouseEventKind::Moved, point.0, point.1);
+    state.host_pointer_shape()
+}
+
+#[test]
+fn the_pointer_follows_the_border_gesture_rules() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    assert_eq!(state.host_pointer_shape(), None, "no pointer position yet");
+    let outer = hit(&state, "term_a").outer;
+    let (left, top) = (outer.x, outer.y);
+    let (right, bottom) = (outer.right() - 1, outer.bottom() - 1);
+    let middle = (left + 5, top + 2);
+    for (point, expected, case) in [
+        ((left + 4, top), Some(HostPointerShape::Move), "title row"),
+        ((left, top + 2), Some(HostPointerShape::Move), "left border"),
+        ((left, top), Some(HostPointerShape::Move), "top-left corner"),
+        (
+            (right, top),
+            Some(HostPointerShape::Move),
+            "top-right corner",
+        ),
+        (
+            (right, top + 2),
+            Some(HostPointerShape::EwResize),
+            "right border",
+        ),
+        (
+            (left + 4, bottom),
+            Some(HostPointerShape::NsResize),
+            "bottom border",
+        ),
+        (
+            (right, bottom),
+            Some(HostPointerShape::NwseResize),
+            "bottom-right corner",
+        ),
+        // An existing rule: the bottom-left corner resizes the height only.
+        (
+            (left, bottom),
+            Some(HostPointerShape::NsResize),
+            "bottom-left corner",
+        ),
+        (middle, None, "content"),
+        ((right + 3, top + 2), None, "outside"),
+    ] {
+        assert_eq!(hover(&mut state, point), expected, "{case}");
+    }
+}
+
+#[test]
+fn every_hovered_shape_matches_the_gesture_a_press_there_starts() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    for row in outer.y..outer.bottom() {
+        for col in outer.x..outer.right() {
+            let shape = hover(&mut state, (col, row));
+            click(
+                &mut state,
+                MouseEventKind::Down(MouseButton::Left),
+                col,
+                row,
+            );
+            let gesture = state.floats.drag.as_ref().map(|drag| drag.gesture);
+            let expected = gesture.map(|gesture| match gesture {
+                super::super::floats::ClientFloatGesture::Move { .. } => HostPointerShape::Move,
+                super::super::floats::ClientFloatGesture::Resize {
+                    width: true,
+                    height: true,
+                } => HostPointerShape::NwseResize,
+                super::super::floats::ClientFloatGesture::Resize { width: true, .. } => {
+                    HostPointerShape::EwResize
+                }
+                super::super::floats::ClientFloatGesture::Resize { .. } => {
+                    HostPointerShape::NsResize
+                }
+            });
+            assert_eq!(shape, expected, "cell ({col}, {row})");
+            click(&mut state, MouseEventKind::Up(MouseButton::Left), col, row);
+            state.floats.drag = None;
+            state.compose(106, 20).expect("recompose");
+        }
+    }
+}
+
+#[test]
+fn the_topmost_float_decides_the_pointer() {
+    // term_b is drawn above term_a; its content covers term_a's right border.
+    let mut state = shell_with_floats(vec![
+        float("term_a", 10, 3, "low"),
+        float("term_b", 16, 2, "high"),
+    ]);
+    let a = hit(&state, "term_a").outer;
+    let covered = (a.right() - 1, a.y + 2);
+    assert!(super::contains(
+        hit(&state, "term_b").pane.inner_rect,
+        covered
+    ));
+    assert_eq!(hover(&mut state, covered), None);
+    assert_eq!(
+        hover(&mut state, (a.x + 2, a.y)),
+        Some(HostPointerShape::Move),
+        "the uncovered part of the lower float still shows its own gesture"
+    );
+}
+
+#[test]
+fn an_active_drag_keeps_its_shape_off_the_border_until_mouse_up() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let corner = (outer.right() - 1, outer.bottom() - 1);
+    hover(&mut state, corner);
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        corner.0,
+        corner.1,
+    );
+    click(&mut state, MouseEventKind::Drag(MouseButton::Left), 90, 18);
+    state.compose(106, 20).expect("preview");
+    assert_eq!(
+        state.host_pointer_shape(),
+        Some(HostPointerShape::NwseResize)
+    );
+
+    // Mouse-up ends the override while the geometry commit is still pending.
+    click(&mut state, MouseEventKind::Up(MouseButton::Left), 104, 19);
+    assert!(matches!(
+        state.floats.drag.as_ref().map(|drag| drag.phase),
+        Some(super::super::floats::ClientFloatDragPhase::Committing { .. })
+    ));
+    assert_eq!(state.host_pointer_shape(), None);
+}
+
+#[test]
+fn a_stationary_pointer_follows_layer_visibility_and_overlay_changes() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    let title = (outer.x + 4, outer.y);
+    assert_eq!(hover(&mut state, title), Some(HostPointerShape::Move));
+
+    // The server moves the float out from under the pointer.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 40, 10, "pip")],
+    });
+    state.compose(106, 20).expect("moved");
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // It comes back, then is hidden.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+    state.compose(106, 20).expect("back");
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Move));
+    state.set_float_layer(FloatsSurface::default());
+    state.compose(106, 20).expect("hidden");
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // An overlay or the modal popup takes the pointer from the float layer.
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 10, 3, "pip")],
+    });
+    state.compose(106, 20).expect("shown");
+    state.overlay = Some(ClientShellOverlay::Onboarding);
+    assert_eq!(state.host_pointer_shape(), None);
+    state.overlay = None;
+    state.popup_terminal_id = Some("popup-test".into());
+    assert_eq!(state.host_pointer_shape(), None);
+    state.popup_terminal_id = None;
+
+    // Leaving the endpoint clears the projection.
+    state.clear_float_projection();
+    assert_eq!(state.host_pointer_shape(), None);
+}
+
+#[test]
+fn another_gesture_holding_the_button_shows_no_float_shape() {
+    let mut state = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&state, "term_a").outer;
+    click(&mut state, MouseEventKind::Down(MouseButton::Left), 2, 18);
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        outer.x + 4,
+        outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), None);
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        outer.x + 4,
+        outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Move));
+}
+
+#[test]
+fn buttons_show_the_button_affordance_and_never_a_drag_shape() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 10, 3, "pip")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let a = hit(&state, "term_a");
+    let icon = button_icon(&a, "close");
+    let (_, rect) = a.buttons[0].clone();
+    for col in rect.x..rect.right() {
+        assert_eq!(
+            hover(&mut state, (col, rect.y)),
+            Some(HostPointerShape::Pointer),
+            "padding and icon cells are one button"
+        );
+    }
+
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+    // Leaving the button cancels the press; it never becomes a move.
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        a.outer.x + 2,
+        a.outer.y,
+    );
+    assert_eq!(state.host_pointer_shape(), None);
+    click(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), None, "re-entry stays cancelled");
+    click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+}
+
+#[test]
+fn mouse_capture_off_or_no_shell_means_no_pointer_override() {
+    let mut shell = shell_with_floats(vec![float("term_a", 10, 3, "pip")]);
+    let outer = hit(&shell, "term_a").outer;
+    hover(&mut shell, (outer.x + 4, outer.y));
+    let mut client = crate::client::state::ClientState::test_new();
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        None
+    );
+    client.shell = Some(shell);
+    client.mouse_capture_active = true;
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        Some(HostPointerShape::Move)
+    );
+    client.mouse_capture_active = false;
+    assert_eq!(
+        crate::client::shell_runtime::desired_host_pointer(&client),
+        None
+    );
+}
+
+#[test]
+fn a_rejected_button_invoke_shows_a_notice_and_never_retries_or_substitutes() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &up.actions[..] else {
+        panic!("release sends float.button.invoke");
+    };
+
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("stale_float_controls".into()),
+            message: "float f1 button close controls changed".into(),
+        }),
+    );
+
+    assert!(repaint);
+    assert!(actions.is_empty(), "a rejection triggers no other request");
+    assert!(state.floats.pending_buttons.is_empty());
+    let notice = state.visible_endpoint_notice.as_ref().expect("notice");
+    assert!(notice.body.contains("close"), "{}", notice.body);
+    // The client stays usable: the next deliberate click sends one fresh invoke.
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let again = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&again)[..]
+    else {
+        panic!("a new click invokes once");
+    };
+    assert_eq!(params.button_id, "close");
+}
+
+#[test]
+fn a_timed_out_button_invoke_is_never_retried_and_a_late_result_is_ignored() {
+    use crate::protocol::endpoint::EndpointFloatButtonResult;
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![
+                manifest_button("inspect", "?"),
+                manifest_button("close", "x"),
+            ],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &up.actions[..] else {
+        panic!("release sends float.button.invoke");
+    };
+
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("endpoint_timeout".into()),
+            message: "float.button.invoke timed out".into(),
+        }),
+    );
+
+    assert!(actions.is_empty(), "a timeout never retries or substitutes");
+    assert!(state.floats.pending_buttons.is_empty());
+    assert!(state.timed_out_endpoint.is_some());
+    // The server may still have run the action; its completion arrives with a
+    // log the client never accepted, so it cannot surface or settle anything.
+    let late = EndpointFloatButtonResult {
+        boot_id: "boot-1".into(),
+        request_id: request.id.clone(),
+        log_id: "log-late".into(),
+        float_id: fid("term_a"),
+        button_id: "close".into(),
+        status: crate::api::schema::PluginCommandStatus::Failed,
+        exit_code: Some(3),
+        error: Some("late".into()),
+    };
+    assert!(!state.receive_float_button_result(late));
+    assert!(state.floats.pending_buttons.is_empty());
+
+    // Before the late response settles, a click stays quarantined.
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let blocked = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(
+        endpoint_methods(&blocked).is_empty(),
+        "quarantined click sends nothing"
+    );
+
+    // The late response settles the quarantine without a newer snapshot,
+    // because a button invoke changes none.
+    let revision = state.snapshot.as_deref().expect("snapshot").revision;
+    state.handle_late_endpoint_result(
+        "boot-1",
+        &request.id,
+        Ok(crate::api::schema::ResponseResult::Ok {}),
+    );
+    assert!(state.timed_out_endpoint.is_none());
+    assert_eq!(
+        state.snapshot.as_deref().expect("snapshot").revision,
+        revision
+    );
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let again = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    let [crate::api::schema::Method::FloatButtonInvoke(params)] = &endpoint_methods(&again)[..]
+    else {
+        panic!("a click after the late response invokes exactly once");
+    };
+    assert_eq!(params.button_id, "close");
+    let [ClientShellAction::Endpoint { request: fresh, .. }] = &again.actions[..] else {
+        panic!("one endpoint action");
+    };
+    assert_ne!(
+        fresh.id, request.id,
+        "the timed-out request is never replayed"
+    );
+}
+
+#[test]
+fn a_float_that_disappears_under_an_armed_press_consumes_the_release() {
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(state.floats.button_press.is_some());
+
+    state.set_float_layer(FloatsSurface::default());
+    state.compose(106, 20).expect("composed frame");
+
+    assert!(state.floats.buttons.as_ref().unwrap().floats.is_empty());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
+    assert!(float_inputs(&up).is_empty());
+    assert!(up.requests.is_empty(), "the release never reaches the pane");
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.focused.is_none());
+}
+
+#[test]
+fn switching_endpoints_drops_button_metadata_presses_and_pending_results() {
+    use crate::protocol::endpoint::EndpointFloatButtons;
+    let mut state = negotiated_shell(
+        vec![float("term_a", 1, 1, "float")],
+        vec![buttons_entry(
+            fid("term_a"),
+            "plugin-a",
+            "rev-1",
+            vec![manifest_button("close", "x")],
+        )],
+    );
+    let local_metadata = state.floats.buttons.clone().unwrap();
+    let profile = super::endpoints::remote_profile();
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+    let mut remote_snapshot = snapshot();
+    remote_snapshot.boot_id = "remote-boot".into();
+    state.set_endpoint_snapshot(&remote, Box::new(remote_snapshot));
+
+    let icon = button_icon(&hit(&state, "term_a"), "close");
+    click(&mut state, MouseEventKind::Moved, icon.0, icon.1);
+    assert_eq!(state.host_pointer_shape(), Some(HostPointerShape::Pointer));
+    click(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    state
+        .floats
+        .pending_buttons
+        .insert("plugin-log-1".into(), "request".into());
+
+    assert!(state.activate_endpoint_projection(&remote));
+
+    assert!(state.floats.buttons.is_none());
+    assert!(state.floats.button_press.is_none());
+    assert!(state.floats.pending_buttons.is_empty());
+    assert_eq!(state.host_pointer_shape(), None);
+
+    // The remote server reuses `f1`. The local metadata never attaches to it, even if it
+    // arrives late, and the held button's release is not an activation.
+    let mut remote_surface = surface();
+    remote_surface.boot_id = "remote-boot".into();
+    state.set_pane_surface(remote_surface);
+    state.set_float_layer(FloatsSurface {
+        floats: vec![float("term_a", 1, 1, "remote")],
+    });
+    state.set_float_buttons("remote-boot", Some(local_metadata.clone()));
+    state.set_float_buttons(
+        "remote-boot",
+        Some(EndpointFloatButtons {
+            boot_id: "boot-1".into(),
+            ..local_metadata
+        }),
+    );
+    state.compose(106, 20).expect("composed frame");
+    assert!(state.floats.buttons.is_none());
+    assert!(hit(&state, "term_a").buttons.is_empty());
+    let up = click(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        icon.0,
+        icon.1,
+    );
+    assert!(endpoint_methods(&up).is_empty());
 }

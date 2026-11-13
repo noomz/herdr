@@ -19,7 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::Listener as _;
 #[cfg(windows)]
@@ -344,6 +344,7 @@ impl HeadlessServer {
 
         let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
+        let client_shell_boot_id = app.state.server_boot_id.clone();
         let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
@@ -366,14 +367,7 @@ impl HeadlessServer {
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
-            client_shell_boot_id: format!(
-                "{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
+            client_shell_boot_id,
             sent_window_title: None,
             api_window_title: None,
             server_keybindings,
@@ -2450,6 +2444,7 @@ impl HeadlessServer {
                 // A frozen activation drops float layers, so resend the current one after commit.
                 if client.shell_floats.is_some() {
                     client.shell_floats = Some(Default::default());
+                    client.shell_float_buttons = None;
                     self.app.render_dirty.request_generic();
                 }
                 self.sent_window_title = None;
@@ -2675,6 +2670,20 @@ impl HeadlessServer {
                 let Some(command_surface_revision) = command_surface_revision else {
                     return false;
                 };
+                let completed_button_response =
+                    self.clients.get_mut(&client_id).and_then(|client| {
+                        let (_, response) = client.shell_float_button_response.as_mut()?;
+                        if response.len().saturating_add(data.len())
+                            > crate::protocol::MAX_FRAME_SIZE
+                        {
+                            client.shell_float_button_response = None;
+                            return None;
+                        }
+                        response.extend_from_slice(&data);
+                        final_chunk
+                            .then(|| client.shell_float_button_response.take())
+                            .flatten()
+                    });
                 let completed_deferred_response =
                     self.clients.get_mut(&client_id).and_then(|client| {
                         let response = client.shell_deferred_navigation_response.as_mut()?;
@@ -2724,6 +2733,9 @@ impl HeadlessServer {
                         data,
                     },
                 );
+                if let Some((pending, response)) = completed_button_response {
+                    self.finish_float_button_response(client_id, pending, &response);
+                }
                 navigation_changed | geometry_changed
             }
             ServerEvent::ClientDetach { client_id } => {
@@ -2736,6 +2748,16 @@ impl HeadlessServer {
                 info!(client_id, "client disconnected");
                 self.remove_client_and_resize_if_needed(client_id);
                 true
+            }
+            ServerEvent::ClientShellFloatButtons { client_id } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    if client.shell_floats.is_some() {
+                        client.shell_float_buttons_enabled = true;
+                        client.shell_float_buttons = None;
+                        return true;
+                    }
+                }
+                false
             }
             ServerEvent::ClientWriterDrained { client_id } => {
                 let Some(client) = self.clients.get_mut(&client_id) else {

@@ -22,6 +22,21 @@ impl App {
         context: &PluginInvocationContext,
         event_json: Option<String>,
     ) -> Result<PluginCommandLogInfo, (&'static str, String)> {
+        self.start_plugin_command_with_target(
+            plugin, action_id, event, command, context, event_json, None,
+        )
+    }
+
+    pub(super) fn start_plugin_command_with_target(
+        &mut self,
+        plugin: &InstalledPluginInfo,
+        action_id: Option<String>,
+        event: Option<String>,
+        command: Vec<String>,
+        context: &PluginInvocationContext,
+        event_json: Option<String>,
+        target: Option<&crate::api::schema::FloatButtonInvokeParams>,
+    ) -> Result<PluginCommandLogInfo, (&'static str, String)> {
         let Some(program) = command.first().cloned() else {
             return Err((
                 "invalid_plugin_command",
@@ -29,8 +44,21 @@ impl App {
             ));
         };
         let args = command.iter().skip(1).cloned().collect::<Vec<_>>();
-        let context_json = serde_json::to_string(context)
-            .map_err(|err| ("invalid_plugin_context", err.to_string()))?;
+        let context_json = if let Some(target) = target {
+            #[derive(serde::Serialize)]
+            struct ButtonContext<'a> {
+                #[serde(flatten)]
+                context: &'a PluginInvocationContext,
+                float_target: &'a crate::api::schema::FloatButtonInvokeParams,
+            }
+            serde_json::to_string(&ButtonContext {
+                context,
+                float_target: target,
+            })
+        } else {
+            serde_json::to_string(context)
+        }
+        .map_err(|err| ("invalid_plugin_context", err.to_string()))?;
         super::env::ensure_plugin_user_dirs(plugin)
             .map_err(|err| ("plugin_user_dir_create_failed", err.to_string()))?;
         let log_id = format!("plugin-log-{}", self.state.next_plugin_command_log_id);
@@ -46,6 +74,10 @@ impl App {
             ("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()),
             ("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json),
         ]);
+        if let Some(target) = target {
+            env.push(("HERDR_FLOAT_ID".into(), target.float_id.clone()));
+            env.push(("HERDR_FLOAT_BOOT_ID".into(), target.boot_id.clone()));
+        }
         if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
                 "HERDR_BIN_PATH".to_string(),

@@ -576,11 +576,14 @@ impl ClientShellState {
         {
             return false;
         }
+        // A button invoke only starts a plugin action and changes no snapshot,
+        // so its settled response is the last signal that will ever arrive.
+        let changes_no_snapshot = method_name == "float.button.invoke";
         let snapshot_is_fresh = self
             .snapshot
             .as_deref()
             .is_some_and(|snapshot| snapshot.revision > snapshot_revision);
-        if snapshot_is_fresh {
+        if changes_no_snapshot || snapshot_is_fresh {
             self.timed_out_endpoint = None;
         }
         self.endpoint_notice_seen.remove(&ClientEndpointNoticeKey {
@@ -634,6 +637,13 @@ impl ClientShellState {
         }
         if let PendingEndpointKind::PaneLinkResolve { target } = pending.kind {
             return self.complete_link_hover(target, result);
+        }
+        if pending.method_name == "float.button.invoke" {
+            if let Ok(crate::api::schema::ResponseResult::FloatButtonInvoked { log }) = &result {
+                self.floats
+                    .pending_buttons
+                    .insert(log.log_id.clone(), request_id.to_owned());
+            }
         }
         if result.is_ok() {
             let timeout_key = ClientEndpointNoticeKey {

@@ -27,6 +27,7 @@ mod frame_output;
 #[cfg(test)]
 mod frame_output_tests;
 mod handshake;
+mod host_pointer;
 mod image_files;
 mod input;
 mod loop_config;
@@ -811,6 +812,9 @@ async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
+        // Every dispatch, including one that changes floats, overlays, endpoints, or mouse
+        // capture without pointer input, passes here before the next wait.
+        sync_host_pointer(&state, _terminal_guard);
         let immediate_event = scheduled_activation.take();
         #[cfg(windows)]
         let event = if let Some(event) = immediate_event {
@@ -2189,6 +2193,52 @@ async fn run_client_loop(
                                         &mut scheduled_activation,
                                     )? {
                                         return Ok(());
+                                    }
+                                }
+                                continue;
+                            }
+                            Ok(endpoint::EndpointControlMessage::FloatButtons(metadata)) => {
+                                if !activation_message && endpoint_active {
+                                    let negotiated = write_stream
+                                        .connection(&endpoint_id)
+                                        .is_some_and(|connection| {
+                                            connection.negotiation.supports_float_buttons()
+                                        });
+                                    let frame = state.shell.as_mut().and_then(|shell| {
+                                        if negotiated {
+                                            if let Some(boot_id) = shell
+                                                .endpoint_boot_id(&endpoint_id)
+                                                .map(str::to_owned)
+                                            {
+                                                shell.set_float_buttons(&boot_id, metadata);
+                                            }
+                                        } else {
+                                            shell.set_float_buttons("", None);
+                                        }
+                                        shell.compose(state.reported_size.0, state.reported_size.1)
+                                    });
+                                    if let Some(frame) = frame {
+                                        state.present_frame(frame);
+                                    }
+                                }
+                                continue;
+                            }
+                            Ok(endpoint::EndpointControlMessage::FloatButtonResult(result)) => {
+                                if !activation_message && endpoint_active {
+                                    let repaint = state.shell.as_mut().is_some_and(|shell| {
+                                        shell.receive_float_button_result(result)
+                                    });
+                                    if repaint {
+                                        if let Some(frame) =
+                                            state.shell.as_mut().and_then(|shell| {
+                                                shell.compose(
+                                                    state.reported_size.0,
+                                                    state.reported_size.1,
+                                                )
+                                            })
+                                        {
+                                            state.present_frame(frame);
+                                        }
                                     }
                                 }
                                 continue;

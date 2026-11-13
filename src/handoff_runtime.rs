@@ -59,6 +59,8 @@ pub(crate) struct HandoffFloat {
     /// Absent from manifests written before floats had stable ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<crate::protocol::floats::FloatId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_binding: Option<crate::app::floats::FloatPluginBinding>,
     pub runtime: HandoffRuntimeState,
     pub cwd: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]

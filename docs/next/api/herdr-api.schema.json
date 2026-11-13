@@ -2151,6 +2151,62 @@
           ],
           "type": "object"
         },
+        "FloatButtonInvokeParams": {
+          "additionalProperties": false,
+          "properties": {
+            "boot_id": {
+              "type": "string"
+            },
+            "button_id": {
+              "type": "string"
+            },
+            "controls_revision": {
+              "type": "string"
+            },
+            "entrypoint": {
+              "type": "string"
+            },
+            "float_id": {
+              "type": "string"
+            },
+            "plugin_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "boot_id",
+            "float_id",
+            "workspace_id",
+            "plugin_id",
+            "entrypoint",
+            "controls_revision",
+            "button_id"
+          ],
+          "type": "object"
+        },
+        "FloatHideTargetParams": {
+          "additionalProperties": false,
+          "description": "Hides one exact float from one server boot. Never shows, creates, or retargets a float.",
+          "properties": {
+            "boot_id": {
+              "type": "string"
+            },
+            "float_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "boot_id",
+            "float_id"
+          ],
+          "type": "object"
+        },
         "FloatMoveParams": {
           "properties": {
             "float_id": {
@@ -6577,6 +6633,22 @@
         {
           "properties": {
             "method": {
+              "const": "float.hide_target",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatHideTargetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "float.show",
               "type": "string"
             },
@@ -6630,6 +6702,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/FloatTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "float.button.invoke",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/FloatButtonInvokeParams"
             }
           },
           "required": [
@@ -7929,6 +8017,12 @@
                 "$ref": "#/schemas/success_response/$defs/PluginManifestEventHook"
               },
               "type": "array"
+            },
+            "installation_id": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "link_handlers": {
               "items": {
@@ -9350,6 +9444,26 @@
           ],
           "type": "object"
         },
+        "PluginManifestButton": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "icon": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "icon",
+            "action"
+          ],
+          "type": "object"
+        },
         "PluginManifestEventHook": {
           "properties": {
             "command": {
@@ -9411,6 +9525,12 @@
         },
         "PluginManifestPane": {
           "properties": {
+            "buttons": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/PluginManifestButton"
+              },
+              "type": "array"
+            },
             "command": {
               "items": {
                 "type": "string"
@@ -10907,6 +11027,22 @@
               "required": [
                 "type",
                 "float_id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "log": {
+                  "$ref": "#/schemas/success_response/$defs/PluginCommandLogInfo"
+                },
+                "type": {
+                  "const": "float_button_invoked",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "log"
               ],
               "type": "object"
             },

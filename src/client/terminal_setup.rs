@@ -20,6 +20,7 @@ use crossterm::execute;
 use crossterm::terminal::{DisableLineWrap, EnableLineWrap};
 
 use super::frame_output::clear_received_kitty_graphics;
+use super::host_pointer::{HostPointer, HostPointerRestore, HostPointerSupport};
 
 // ---------------------------------------------------------------------------
 // Terminal setup / restore
@@ -54,6 +55,7 @@ pub(super) fn setup_terminal_with_capabilities(
         reset_modify_other_keys: false,
         modify_other_keys_sequence: None,
         reset_host_color_scheme_reports: false,
+        host_pointer: HostPointer::new(HostPointerSupport::default()),
         restore_claimed: Arc::new(AtomicBool::new(false)),
         restored: false,
         #[cfg(windows)]
@@ -125,6 +127,7 @@ pub(super) fn setup_terminal_with_capabilities(
 
     terminal_guard.host_escape_disambiguation_active = host_probe.escape_disambiguation;
     terminal_guard.host_sgr_pixel_mouse = host_probe.sgr_pixel_mouse;
+    terminal_guard.host_pointer = HostPointer::new(host_probe.pointer_shapes);
     terminal_guard.buffered_host_input = buffered_host_input;
     Ok(terminal_guard)
 }
@@ -143,6 +146,7 @@ pub(super) struct TerminalGuard {
     /// The modifyOtherKeys sequence written at setup, re-sent on refresh.
     modify_other_keys_sequence: Option<&'static [u8]>,
     reset_host_color_scheme_reports: bool,
+    host_pointer: HostPointer,
     restore_claimed: Arc<AtomicBool>,
     restored: bool,
     #[cfg(windows)]
@@ -159,6 +163,7 @@ const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
     sgr_pixel_mouse_status: Option<u8>,
+    pointer_shapes: Option<HostPointerSupport>,
     primary_device_attributes: bool,
 }
 
@@ -168,21 +173,37 @@ pub(super) struct HostTerminalProbe {
     pub(super) escape_disambiguation: bool,
     /// None when the host did not answer; exact pixel input stays disabled.
     pub(super) sgr_pixel_mouse: Option<bool>,
+    /// Empty when the host did not answer; Herdr then never writes OSC 22.
+    pub(super) pointer_shapes: HostPointerSupport,
+}
+
+/// The startup query. Direct attach leaves the keyboard and the pointer to the attached pane,
+/// so it asks only about pixel mouse reports. Device attributes come last: every reply the
+/// host sends before them belongs to this query.
+#[cfg(not(windows))]
+fn host_capability_query(query_keyboard: bool) -> Vec<u8> {
+    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p";
+    const KEYBOARD_QUERY: &[u8] = b"\x1b[?u";
+    const DEVICE_ATTRIBUTES_QUERY: &[u8] = b"\x1b[c";
+    if query_keyboard {
+        [
+            PIXEL_MOUSE_QUERY,
+            KEYBOARD_QUERY,
+            super::host_pointer::SUPPORT_QUERY,
+            DEVICE_ATTRIBUTES_QUERY,
+        ]
+        .concat()
+    } else {
+        [PIXEL_MOUSE_QUERY, DEVICE_ATTRIBUTES_QUERY].concat()
+    }
 }
 
 #[cfg(not(windows))]
 fn query_host_capabilities(query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
-    const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[c";
-    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[c";
-
     let mut buffered_input = Vec::new();
-    let query = if query_keyboard {
-        FULL_QUERY
-    } else {
-        PIXEL_MOUSE_QUERY
-    };
+    let query = host_capability_query(query_keyboard);
     if let Err(err) = io::stdout()
-        .write_all(query)
+        .write_all(&query)
         .and_then(|()| io::stdout().flush())
     {
         tracing::debug!(%err, "host capability query unavailable");
@@ -246,6 +267,7 @@ fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalPr
     HostTerminalProbe {
         escape_disambiguation: host_escape_disambiguation_confirmed(responses),
         sgr_pixel_mouse,
+        pointer_shapes: responses.pointer_shapes.unwrap_or_default(),
     }
 }
 
@@ -276,6 +298,29 @@ fn consume_host_keyboard_probe_responses(
                 break;
             };
             offset = payload_start + relative_end + PASTE_END.len();
+            continue;
+        }
+        // The pointer-shape support reply is drained so it never reaches a pane. A malformed
+        // OSC 22 string is not a reply to Herdr's query and stays as input.
+        if buffered_input[offset..].starts_with(super::host_pointer::REPLY_PREFIX) {
+            let Some(Some(len)) = host_control_string_end(&buffered_input[offset..]) else {
+                break;
+            };
+            let terminator = if buffered_input[offset + len - 1] == 0x07 {
+                1
+            } else {
+                2
+            };
+            let body = &buffered_input
+                [offset + super::host_pointer::REPLY_PREFIX.len()..offset + len - terminator];
+            if let Some(support) = HostPointerSupport::from_reply(body) {
+                if !responses.primary_device_attributes {
+                    responses.pointer_shapes = Some(support);
+                }
+                buffered_input.drain(offset..offset + len);
+            } else {
+                offset += len;
+            }
             continue;
         }
         if let Some(control_string_end) = host_control_string_end(&buffered_input[offset..]) {
@@ -664,6 +709,7 @@ fn restore_terminal_state_once(
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    host_pointer: &HostPointerRestore,
     #[cfg(windows)] restore_windows_input_mode: &WindowsInputModeRestore,
 ) -> io::Result<()> {
     if restore_claimed.swap(true, Ordering::AcqRel) {
@@ -675,6 +721,7 @@ fn restore_terminal_state_once(
         reset_keyboard_enhancements,
         reset_modify_other_keys,
         reset_host_color_scheme_reports,
+        host_pointer,
         #[cfg(windows)]
         restore_windows_input_mode,
     )
@@ -684,8 +731,12 @@ fn restore_terminal_state(
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    host_pointer: &HostPointerRestore,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) -> io::Result<()> {
+    // The host keeps one pointer stack per screen; pop Herdr's shape while the alternate
+    // screen it was pushed on is still active.
+    let _ = host_pointer.restore(&mut io::stdout());
     let _ = clear_received_kitty_graphics(&mut io::stdout());
 
     // Reset modifyOtherKeys if we enabled it.
@@ -815,6 +866,18 @@ impl TerminalGuard {
         std::mem::take(&mut self.buffered_host_input)
     }
 
+    /// The host pointer override. Writes stop once restoration has started.
+    pub(super) fn sync_host_pointer(
+        &self,
+        writer: &mut impl io::Write,
+        desired: Option<super::host_pointer::HostPointerShape>,
+    ) -> io::Result<()> {
+        if self.restore_claimed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.host_pointer.sync(writer, desired)
+    }
+
     /// Re-sends the keyboard and input modes enabled at setup. A host that
     /// reset its terminal state (a reconnect or window reload) forgets them,
     /// which turns Shift+Enter and Ctrl+Enter into plain Enter.
@@ -859,6 +922,7 @@ impl TerminalGuard {
         let reset_keyboard_enhancements = self.reset_keyboard_enhancements;
         let reset_modify_other_keys = self.reset_modify_other_keys;
         let reset_host_color_scheme_reports = self.reset_host_color_scheme_reports;
+        let host_pointer = self.host_pointer.restorer();
         #[cfg(windows)]
         let restore_windows_input_mode = self.restore_windows_input_mode.clone();
         move || {
@@ -867,6 +931,7 @@ impl TerminalGuard {
                 reset_keyboard_enhancements,
                 reset_modify_other_keys,
                 reset_host_color_scheme_reports,
+                &host_pointer,
                 #[cfg(windows)]
                 &restore_windows_input_mode,
             );
@@ -880,6 +945,7 @@ impl TerminalGuard {
             self.reset_keyboard_enhancements,
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
+            &self.host_pointer.restorer(),
             #[cfg(windows)]
             &self.restore_windows_input_mode,
         )
@@ -894,6 +960,7 @@ impl Drop for TerminalGuard {
                 self.reset_keyboard_enhancements,
                 self.reset_modify_other_keys,
                 self.reset_host_color_scheme_reports,
+                &self.host_pointer.restorer(),
                 #[cfg(windows)]
                 &self.restore_windows_input_mode,
             );
@@ -978,6 +1045,7 @@ mod tests {
             reset_modify_other_keys: modify_other_keys_sequence.is_some(),
             modify_other_keys_sequence,
             reset_host_color_scheme_reports: false,
+            host_pointer: HostPointer::new(HostPointerSupport::default()),
             restore_claimed: Arc::new(AtomicBool::new(false)),
             // Keep Drop from writing restore sequences to the test's stdout.
             restored: true,
@@ -1206,6 +1274,85 @@ mod tests {
 
         assert!(host_escape_disambiguation_confirmed(&responses));
         assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(true));
+        assert_eq!(buffered, opaque);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_pointer_query_precedes_device_attributes_and_skips_direct_attach() {
+        let full = host_capability_query(true);
+        let pointer = full
+            .windows(super::super::host_pointer::SUPPORT_QUERY.len())
+            .position(|window| window == super::super::host_pointer::SUPPORT_QUERY)
+            .expect("pointer support query");
+        assert!(full.ends_with(b"\x1b[c"));
+        assert!(pointer < full.len() - 3);
+
+        let direct = host_capability_query(false);
+        assert_eq!(direct, b"\x1b[?1016$p\x1b[c");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_pointer_probe_drains_fragmented_replies_with_either_terminator() {
+        for reply in [
+            b"\x1b]22;1,0,1,1,1\x1b\\".as_slice(),
+            b"\x1b]22;1,0,1,1,1\x07",
+        ] {
+            let stream = [b"before".as_slice(), reply, b"-\x1b[?1;2cafter"].concat();
+            for split in 1..stream.len() {
+                let mut buffered = stream[..split].to_vec();
+                let mut responses = HostKeyboardProbeResponses::default();
+                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+                buffered.extend_from_slice(&stream[split..]);
+                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+                assert_eq!(
+                    host_terminal_probe(&responses).pointer_shapes,
+                    HostPointerSupport::from_reply(b"1,0,1,1,1").unwrap(),
+                    "split {split}"
+                );
+                assert_eq!(buffered, b"before-after", "split {split}");
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_pointer_probe_without_a_reply_disables_pointer_shapes() {
+        let mut buffered = b"\x1b[?7u\x1b[?1;2c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+        assert_eq!(
+            host_terminal_probe(&responses).pointer_shapes,
+            HostPointerSupport::default()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_pointer_probe_ignores_a_reply_after_device_attributes_but_never_leaks_it() {
+        let mut buffered = b"\x1b[?1;2c\x1b]22;1,1,1,1,1\x1b\\input".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+        assert_eq!(
+            host_terminal_probe(&responses).pointer_shapes,
+            HostPointerSupport::default()
+        );
+        assert_eq!(buffered, b"input");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_pointer_probe_preserves_osc_22_strings_that_are_not_its_reply() {
+        let opaque = b"a\x1b]22;pointer\x1b\\b\x1b]22;1,1\x07c";
+        let mut buffered = [opaque.as_slice(), b"\x1b[?1;2c"].concat();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+        assert_eq!(responses.pointer_shapes, None);
         assert_eq!(buffered, opaque);
     }
 

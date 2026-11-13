@@ -48,6 +48,8 @@ cli_params! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct InstalledPluginInfo {
     pub plugin_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<String>,
     pub name: String,
     pub version: String,
     #[serde(default)]
@@ -289,7 +291,17 @@ pub struct PluginManifestPane {
     pub height: Option<PopupSize>,
     #[serde(default)]
     pub hide_on_blur: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buttons: Vec<PluginManifestButton>,
     pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PluginManifestButton {
+    pub id: String,
+    pub icon: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -1000,6 +1000,11 @@ pub(crate) struct ClientShellState {
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
+    /// The last cell the host reported the pointer at, and whether a button is held there.
+    /// The host pointer shape is recomputed from these when the screen changes under a
+    /// stationary pointer.
+    pub(super) pointer_position: Option<(u16, u16)>,
+    pub(super) pointer_held: bool,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
     pub(super) pane_rearrangement_drag: Option<super::rearrangement::ClientPaneRearrangementDrag>,
     pub(super) swallow_pane_rearrangement_left_up: bool,
@@ -1181,6 +1186,8 @@ impl ClientShellState {
             overlay,
             previous_pane_id: None,
             pane_mouse_gesture: None,
+            pointer_position: None,
+            pointer_held: false,
             link_hover: None,
             pane_rearrangement_drag: None,
             swallow_pane_rearrangement_left_up: false,
@@ -1665,6 +1672,7 @@ impl ClientShellState {
                         self.overlay = Some(ClientShellOverlay::ProductAnnouncement(
                             product_announcement_state(announcement),
                         ));
+                        self.floats.cancel_button_press();
                     }
                 }
                 None if matches!(
@@ -1691,6 +1699,7 @@ impl ClientShellState {
                     self.overlay =
                         Some(ClientShellOverlay::ReleaseNotes(release_notes_state(notes)));
                     self.chrome_drag = None;
+                    self.floats.cancel_button_press();
                 }
                 None => {
                     self.overlay = None;
@@ -1819,6 +1828,7 @@ impl ClientShellState {
                     .startup_onboarding
                     .then_some(ClientShellOverlay::Onboarding);
             }
+            self.floats.cancel_button_press();
             self.selection = None;
             self.last_pane_click = None;
             self.selection_autoscroll = None;

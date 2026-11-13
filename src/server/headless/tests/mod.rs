@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(windows)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 mod event_fairness;
 #[path = "float_graphics.rs"]
@@ -75,6 +77,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     );
 
     app.state.default_shell = crate::app::exiting_test_command().into();
+    app.state.server_boot_id = "test-boot".into();
     let dir = std::env::temp_dir().join(format!(
         "hh-{}-{}",
         std::process::id(),

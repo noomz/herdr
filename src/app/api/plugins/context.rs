@@ -389,7 +389,7 @@ impl App {
     }
 }
 
-fn empty_plugin_context(correlation_id: &str) -> PluginInvocationContext {
+pub(super) fn empty_plugin_context(correlation_id: &str) -> PluginInvocationContext {
     PluginInvocationContext {
         workspace_id: None,
         workspace_label: None,

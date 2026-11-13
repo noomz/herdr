@@ -694,6 +694,7 @@ mod tests {
             format!("example.{name}"),
             crate::api::schema::InstalledPluginInfo {
                 plugin_id: format!("example.{name}"),
+                installation_id: None,
                 name: name.into(),
                 version: "0.1.0".into(),
                 min_herdr_version: "0.7.0".into(),

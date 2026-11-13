@@ -1,9 +1,10 @@
 use crate::api::schema::{
-    InstalledPluginInfo, PluginManifestAction, PluginManifestBuild, PluginManifestEventHook,
-    PluginManifestLinkHandler, PluginManifestPane, PluginManifestStartup, PluginPanePlacement,
-    PluginPlatform, PluginSourceInfo, PluginSourceKind,
+    InstalledPluginInfo, PluginManifestAction, PluginManifestBuild, PluginManifestButton,
+    PluginManifestEventHook, PluginManifestLinkHandler, PluginManifestPane, PluginManifestStartup,
+    PluginPanePlacement, PluginPlatform, PluginSourceInfo, PluginSourceKind,
 };
 use crate::popup_size::PopupSize;
+use crate::protocol::endpoint::valid_button_icon;
 
 const PLUGIN_ID_MAX_CHARS: usize = 120;
 const PLUGIN_ACTION_ID_MAX_CHARS: usize = 120;
@@ -84,6 +85,8 @@ struct RawPluginManifestPane {
     height: Option<PopupSize>,
     #[serde(default)]
     hide_on_blur: bool,
+    #[serde(default)]
+    buttons: Vec<PluginManifestButton>,
     command: Vec<String>,
 }
 
@@ -191,6 +194,7 @@ pub(crate) fn load_plugin_manifest(
         .map(normalize_manifest_pane)
         .collect::<Result<Vec<_>, _>>()?;
     reject_duplicate_pane_ids(&panes)?;
+    validate_pane_buttons(&plugin_id, &panes, &actions)?;
     panes.sort_by(|a, b| a.id.cmp(&b.id));
     let link_handlers = raw
         .link_handlers
@@ -207,6 +211,7 @@ pub(crate) fn load_plugin_manifest(
 
     Ok(InstalledPluginInfo {
         plugin_id,
+        installation_id: None,
         name,
         version,
         min_herdr_version,
@@ -371,6 +376,44 @@ fn reject_duplicate_link_handler_ids(
     Ok(())
 }
 
+fn validate_pane_buttons(
+    plugin_id: &str,
+    panes: &[PluginManifestPane],
+    actions: &[PluginManifestAction],
+) -> Result<(), (&'static str, String)> {
+    for pane in panes {
+        let mut seen = std::collections::HashSet::new();
+        for (index, button) in pane.buttons.iter().enumerate() {
+            let location = format!("plugin '{plugin_id}', pane '{}', button {index}", pane.id);
+            if normalize_action_id(&button.id).as_deref() != Some(&button.id) {
+                return Err((
+                    "invalid_plugin_button_id",
+                    format!("{location}: invalid id '{}'", button.id),
+                ));
+            }
+            if !seen.insert(&button.id) {
+                return Err((
+                    "duplicate_plugin_button_id",
+                    format!("{location}: duplicate id '{}'", button.id),
+                ));
+            }
+            if !valid_button_icon(&button.icon) {
+                return Err(("invalid_plugin_button_icon", format!("{location} ('{}'): icon must be one visible grapheme of width one or two without controls or format characters", button.id)));
+            }
+            if !actions.iter().any(|action| action.id == button.action) {
+                return Err((
+                    "invalid_plugin_button_action",
+                    format!(
+                        "{location} ('{}'): unknown action '{}'",
+                        button.id, button.action
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_link_handler_actions(
     handlers: &[PluginManifestLinkHandler],
     actions: &[PluginManifestAction],
@@ -456,6 +499,7 @@ fn normalize_manifest_pane(
         width: pane.width,
         height: pane.height,
         hide_on_blur: pane.hide_on_blur,
+        buttons: pane.buttons,
         command,
     })
 }
@@ -625,4 +669,128 @@ fn normalize_local_identifier(value: &str, max_chars: usize) -> Option<String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')))
     .then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod button_tests {
+    use super::*;
+
+    #[test]
+    fn button_icon_accepts_visible_graphemes_only() {
+        for icon in ["x", "界", "e\u{301}", "\u{1f980}", "a\u{301}\u{323}"] {
+            assert!(valid_button_icon(icon), "{icon:?}");
+        }
+        for icon in [
+            "",
+            "xy",
+            " ",
+            "\t",
+            "\n",
+            "\r\n",
+            "\x1b",
+            "\x1b[31m",
+            "\u{7f}",
+            "\u{9b}",
+            "\u{feff}",
+            "\u{301}",
+            "x\u{fe0f}",
+            "x\u{e0100}",
+            "x\u{200d}",
+            "x\u{200e}",
+            "\u{1f468}\u{200d}\u{1f469}",
+            "\u{200b}",
+        ] {
+            assert!(!valid_button_icon(icon), "{icon:?}");
+        }
+    }
+
+    #[test]
+    fn button_manifest_requires_valid_unique_ids_and_known_actions() {
+        let pane = RawPluginManifestPane {
+            id: "shell".into(),
+            title: "Shell".into(),
+            description: None,
+            platforms: None,
+            placement: PluginPanePlacement::Float,
+            width: None,
+            height: None,
+            hide_on_blur: false,
+            command: vec!["shell".into()],
+            buttons: vec![
+                PluginManifestButton {
+                    id: "close".into(),
+                    icon: "x".into(),
+                    action: "hide".into(),
+                },
+                PluginManifestButton {
+                    id: "other".into(),
+                    icon: "界".into(),
+                    action: "hide".into(),
+                },
+            ],
+        };
+        let mut pane = normalize_manifest_pane(pane).expect("pane");
+        let action = normalize_manifest_action(RawPluginManifestAction {
+            id: "hide".into(),
+            title: "Hide".into(),
+            description: None,
+            contexts: vec![],
+            platforms: None,
+            command: vec!["hide".into()],
+        })
+        .expect("action");
+        assert!(validate_pane_buttons(
+            "plugin",
+            std::slice::from_ref(&pane),
+            std::slice::from_ref(&action)
+        )
+        .is_ok());
+        pane.buttons[1].id = "close".into();
+        assert_eq!(
+            validate_pane_buttons(
+                "plugin",
+                std::slice::from_ref(&pane),
+                std::slice::from_ref(&action)
+            )
+            .unwrap_err()
+            .0,
+            "duplicate_plugin_button_id"
+        );
+        pane.buttons[1].id = "other".into();
+        pane.buttons[1].action = "missing".into();
+        let error = validate_pane_buttons(
+            "plugin",
+            std::slice::from_ref(&pane),
+            std::slice::from_ref(&action),
+        )
+        .unwrap_err();
+        assert_eq!(error.0, "invalid_plugin_button_action");
+        assert!(error.1.contains("missing"));
+        pane.buttons[1].action = "hide".into();
+        for id in ["Bad Id", "a.b", ""] {
+            pane.buttons[1].id = id.into();
+            let error = validate_pane_buttons(
+                "plugin",
+                std::slice::from_ref(&pane),
+                std::slice::from_ref(&action),
+            )
+            .unwrap_err();
+            assert_eq!(error.0, "invalid_plugin_button_id", "{id:?}");
+            assert!(
+                error.1.contains("plugin 'plugin'")
+                    && error.1.contains("pane 'shell'")
+                    && error.1.contains("button 1"),
+                "{}",
+                error.1
+            );
+        }
+        pane.buttons[1].id = "other".into();
+        pane.buttons[1].icon = "\u{1b}".into();
+        assert_eq!(
+            validate_pane_buttons("plugin", &[pane], &[action])
+                .unwrap_err()
+                .0,
+            "invalid_plugin_button_icon"
+        );
+    }
 }

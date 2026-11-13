@@ -266,6 +266,10 @@ mod tests {
             actual.remove("float.raise").as_deref(),
             Some("a80f294e073aa8066a851a825df47ac9905022897240287c9f83cf361cf73728")
         );
+        assert_eq!(
+            actual.remove("float.button.invoke").as_deref(),
+            Some("4e63811c6016e1617e8cf6a9615078f7795460b4f1a109eea1d6c6e3c7aa7bf2")
+        );
 
         for (method, expected_digest) in &expected {
             assert_eq!(

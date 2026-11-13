@@ -468,8 +468,8 @@ impl ClientShellState {
     ) {
         use crate::api::schema::{
             Method, PaneInputSetParams, PaneMoveDestination, PaneMoveParams, PaneRenameParams,
-            PaneRightClickTarget, PaneSplitParams, PaneSwapParams, PaneTarget, PaneZoomMode,
-            PaneZoomParams, SplitDirection,
+            PaneRightClickTarget, PaneSplitParams, PaneSwapParams, PaneZoomMode, PaneZoomParams,
+            SplitDirection,
         };
 
         if matches!(

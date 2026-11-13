@@ -41,6 +41,7 @@ impl HeadlessServer {
                 client.host_keyboard_report_all_active = None;
                 if client.shell_floats.is_some() {
                     client.shell_floats = Some(Default::default());
+                    client.shell_float_buttons = None;
                 }
             }
             client.clear_deferred_render();
