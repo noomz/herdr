@@ -35,6 +35,7 @@ The exact manifest syntax, action invocation context, protocol negotiation, and 
 7. Button hit testing follows visible stacking order and matches rendered button positions, including narrow floats and truncated titles.
 8. Existing `endpoint.floats.v1` clients and servers continue to interoperate. Require positive support for both button metadata and target-aware action invocation. If either is absent, disable buttons without breaking the float or invoking an untargeted action. Clear any separate metadata on endpoint replacement or server restart.
 9. A failed or unavailable button action does not close the client or trigger a different button action.
+10. After a timed-out button invocation settles with a late response, the client accepts new actions without waiting for an unrelated snapshot change or a reconnect. It never retries or replays the timed-out action.
 
 ## Tasks
 
@@ -47,6 +48,13 @@ The exact manifest syntax, action invocation context, protocol negotiation, and 
 | T5 | x | Configure the tabshell close button to hide its float. | 1, 4 |
 | T6 | x | Verify manifest validation, protocol compatibility, action routing, pointer transitions, and the live tabshell interaction. Cover old and new client-server combinations, partial capability support, two plugins with identical action IDs, multiple workspaces, live handoff, and unavailable plugins. Exercise button press cancellation, disappearing floats, non-left buttons, narrow titles, and wide, combining, and control characters. | 1-9 |
 | T7 | x | Close the T6 review gaps before merging noomz/herdr#4. On `feat/float-title-buttons`, run the remaining `just test` scripts (maintenance, ui-hot-path-architecture, integration-assets, docs-contract) and `just bench-render-scale`. Run an old-client/new-server pair and a new-client/old-server pair. Exercise a late asynchronous button failure, a timeout, and a disconnect end to end through the client. Verify that typing reaches the float after reopen and after live handoff. The harness is in `.local/float-controls/`. | 3, 6, 8, 9 |
+| T8 | pending | Clear the client's post-timeout quarantine when a late `float.button.invoke` response settles, since the invocation changes no snapshot. Add a client test, and extend `live_failures.py` section C to require that a click after the late response runs. See B1. | 9, 10 |
+
+## Bugs
+
+| ID | Date | Cause | Fix |
+| --- | --- | --- | --- |
+| B1 | 2026-11-13 | Found in T7. A timed-out `float.button.invoke` quarantines the client. The quarantine clears only after the late response settles and a newer snapshot revision arrives (`src/client/shell/state.rs`, from the pane-rearrangement branch). A button invocation changes no snapshot, so buttons and other endpoint actions stay blocked until an unrelated state change or a reconnect. | V10, T8 |
 
 ## Open design questions
 
