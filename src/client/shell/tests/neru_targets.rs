@@ -10,6 +10,10 @@ fn shell() -> ClientShellState {
     tab.label = "logs".into();
     tab.custom_label = true;
     tab.focused = false;
+    projected.tabs.push(tab.clone());
+    tab.tab_id = "tab_3".into();
+    tab.number = 3;
+    tab.label = "日本".into();
     projected.tabs.push(tab);
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(projected));
@@ -56,7 +60,8 @@ fn base_chrome_targets_carry_drawn_titles_in_dispatch_order() {
             "new tab",
             "○ client-shell main",
             "1",
-            "logs"
+            "logs",
+            "日本"
         ]
     );
 }

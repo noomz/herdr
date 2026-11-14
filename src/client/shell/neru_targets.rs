@@ -57,6 +57,7 @@ pub(super) struct NeruLayerState {
     pub(super) toast_clickable: bool,
     pub(super) mobile: NeruMobile,
     pub(super) retryable_machines: Vec<ClientEndpointId>,
+    pub(super) collapsed_machines: Vec<ClientEndpointId>,
 }
 
 /// A control a left click at the center of `rect` reaches, in grid cells.
@@ -109,7 +110,7 @@ pub(super) fn collect(
         claims.block(float.outer);
     }
     match state.mobile {
-        NeruMobile::Off => collect_base(&mut claims, hits),
+        NeruMobile::Off => collect_base(&mut claims, hits, state),
         NeruMobile::Switch => claims.target(hits.mobile_switch, || "switch workspace".into()),
         NeruMobile::Switcher => {
             claims.target(hits.mobile_close, || "close".into());
@@ -177,7 +178,7 @@ fn collect_overlay(claims: &mut Claims, hits: &ShellHitMap, overlay: NeruOverlay
 }
 
 /// Base chrome in the order of the left-press branch of `handle_mouse` (`mouse.rs`).
-fn collect_base(claims: &mut Claims, hits: &ShellHitMap) {
+fn collect_base(claims: &mut Claims, hits: &ShellHitMap, state: &NeruLayerState) {
     claims.target(hits.sidebar_toggle, || "toggle sidebar".into());
     claims.block(hits.sidebar_divider);
     claims.block(hits.sidebar_section_divider);
@@ -186,7 +187,12 @@ fn collect_base(claims: &mut Claims, hits: &ShellHitMap) {
     claims.target(hits.agent_sort_toggle, || "sort agents".into());
     for machine in &hits.machines {
         let name = claims.title_of(machine.rect, "machine");
-        claims.target(machine.collapse_toggle, || format!("toggle {name}"));
+        let verb = if state.collapsed_machines.contains(&machine.endpoint_id) {
+            "expand"
+        } else {
+            "collapse"
+        };
+        claims.target(machine.collapse_toggle, || format!("{verb} {name}"));
         claims.target(machine.rect, || name.clone());
     }
     claims.target(hits.global_launcher, || "menu".into());
@@ -254,10 +260,15 @@ fn frame_text(frame: &FrameData, rect: Rect) -> String {
     let width = usize::from(frame.width);
     let mut text = String::new();
     for y in rect.y..rect.bottom().min(frame.height) {
-        for x in rect.x..rect.right().min(frame.width) {
-            if let Some(cell) = frame.cells.get(usize::from(y) * width + usize::from(x)) {
-                text.push_str(&cell.symbol);
-            }
+        // A wide grapheme fills the cells after it with blanks; skip them so `日本` stays whole.
+        let mut x = rect.x;
+        while x < rect.right().min(frame.width) {
+            let Some(cell) = frame.cells.get(usize::from(y) * width + usize::from(x)) else {
+                break;
+            };
+            text.push_str(&cell.symbol);
+            let cells = u16::try_from(cell.symbol.width()).unwrap_or(1).max(1);
+            x = x.saturating_add(cells);
         }
         text.push(' ');
     }
@@ -581,6 +592,7 @@ impl ClientShellState {
                 .filter(|endpoint| machine_diagnostics::machine_retryable(endpoint))
                 .map(|endpoint| endpoint.endpoint_id.clone())
                 .collect(),
+            collapsed_machines: self.collapsed_endpoints.iter().cloned().collect(),
         }
     }
 }
@@ -597,6 +609,7 @@ mod tests {
             toast_clickable: false,
             mobile: NeruMobile::Off,
             retryable_machines: Vec::new(),
+            collapsed_machines: Vec::new(),
         }
     }
 
@@ -744,10 +757,9 @@ mod tests {
         }
         hits.labels.insert(rect(0, 0, 20, 1), "local".into());
         hits.labels.insert(rect(0, 1, 20, 1), "devbox".into());
-        hits.labels
-            .insert(rect(0, 0, 1, 1), "collapse local".into());
         let state = NeruLayerState {
-            retryable_machines: vec![remote],
+            retryable_machines: vec![remote.clone()],
+            collapsed_machines: vec![remote],
             ..base()
         };
 
@@ -759,7 +771,7 @@ mod tests {
                 "retry devbox",
                 "collapse local",
                 "local",
-                "toggle devbox",
+                "expand devbox",
                 "devbox"
             ]
         );
