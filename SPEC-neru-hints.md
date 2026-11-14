@@ -45,6 +45,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 11. A target whose center is outside every display is not sent.
 12. Restoring mouse modes re-sends the full mode set the client needs (any-motion, SGR, and pixel mode only if a pane requests it). It never sends `?1016l` alone, because in kitty that also resets the report encoding to legacy X10.
 13. A target that contains child targets (a workspace row with its group toggle, a machine row with its collapse toggle or retryable status badge) is sent as the widest run of its cells that no child covers, and is dropped when no cell is left. Its center never lands on a child.
+14. While calibration runs, the client swallows every host mouse report, from the moment it turns on pixel reporting until the report from the warp back has arrived or timed out. This includes reports queued before the first warp. None reaches `ClientShell::handle_mouse` or a pane, so calibration warps change no hover state and send no mouse events to pane apps. Only the calibrator reads them.
 
 ## Tasks
 
@@ -54,8 +55,8 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T2 | x | Design and document the target list: which hit-map entries become targets, their titles, how overlays and floats stack, and the size limit. Write the config keys and the unavailable-case messages. | 1, 3, 7 |
 | T3 | x | Implement the pure conversion from hit map and calibration to targets JSON. Unit-test it with fixed hit maps, cell sizes, origins and scales. | 1, 2, 3, 9, 11, 13 |
 | T4 | ~ | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
-| T5 | | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7 |
-| T6 | | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-12 |
+| T5 | | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
+| T6 | | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
 
 ## Bugs
 
