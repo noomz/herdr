@@ -24,7 +24,7 @@ Background, measurements and rejected approaches are in `docs/design/neru-hints/
 - External command: herdr starts neru as a child process and writes the targets JSON to its stdin, `neru hints --targets -`. The neru binary path is configurable; the default is `neru` on `PATH`.
 - Targets JSON: neru's documented shape, `{"hints":[{"x","y","width","height","title"}]}`, in global top-left screen points.
 - Calibration: move and observe with SGR pixel reports, chosen in T1 (research note, "Calibration measurements", Decision). herdr turns on any-motion SGR pixel reporting, warps the pointer with `neru action move_mouse` to a point inside `neru query window` (window center first, then a 3 × 3 grid until one point reports), then to a second point 40 pt away. The two pixel reports give the scale and the grid origin. herdr then moves the pointer back and restores its mouse modes. It needs no config values.
-- Other neru commands used: `neru query window --json`, `neru query cursor --json`, `neru action move_mouse --x --y`.
+- Other neru commands used: `neru query window --json`, `neru query cursor --json`, `neru query displays --json`, `neru action move_mouse --x --y`. herdr reads only display rectangles from `query displays`, never its scale (§V.9). They tell a moved pointer from a window on a display neru cannot reach (§V.10), and they drop off-screen targets (§V.11).
 
 - Config keys: `keys.neru_hints` (binding, default `prefix+f`) runs the action. `neru.path` (default `"neru"`) names the neru binary.
 
@@ -53,7 +53,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T1 | x | Prototype calibration outside herdr. A script maps one known cell to screen points with each candidate method, then clicks it with `neru action move_mouse` and `left_click`. Measure the error in kitty and Ghostty, at scale 1 and 2, with and without the host tab bar and kitty splits. Record the results in the research note and pick a method. | 2, 4 |
 | T2 | x | Design and document the target list: which hit-map entries become targets, their titles, how overlays and floats stack, and the size limit. Write the config keys and the unavailable-case messages. | 1, 3, 7 |
 | T3 | x | Implement the pure conversion from hit map and calibration to targets JSON. Unit-test it with fixed hit maps, cell sizes, origins and scales. | 1, 2, 3, 9, 11, 13 |
-| T4 | | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
+| T4 | ~ | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
 | T5 | | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7 |
 | T6 | | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-12 |
 
