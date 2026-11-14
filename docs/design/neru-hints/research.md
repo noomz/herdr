@@ -348,7 +348,7 @@ Setup: herdr `b52744c8` release build, neru v1.62.0, built-in Retina display onl
 | Group collapse, then expand | pass | pass | 2, 13 |
 | Sidebar toggle `«`, collapse and back | pass | not sent: off-screen, see below | 2, 11 |
 | Narrow layout "switch workspace" button (kitty vertical split, 59 columns) | pass | | 1, 2 |
-| Menu row | fail before T7 (finding 1). After T7: pass. With the global menu open, `ctrl+b f` sent 5 targets (`menu` plus the 4 rows), the menu stayed open, and a click at the `keybinds` row center opened the keybinds help | not run | 1, 2, 15 |
+| Menu row | fail before T7 (finding 1). After T7: pass. With the global menu open, `ctrl+b f` sent 5 targets (`menu` plus the 4 rows), the menu stayed open, and a click at the `keybinds` row center opened the keybinds help | after T7, at scale 1: pass (same 5 targets; the `keybinds` row opened help) | 1, 2, 15 |
 | Float button | not run: needs a plugin float | not run | 1, 2 |
 | Real neru label pick | pass (`KA` → workspace alpha) | pass (`G` → tab t3) | 2 |
 | Titles are visible text | pass | pass | 3 |
@@ -360,8 +360,10 @@ Setup: herdr `b52744c8` release build, neru v1.62.0, built-in Retina display onl
 | Redraw between send and pick (workspace switched by the API while labels were up) | pass: the click landed on the empty tab-bar cell now under the label; nothing broke | | 5 |
 | Window taller than the display | Ghostty window ran 43 pt below the 1117 pt screen; the `«` row is off-screen and was not sent | | 11 |
 | SSH client | not run: localhost has no key login set up | | 7 |
-| Scale 1 | not run: the scale-1 display (MateView) is not attached | | 2, 9 |
-| Host window on a second display | not run: no second display attached | | 8, 10 |
+| Scale 1 (virtual display, see below) | pass: workspace rows, tabs `t1` and `t5`, `+` (new-tab dialog), sidebar toggle both ways, menu launcher, menu row; 38 targets; calibration took 2 warps | pass: workspace rows, tab `t2`, `+` (new-tab dialog), sidebar toggle both ways, menu launcher, menu row; 40 targets | 2, 9 |
+| Host window on a second display | pass, both ways. Window on the virtual display, pointer on the built-in display: "Calibration failed: neru cannot move the pointer to this window's display." Window on the built-in display, pointer on the virtual display: the same calls and result, but no notice was shown (finding 5). In both cases neru was not started and the pointer returned to its start point | | 8, 10 |
+
+Scale-1 and second-display runs (after T7, `0e6af18c`): no scale-1 monitor was attached, so a helper made a 1920 × 1080 virtual display at scale 1 (`CGVirtualDisplay`, `hiDPI = 0`) to the right of the built-in display. `neru query displays` listed it at (1728, 0). AeroSpace placed the test window on it (`move-node-to-monitor`), and `CGWarpMouseCursorPosition` put the pointer on it, because `neru action move_mouse` does not cross displays (finding 12). Ghostty took keys from System Events; its results were read from screenshots and the herdr API.
 
 Calibration costs: 2 warps plus the restore warp when the window center reports, 4 in the split cases. Each neru call took about 220 ms through the logging wrapper, so a full run took about 2 s; without the wrapper's Python timestamp it is shorter.
 
@@ -371,3 +373,5 @@ Calibration costs: 2 warps plus the restore warp when the window center reports,
 2. **`[neru]` is not live-reloaded.** `herdr server reload-config` and the client's reload apply `[keys]` and `[ui]` (`ClientShellConfig::apply_live_config`), not `neru.path`. A changed path takes effect only in a new client. Design note section 7 does not say which is intended.
 3. **Collapsed-sidebar titles are terse and repeat.** With the sidebar collapsed, the visible text of workspace rows is a number and a dot, so titles are `1·`, `2·`, `▾L`, and `1·` appears three times. This meets §V.3 as written, but neru's search mode cannot tell those targets apart.
 4. **Each new client opens on the onboarding overlay** in a fresh config dir, and the overlay takes `prefix+f` (finding 1). This affects only first runs.
+5. **A repeated failure reason is not reported again.** `show_neru_notice` (`src/client/shell/neru_session.rs`) goes through `push_endpoint_notice` with kind `Unavailable`, which shows each code only once per server boot (`endpoint_notice_seen`, `src/client/shell/actions.rs`). The code is `neru_hints:<message>`, so a second press that fails for the same reason (missing neru, calibration failure) shows nothing. §V.4 and §V.7 say herdr reports why each time. Seen in the second-display run: the second case failed with the same reason as the first and showed no notice.
+6. **Tiling window managers with focus-follows-mouse** (AeroSpace here, 150 ms delay) can move focus to the window under a pointer that starts on another display. `neru query window` then names that window, no calibration point reports, and herdr fails with "the terminal sent no mouse report". This is correct (§V.4). It affects only test harnesses: a person pressing the key has focus on the herdr window.
