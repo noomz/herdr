@@ -348,7 +348,7 @@ Setup: herdr `b52744c8` release build, neru v1.62.0, built-in Retina display onl
 | Group collapse, then expand | pass | pass | 2, 13 |
 | Sidebar toggle `«`, collapse and back | pass | not sent: off-screen, see below | 2, 11 |
 | Narrow layout "switch workspace" button (kitty vertical split, 59 columns) | pass | | 1, 2 |
-| Menu row | **fail**: see finding 1 | not run (same cause) | 1, 2 |
+| Menu row | fail before T7 (finding 1). After T7: pass. With the global menu open, `ctrl+b f` sent 5 targets (`menu` plus the 4 rows), the menu stayed open, and a click at the `keybinds` row center opened the keybinds help | not run | 1, 2, 15 |
 | Float button | not run: needs a plugin float | not run | 1, 2 |
 | Real neru label pick | pass (`KA` → workspace alpha) | pass (`G` → tab t3) | 2 |
 | Titles are visible text | pass | pass | 3 |
@@ -367,7 +367,7 @@ Calibration costs: 2 warps plus the restore warp when the window center reports,
 
 ### Findings
 
-1. **Menu rows cannot become targets from the keybinding.** While any overlay is open, `ClientShell::route_key_press` (`src/client/shell/input.rs:653`) sends every key to `route_overlay_key`, so `prefix+f` never reaches the prefix table. Design note section 2 makes an open overlay's rows the only targets, but no key press can start the action while it is open. With the menu open, `ctrl+b f` started no neru call. Text-input overlays such as the new-tab dialog take the keys as text.
+1. **Menu rows cannot become targets from the keybinding.** While any overlay is open, `ClientShell::route_key_press` (`src/client/shell/input.rs:653`) sends every key to `route_overlay_key`, so `prefix+f` never reaches the prefix table. Design note section 2 makes an open overlay's rows the only targets, but no key press can start the action while it is open. With the menu open, `ctrl+b f` started no neru call. Text-input overlays such as the new-tab dialog take the keys as text. Fixed in T7 (§V.15): a `ContextMenu` or `GlobalMenu` lets `keys.neru_hints` through before `route_overlay_key`.
 2. **`[neru]` is not live-reloaded.** `herdr server reload-config` and the client's reload apply `[keys]` and `[ui]` (`ClientShellConfig::apply_live_config`), not `neru.path`. A changed path takes effect only in a new client. Design note section 7 does not say which is intended.
 3. **Collapsed-sidebar titles are terse and repeat.** With the sidebar collapsed, the visible text of workspace rows is a number and a dot, so titles are `1·`, `2·`, `▾L`, and `1·` appears three times. This meets §V.3 as written, but neru's search mode cannot tell those targets apart.
 4. **Each new client opens on the onboarding overlay** in a fresh config dir, and the overlay takes `prefix+f` (finding 1). This affects only first runs.

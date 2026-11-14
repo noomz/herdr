@@ -257,3 +257,101 @@ mod session {
         assert!(!state.take_neru_hints_request());
     }
 }
+
+mod menu_binding {
+    //! §V.15: an open menu lets `keys.neru_hints` through and stays open.
+    use super::*;
+    use crate::raw_input::RawInputEvent;
+
+    fn press(state: &mut ClientShellState, code: KeyCode, modifiers: KeyModifiers) {
+        state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            code, modifiers,
+        ))]);
+    }
+
+    fn prefix_then(state: &mut ClientShellState, code: KeyCode) {
+        press(state, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(state, code, KeyModifiers::empty());
+    }
+
+    fn open_menus() -> [(&'static str, ClientShellState); 2] {
+        let mut global = shell();
+        global.toggle_global_menu();
+        let mut context = shell();
+        context.open_tab_context_menu("tab_2".into(), 10, 3);
+        assert!(matches!(
+            context.overlay,
+            Some(ClientShellOverlay::ContextMenu(_))
+        ));
+        [("global", global), ("context", context)]
+    }
+
+    fn menu_open(state: &ClientShellState) -> bool {
+        matches!(
+            state.overlay,
+            Some(ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_))
+        )
+    }
+
+    #[test]
+    fn the_binding_runs_the_action_and_leaves_each_menu_open() {
+        for (name, mut state) in open_menus() {
+            press(&mut state, KeyCode::Char('b'), KeyModifiers::CONTROL);
+            assert_eq!(state.mode, ClientShellMode::Prefix, "{name}");
+            assert!(menu_open(&state), "{name}: prefix keeps the menu");
+
+            press(&mut state, KeyCode::Char('f'), KeyModifiers::empty());
+
+            assert!(state.take_neru_hints_request(), "{name}");
+            assert!(menu_open(&state), "{name}: the action keeps the menu");
+            assert_eq!(state.mode, ClientShellMode::Terminal, "{name}");
+        }
+    }
+
+    #[test]
+    fn another_key_after_the_prefix_reaches_the_menu() {
+        for (name, mut state) in open_menus() {
+            prefix_then(&mut state, KeyCode::Down);
+
+            assert!(!state.take_neru_hints_request(), "{name}");
+            assert_eq!(state.mode, ClientShellMode::Terminal, "{name}");
+            let highlighted = match &state.overlay {
+                Some(ClientShellOverlay::GlobalMenu(menu)) => menu.highlighted,
+                Some(ClientShellOverlay::ContextMenu(menu)) => menu.highlighted,
+                other => panic!("{name}: menu closed: {other:?}"),
+            };
+            assert_eq!(
+                highlighted, 1,
+                "{name}: Down after the prefix moves the menu"
+            );
+
+            prefix_then(&mut state, KeyCode::Esc);
+            assert!(
+                !menu_open(&state),
+                "{name}: Esc after the prefix closes the menu"
+            );
+        }
+    }
+
+    #[test]
+    fn a_text_input_overlay_takes_the_binding_as_text() {
+        let mut state = shell();
+        state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            title: "rename pane",
+            input: TextEditor::new("", true),
+            target: ClientRenameTarget::Pane {
+                pane_id: "pane_1".into(),
+            },
+        }));
+
+        prefix_then(&mut state, KeyCode::Char('f'));
+
+        assert!(!state.take_neru_hints_request());
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::Rename(ClientRenameOverlay { ref input, .. }))
+                if input.as_str() == "f"
+        ));
+    }
+}
