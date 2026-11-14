@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Wire shape of `machine.show`. At most one target ID may be set; [`Self::parse`] turns it
-/// into a [`MachineShow`].
+/// At most one of `workspace_id`, `tab_id`, or `pane_id` may be set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MachineShowParams {
     /// Saved machine label or profile ID as the attached client knows it, or `local`.

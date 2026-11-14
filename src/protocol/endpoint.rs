@@ -65,7 +65,6 @@ pub struct EndpointClientHello {
     /// Accept the optional scroll-aware patch encoding on this connection.
     #[serde(default)]
     pub surface_scroll: bool,
-    /// Accept `endpoint.show-machine.v1` requests on this connection.
     #[serde(default)]
     pub show_machine: bool,
     #[serde(default)]

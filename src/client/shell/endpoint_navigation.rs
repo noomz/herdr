@@ -228,15 +228,13 @@ impl ClientShellState {
         false
     }
 
-    /// Shows a machine, and optionally one of its targets, on behalf of a plugin or script.
-    /// Only the local server or the machine already on screen may change the view.
     pub(crate) fn show_machine(
         &mut self,
         origin: &ClientEndpointId,
         request: crate::api::schema::MachineShow,
     ) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
-        if !origin.is_local() && origin != &self.active_endpoint_id {
+        if !self.may_change_view(origin) {
             return outcome;
         }
         let endpoint_id = match self.resolve_machine(&request.machine) {
@@ -260,7 +258,10 @@ impl ClientShellState {
         outcome
     }
 
-    /// Resolves `local`, a saved profile ID, or a unique saved label, like `--machine`.
+    fn may_change_view(&self, origin: &ClientEndpointId) -> bool {
+        origin.is_local() || origin == &self.active_endpoint_id
+    }
+
     fn resolve_machine(&self, machine: &str) -> Result<ClientEndpointId, String> {
         if machine == "local" {
             return Ok(ClientEndpointId::Local);

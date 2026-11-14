@@ -2355,7 +2355,7 @@
           "type": "object"
         },
         "MachineShowParams": {
-          "description": "Wire shape of `machine.show`. At most one target ID may be set; [`Self::parse`] turns it\ninto a [`MachineShow`].",
+          "description": "At most one of `workspace_id`, `tab_id`, or `pane_id` may be set.",
           "properties": {
             "machine": {
               "description": "Saved machine label or profile ID as the attached client knows it, or `local`.",
