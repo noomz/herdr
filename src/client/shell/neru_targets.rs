@@ -447,7 +447,7 @@ impl NeruScreenRect {
         (self.x + self.width / 2, self.y + self.height / 2)
     }
 
-    fn contains(&self, (x, y): (i32, i32)) -> bool {
+    pub(super) fn contains(&self, (x, y): (i32, i32)) -> bool {
         self.x <= x && x < self.x + self.width && self.y <= y && y < self.y + self.height
     }
 }

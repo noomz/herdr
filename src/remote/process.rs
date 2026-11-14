@@ -109,7 +109,7 @@ impl io::Write for CancellablePipe {
     }
 }
 
-pub(super) fn wait_with_output_timeout(
+pub(crate) fn wait_with_output_timeout(
     child: Child,
     input: Option<Vec<u8>>,
     timeout: Duration,

@@ -31,6 +31,8 @@ mod host_pointer;
 mod image_files;
 mod input;
 mod loop_config;
+#[cfg(not(windows))]
+mod neru_modes;
 mod notifications;
 mod shell;
 mod shell_runtime;

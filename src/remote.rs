@@ -10,6 +10,7 @@ mod ssh_agent;
 pub(crate) use args::*;
 pub(crate) use attach::*;
 pub(crate) use host::run_remote_client_bridge;
+pub(crate) use process::wait_with_output_timeout;
 pub(crate) use saved::*;
 
 pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {

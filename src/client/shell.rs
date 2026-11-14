@@ -25,6 +25,7 @@ mod input_source;
 mod link_hover;
 mod mobile;
 mod mouse;
+mod neru_calibration;
 mod neru_targets;
 mod notification_policy;
 mod notifications;

@@ -678,20 +678,28 @@ pub(super) fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<(
         }
     });
     #[cfg(not(windows))]
-    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
-    #[cfg(not(windows))]
+    write_mouse_capture(&mut io::stdout(), enabled, sgr_pixels)
+}
+
+/// Clears every host mouse mode, then sends the full set `enabled` and `sgr_pixels` need. A
+/// `?1016l` is always followed by the SGR enable, because kitty falls back to X10 reports
+/// after `?1016l` alone (SPEC-neru-hints.md §V.12).
+#[cfg(not(windows))]
+pub(super) fn write_mouse_capture<W: io::Write>(
+    writer: &mut W,
+    enabled: bool,
+    sgr_pixels: bool,
+) -> io::Result<()> {
+    crate::terminal_modes::clear_host_mouse_reporting(writer)?;
     if enabled {
-        execute!(io::stdout(), EnableMouseCapture)?;
+        execute!(writer, EnableMouseCapture)?;
         if sgr_pixels {
-            io::stdout().write_all(b"\x1b[?1016h")?;
-            io::stdout().flush()?;
+            writer.write_all(b"\x1b[?1016h")?;
+            writer.flush()?;
         }
         Ok(())
     } else {
-        match execute!(io::stdout(), DisableMouseCapture) {
-            Ok(()) => Ok(()),
-            Err(err) => Err(err),
-        }
+        execute!(writer, DisableMouseCapture)
     }
 }
 

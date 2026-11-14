@@ -1561,6 +1561,11 @@ impl SgrMouseReport {
             modifiers: self.modifiers,
         }
     }
+
+    /// Pointer motion with no button held, as a pointer warp produces.
+    pub(crate) fn is_plain_motion(&self) -> bool {
+        self.kind == MouseEventKind::Moved
+    }
 }
 
 pub(crate) fn parse_sgr_mouse_report(sequence: &[u8]) -> Option<SgrMouseReport> {
