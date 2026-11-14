@@ -4,8 +4,8 @@
 //! that a click at its target's center reaches now (§V.1, §V.2). [`to_targets`] turns those cell
 //! rectangles into neru's `--targets` JSON in global top-left screen points.
 
-// The client action (§T.5) is the first caller outside tests.
-#![cfg_attr(not(test), allow(dead_code))]
+// Only Unix clients build targets (`client::neru_hints`).
+#![cfg_attr(windows, allow(dead_code))]
 
 use super::*;
 use crate::client::terminal_geometry::ioctl_cell_size;

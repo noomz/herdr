@@ -179,14 +179,17 @@ pub(super) fn clear_endpoint_host_effects(
     };
     let sgr_pixels =
         super::effective_sgr_pixel_mouse(enabled, false, state.pixel_mouse_available());
-    if enabled != state.mouse_capture_active
-        || sgr_pixels != host_sgr_pixels_active.load(std::sync::atomic::Ordering::Acquire)
-    {
-        let _ = super::set_mouse_capture(enabled, sgr_pixels);
+    // While neru hints calibrates, it owns the modes and restores them from client state.
+    if !state.neru_calibrating {
+        if enabled != state.mouse_capture_active
+            || sgr_pixels != host_sgr_pixels_active.load(std::sync::atomic::Ordering::Acquire)
+        {
+            let _ = super::set_mouse_capture(enabled, sgr_pixels);
+        }
+        host_mouse_capture_active.store(enabled, std::sync::atomic::Ordering::Release);
+        host_sgr_pixels_active.store(sgr_pixels, std::sync::atomic::Ordering::Release);
     }
     state.mouse_capture_active = enabled;
-    host_mouse_capture_active.store(enabled, std::sync::atomic::Ordering::Release);
-    host_sgr_pixels_active.store(sgr_pixels, std::sync::atomic::Ordering::Release);
 
     state.pane_keyboard_report_all = false;
     let _ = sync_client_shell_keyboard_report_all(state);

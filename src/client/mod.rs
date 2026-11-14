@@ -31,6 +31,8 @@ mod host_pointer;
 mod image_files;
 mod input;
 mod loop_config;
+#[cfg(unix)]
+mod neru_hints;
 #[cfg(not(windows))]
 mod neru_modes;
 mod notifications;
@@ -496,6 +498,7 @@ async fn run_client_loop(
         remote_image_paste_key: config.remote_image_paste_key,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
+        neru_calibrating: false,
         presentation_frozen: false,
         deferred_local_activation: None,
         draw_host_cursor,
@@ -688,6 +691,8 @@ async fn run_client_loop(
     );
     #[cfg(windows)]
     let mut stdin_open = true;
+    #[cfg(unix)]
+    let mut neru_hints = neru_hints::NeruHints::default();
     while !should_quit.load(Ordering::Acquire) {
         if pending_activation.is_none() {
             if let Some(reload) = pending_catalog.take() {
@@ -788,6 +793,20 @@ async fn run_client_loop(
         if let Some(shell) = state.shell.as_mut() {
             for endpoint_id in shell.take_machine_retries() {
                 supervisors.retry_now(&endpoint_id, now);
+            }
+        }
+        if state
+            .shell
+            .as_mut()
+            .is_some_and(|shell| shell.take_neru_hints_request())
+        {
+            #[cfg(unix)]
+            neru_hints.start(&mut state, is_remote_client, &event_tx);
+            #[cfg(windows)]
+            if let Some(shell) = state.shell.as_mut() {
+                if shell.show_neru_notice("neru hints needs macOS.") {
+                    state.request_repaint();
+                }
             }
         }
         if let Some(shell) = state.shell.as_ref() {
@@ -910,7 +929,11 @@ async fn run_client_loop(
                             continue;
                         }
                     }
-                    let events = crate::raw_input::parse_framed_input(&data);
+                    let mut events = crate::raw_input::parse_framed_input(&data);
+                    if neru_hints.owns_mouse_reports() {
+                        // Calibration owns the host mouse (§V.14).
+                        events = neru_hints::without_mouse_reports(events);
+                    }
                     if events.iter().any(|event| {
                         matches!(
                             event,
@@ -923,10 +946,12 @@ async fn run_client_loop(
                         supervisors.user_activity(now);
                     }
                     if crate::raw_input::events_require_host_mode_refresh(&events) {
-                        refresh_host_mouse_capture(
-                            state.mouse_capture_active,
-                            host_sgr_pixels_active.load(Ordering::Acquire),
-                        );
+                        if !state.neru_calibrating {
+                            refresh_host_mouse_capture(
+                                state.mouse_capture_active,
+                                host_sgr_pixels_active.load(Ordering::Acquire),
+                            );
+                        }
                         refresh_host_keyboard_protocol(
                             _terminal_guard,
                             state.keyboard_report_all_active,
@@ -1124,6 +1149,9 @@ async fn run_client_loop(
             }
             #[cfg(unix)]
             ClientLoopEvent::PixelMouse(data, geometry) => {
+                if neru_hints.take_pixel_report(&data) {
+                    continue;
+                }
                 if state.shell.is_some() {
                     supervisors.user_activity(now);
                     let (outcome, frame) = {
@@ -1306,7 +1334,9 @@ async fn run_client_loop(
                 }
                 let pixel_mouse_available =
                     pixel_geometry_exact && state.host_sgr_pixel_mouse == Some(true);
-                if !pixel_mouse_available && host_sgr_pixels_active.load(Ordering::Acquire) {
+                if state.neru_calibrating {
+                    // Calibration restores the modes from client state when it ends.
+                } else if !pixel_mouse_available && host_sgr_pixels_active.load(Ordering::Acquire) {
                     set_mouse_capture(state.mouse_capture_active, false)
                         .map_err(ClientError::ConnectionFailed)?;
                     host_sgr_pixels_active.store(false, Ordering::Release);
@@ -2082,7 +2112,7 @@ async fn run_client_loop(
                                 .recover_windows_virtual_terminal_input()
                                 .map_err(ClientError::ConnectionFailed)?;
                         }
-                        if mouse_mode_changed {
+                        if mouse_mode_changed && !state.neru_calibrating {
                             set_mouse_capture(enabled, next_sgr_pixels)
                                 .map_err(ClientError::ConnectionFailed)?;
                         }
@@ -2093,8 +2123,10 @@ async fn run_client_loop(
                                 .map_err(ClientError::ConnectionFailed)?;
                         }
                         state.mouse_capture_active = enabled;
-                        host_mouse_capture_active.store(enabled, Ordering::Release);
-                        host_sgr_pixels_active.store(next_sgr_pixels, Ordering::Release);
+                        if !state.neru_calibrating {
+                            host_mouse_capture_active.store(enabled, Ordering::Release);
+                            host_sgr_pixels_active.store(next_sgr_pixels, Ordering::Release);
+                        }
                     }
                     ServerMessage::DirectTerminalKeyboardProtocol {
                         flags,
@@ -2363,6 +2395,14 @@ async fn run_client_loop(
                     io::Error::new(io::ErrorKind::UnexpectedEof, "connection was lost"),
                 );
             }
+            #[cfg(unix)]
+            ClientLoopEvent::NeruHints(event) => neru_hints.handle(
+                event,
+                &mut state,
+                &host_mouse_capture_active,
+                &host_sgr_pixels_active,
+                &event_tx,
+            ),
             ClientLoopEvent::Timer => {
                 client_timer.fired();
                 #[cfg(unix)]

@@ -470,4 +470,49 @@ esac"#,
             })
         );
     }
+
+    #[test]
+    fn hints_writes_the_targets_to_stdin_and_reports_a_failure() {
+        let dir = scratch();
+        let seen = dir.join("stdin");
+        let neru = NeruCli::new(script(
+            &dir,
+            &format!(
+                r#"[ "$*" = "hints --targets - --action left_click" ] || exit 2
+cat > '{}'
+echo 'hints mode activated'"#,
+                seen.display()
+            ),
+        ));
+        assert_eq!(neru.hints(r#"{"hints":[]}"#.into()), Ok(()));
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), r#"{"hints":[]}"#);
+
+        let neru = NeruCli::new(script(
+            &dir,
+            "cat >/dev/null\necho 'no targets' >&2\nexit 1",
+        ));
+        let error = neru.hints("{}".into()).unwrap_err();
+        assert_eq!(error.to_string(), "neru hints failed: no targets");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reads_the_neru_version() {
+        let dir = scratch();
+        let neru = NeruCli::new(script(
+            &dir,
+            "echo 'Neru version v1.62.0'\necho 'Git commit: 6eb25b7'",
+        ));
+        assert_eq!(neru.version(), Ok((1, 62, 0)));
+        let neru = NeruCli::new(script(&dir, "echo 'neru dev build'"));
+        assert!(neru.version().is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn parses_version_suffixes() {
+    assert_eq!(parse_version(b"Neru version v1.58.0-rc1"), Some((1, 58, 0)));
+    assert_eq!(parse_version(b"1.57.3"), Some((1, 57, 3)));
+    assert_eq!(parse_version(b"Neru version dev"), None);
 }

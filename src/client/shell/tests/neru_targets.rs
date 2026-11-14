@@ -131,3 +131,129 @@ fn an_open_menu_gives_only_its_launcher_and_rows_and_a_row_press_activates_it() 
         Some(ClientShellOverlay::GlobalMenu(_))
     ));
 }
+
+mod session {
+    use super::*;
+    use crate::client::shell::neru_calibration::{
+        NeruCalibrated, NeruCalibrationError, NeruCalibrationOutcome, POINTER_NOT_RESTORED,
+    };
+    use crate::client::shell::neru_session::NeruCalibrationDone;
+    use crate::client::shell::neru_targets::{NeruCalibration, NeruScreenRect};
+
+    const GRID: (u16, u16) = (106, 24);
+    const EXTENT: (u32, u32) = (106 * 16, 24 * 32);
+
+    fn calibrated(pointer_restored: bool) -> NeruCalibrationOutcome {
+        NeruCalibrationOutcome {
+            result: Ok(NeruCalibrated {
+                calibration: NeruCalibration::new(GRID, EXTENT, (100.0, 50.0), (2.0, 2.0)).unwrap(),
+                displays: vec![NeruScreenRect {
+                    x: 0,
+                    y: 0,
+                    width: 3000,
+                    height: 2000,
+                }],
+            }),
+            pointer_restored,
+        }
+    }
+
+    fn notice(state: &ClientShellState) -> Option<&str> {
+        state
+            .visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str())
+    }
+
+    #[test]
+    fn targets_come_from_the_hit_map_when_calibration_ends() {
+        let mut state = shell();
+        // The menu opens while calibration runs: its rows are what the screen shows now.
+        state.toggle_global_menu();
+        state.compose(GRID.0, GRID.1).unwrap();
+        let done = NeruCalibrationDone::for_test(Ok(calibrated(true)), GRID, EXTENT);
+
+        let (json, _) = state.finish_neru_calibration(done, GRID, EXTENT);
+
+        let json = json.expect("targets");
+        let hints: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let hints = hints["hints"].as_array().unwrap();
+        assert_eq!(hints.len(), state.hits.global_menu_rows.len() + 1);
+        assert!(!json.contains("\"new tab\""), "{json}");
+        assert_eq!(notice(&state), None);
+    }
+
+    #[test]
+    fn a_resize_during_calibration_sends_nothing_and_says_why() {
+        let mut state = shell();
+        let done = NeruCalibrationDone::for_test(Ok(calibrated(true)), GRID, EXTENT);
+
+        let (json, repaint) = state.finish_neru_calibration(done, (GRID.0 - 1, GRID.1), EXTENT);
+
+        assert_eq!(json, None);
+        assert!(repaint);
+        assert_eq!(
+            notice(&state),
+            Some("Calibration failed: the terminal resized. Try again.")
+        );
+    }
+
+    #[test]
+    fn a_failed_calibration_sends_nothing_and_reports_its_reason() {
+        let mut state = shell();
+        let outcome = NeruCalibrationOutcome {
+            result: Err(NeruCalibrationError::PointerMoved),
+            pointer_restored: true,
+        };
+        let done = NeruCalibrationDone::for_test(Ok(outcome), GRID, EXTENT);
+
+        let (json, _) = state.finish_neru_calibration(done, GRID, EXTENT);
+
+        assert_eq!(json, None);
+        assert_eq!(
+            notice(&state),
+            Some("Calibration failed: the pointer moved. Keep the mouse still and try again.")
+        );
+    }
+
+    #[test]
+    fn an_unrestored_pointer_is_reported_after_a_success() {
+        let mut state = shell();
+        let done = NeruCalibrationDone::for_test(Ok(calibrated(false)), GRID, EXTENT);
+
+        let (json, _) = state.finish_neru_calibration(done, GRID, EXTENT);
+
+        assert_eq!(notice(&state), Some(POINTER_NOT_RESTORED));
+        // The notice's toast is drawn before the targets are collected, so the only target on
+        // it is the toast itself (layer 4), and nothing under it is sent.
+        let toast = state.hits.notification_toast;
+        assert!(!toast.is_empty(), "the notice draws a toast");
+        let json: serde_json::Value = serde_json::from_str(&json.expect("targets")).unwrap();
+        let hints = json["hints"].as_array().unwrap();
+        let on_toast = hints
+            .iter()
+            .filter(|hint| {
+                let center = |start: &str, size: &str| {
+                    hint[start].as_i64().unwrap() + hint[size].as_i64().unwrap() / 2
+                };
+                // Origin (100, 50) pt; a 16 x 32 px cell at scale 2 is 8 x 16 pt.
+                let column = u16::try_from((center("x", "width") - 100) / 8).unwrap();
+                let row = u16::try_from((center("y", "height") - 50) / 16).unwrap();
+                toast.contains((column, row).into())
+            })
+            .count();
+        assert_eq!(on_toast, 1, "{hints:?}");
+        assert!(hints.len() > 1);
+    }
+
+    #[test]
+    fn the_keybinding_requests_neru_hints_once() {
+        let mut state = shell();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::NeruHints),
+            &mut ClientShellInput::default(),
+        );
+        assert!(state.take_neru_hints_request());
+        assert!(!state.take_neru_hints_request());
+    }
+}

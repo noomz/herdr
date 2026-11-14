@@ -44,6 +44,12 @@ impl HostPowerMonitor {
     }
 }
 
+/// neru hints runs only where neru can warp and click: macOS (`SPEC-neru-hints.md` §C).
+#[cfg(unix)]
+pub(crate) fn supports_neru_hints() -> bool {
+    cfg!(target_os = "macos")
+}
+
 impl Drop for HostPowerMonitor {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {

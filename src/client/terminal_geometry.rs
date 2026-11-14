@@ -41,6 +41,18 @@ fn ioctl_terminal_geometry() -> Option<(u16, u16, u32, u32)> {
     Some((size.columns, size.rows, cell_width_px, cell_height_px))
 }
 
+/// The grid and the ioctl pixel extent, read now. `None` when the host reports no pixel size.
+#[cfg(unix)]
+pub(super) fn ioctl_extent() -> Option<((u16, u16), (u32, u32))> {
+    let size = crossterm::terminal::window_size().ok()?;
+    (size.width > 0 && size.height > 0).then(|| {
+        (
+            (size.columns, size.rows),
+            (u32::from(size.width), u32::from(size.height)),
+        )
+    })
+}
+
 pub(super) fn cell_size_fallback(reported: u64, last: Option<(u32, u32)>) -> (u32, u32) {
     unpack_cell_size(reported)
         .or(last.filter(|(width, height)| *width > 0 && *height > 0))

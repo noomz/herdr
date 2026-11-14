@@ -40,6 +40,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) mobile_width_threshold: u16,
     pub(super) tab_bar_position: TabBarPositionConfig,
     pub(super) hide_tab_bar_when_single_tab: bool,
+    /// `neru.path`: the neru binary neru hints runs.
+    pub(crate) neru_path: String,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
@@ -1032,6 +1034,8 @@ pub(crate) struct ClientShellState {
     pub(super) word_selection_gesture: Option<ClientWordSelection>,
     pub(super) word_selection_generation: u64,
     pub(super) copy_mode: Option<ClientCopyModeState>,
+    /// The neru hints keybinding fired; the client loop takes it (`client/neru_hints.rs`).
+    pub(super) neru_hints_requested: bool,
     pub(super) copy_session_generation: u64,
     pub(super) copy_operation_in_flight: bool,
     pub(super) copy_operation_queue: VecDeque<ClientCopyOperation>,
@@ -1209,6 +1213,7 @@ impl ClientShellState {
             word_selection_gesture: None,
             word_selection_generation: 0,
             copy_mode: None,
+            neru_hints_requested: false,
             copy_session_generation: 0,
             copy_operation_in_flight: false,
             copy_operation_queue: VecDeque::new(),

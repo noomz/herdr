@@ -174,6 +174,10 @@ impl ClientShellState {
                     }
                     return;
                 }
+                if action == crate::input::KeybindAction::NeruHints {
+                    self.neru_hints_requested = true;
+                    return;
+                }
                 if self.handle_endpoint_navigation(action, outcome) {
                     return;
                 }
