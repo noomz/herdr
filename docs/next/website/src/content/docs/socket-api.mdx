@@ -99,6 +99,7 @@ Raw socket method names use dot notation:
 | Server | `ping`, `server.stop`, `server.reload_config`, `server.agent_manifests`, `server.reload_agent_manifests` |
 | Notification | `notification.show` |
 | Client | `client.window_title.set`, `client.window_title.clear` |
+| Machine | `machine.show` |
 | Session | `session.snapshot` |
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
@@ -340,6 +341,14 @@ Set or clear the foreground client's outer terminal window title:
 `client.window_title.clear` hands the title back to `ui.window_title`. The response is
 `type: "client_window_title"` with `changed` and reason `set`, `cleared`, or
 `no_foreground_client`.
+
+Ask the foreground client to show a saved machine, or this machine with `local`, and optionally focus one of its workspaces, tabs, or panes:
+
+```json
+{"id":"req_show","method":"machine.show","params":{"machine":"Build machine","pane_id":"w1:p2"}}
+```
+
+`machine` is a saved machine label or profile ID as the client knows it. Set at most one of `workspace_id`, `tab_id`, or `pane_id`; more than one returns `invalid_params`. The response is `type: "ok"` once the request reaches a foreground client that supports it, and `no_capable_client` otherwise. The client then selects the machine the same way the sidebar does. It shows a notice for an unknown or ambiguous label. Only the server of the machine the client is showing has it as the foreground client; other servers return `no_capable_client`.
 
 Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch.
 

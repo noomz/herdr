@@ -22,6 +22,19 @@ pub(super) fn command() -> Command {
                 .arg(Arg::new("machine").value_name("LABEL_OR_ID").required(true)),
         )
         .subcommand(
+            Command::new("show")
+                .about("Show a machine, and optionally one of its targets, in the attached client")
+                .arg(Arg::new("machine").value_name("LABEL_OR_ID").required(true))
+                .arg(option("workspace", "ID").help("Focus this workspace on the machine"))
+                .arg(option("tab", "ID").help("Focus this tab on the machine"))
+                .arg(option("pane", "ID").help("Focus this pane on the machine"))
+                .group(
+                    clap::ArgGroup::new("target")
+                        .args(["workspace", "tab", "pane"])
+                        .multiple(false),
+                ),
+        )
+        .subcommand(
             Command::new("add")
                 .about("Prepare the remote Herdr server and save an SSH machine")
                 .arg(
