@@ -242,6 +242,26 @@ mod session {
     }
 
     #[test]
+    fn an_unrestored_pointer_is_reported_with_the_calibration_failure() {
+        let mut state = shell();
+        let outcome = NeruCalibrationOutcome {
+            result: Err(NeruCalibrationError::PointerMoved),
+            pointer_restored: false,
+        };
+        let done = NeruCalibrationDone::for_test(Ok(outcome), GRID, EXTENT);
+
+        let (json, _) = state.finish_neru_calibration(done, GRID, EXTENT);
+
+        assert_eq!(json, None);
+        let body = notice(&state).expect("notice");
+        assert!(
+            body.starts_with("Calibration failed: the pointer moved."),
+            "{body}"
+        );
+        assert!(body.ends_with(POINTER_NOT_RESTORED), "§V.8: {body}");
+    }
+
+    #[test]
     fn an_unrestored_pointer_is_reported_after_a_success() {
         let mut state = shell();
         let done = NeruCalibrationDone::for_test(Ok(calibrated(false)), GRID, EXTENT);
