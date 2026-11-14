@@ -5,6 +5,7 @@ pub mod commands;
 pub mod common;
 pub mod events;
 pub mod integrations;
+pub mod machines;
 pub(crate) mod operations;
 pub mod panes;
 pub mod plugins;
@@ -20,6 +21,7 @@ pub use commands::*;
 pub use common::*;
 pub use events::*;
 pub use integrations::*;
+pub use machines::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
@@ -145,6 +147,7 @@ operations::define_operations! {
     PluginPaneOpen(PluginPaneOpenParams) => "plugin.pane.open", true, false;
     PluginPaneFocus(PluginPaneFocusParams) => "plugin.pane.focus", true, false;
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false;
+    MachineShow(MachineShowParams) => "machine.show", false, false;
 }
 
 #[cfg(test)]

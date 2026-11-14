@@ -78,6 +78,7 @@ mod bootstrap;
 mod client_views;
 mod endpoint_requests;
 mod lifecycle;
+mod machine_show;
 mod native_graphics;
 mod notifications;
 mod render;
@@ -1910,6 +1911,7 @@ impl HeadlessServer {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                show_machine,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1955,6 +1957,7 @@ impl HeadlessServer {
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
+                connection.shell_show_machine = show_machine;
                 connection.render_state.enable_surface_reuse(surface_reuse);
                 connection.render_state.enable_surface_delta(surface_delta);
                 connection
@@ -2958,6 +2961,12 @@ impl HeadlessServer {
                 self.handle_notification_show_api(msg.request.id.clone(), params.clone());
             let _ = msg.respond_to.send(response);
             return true;
+        }
+
+        if let api::schema::Method::MachineShow(params) = &msg.request.method {
+            let response = self.handle_machine_show_api(msg.request.id.clone(), params.clone());
+            let _ = msg.respond_to.send(response);
+            return metadata_expired;
         }
 
         match &msg.request.method {

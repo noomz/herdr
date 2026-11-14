@@ -1061,6 +1061,13 @@ impl App {
                     },
                 );
             }
+            Method::MachineShow(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "no_capable_client",
+                    "no attached client supports machine.show",
+                );
+            }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),
