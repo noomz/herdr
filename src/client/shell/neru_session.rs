@@ -17,7 +17,13 @@ use super::neru_calibration::{
     NeruCommandError, ScreenPoint, POINTER_NOT_RESTORED,
 };
 use super::neru_targets::{collect, to_targets, NeruCollectError, NeruScreenRect, NeruTargets};
-use super::{ClientEndpointNoticeKind, ClientShellState};
+use super::{
+    ClientEndpointNoticeKey, ClientEndpointNoticeKind, ClientShellState,
+    ClientVisibleEndpointNotice,
+};
+
+/// How long a neru notice stays on screen; the same as other unavailable notices.
+const NOTICE_DURATION: Duration = Duration::from_secs(8);
 
 /// The oldest neru with `hints --targets` (§C).
 const MIN_NERU_VERSION: (u32, u32, u32) = (1, 58, 0);
@@ -248,14 +254,24 @@ impl ClientShellState {
     }
 
     /// Reports a neru hints message as a client notice. Returns true when it needs a repaint.
+    /// Every press reports its reason (§V.16), so this skips the once-per-boot filter that
+    /// `push_endpoint_notice` applies. A timed-out endpoint's notice still takes precedence.
     pub(crate) fn show_neru_notice(&mut self, message: impl Into<String>) -> bool {
+        if self.timed_out_endpoint.is_some() {
+            return false;
+        }
         let message = message.into();
-        self.push_endpoint_notice(
-            ClientEndpointNoticeKind::Unavailable,
-            format!("neru_hints:{message}"),
-            "neru hints",
-            message,
-        )
+        self.visible_endpoint_notice = Some(ClientVisibleEndpointNotice {
+            key: ClientEndpointNoticeKey {
+                boot_id: "neru".into(),
+                kind: ClientEndpointNoticeKind::Unavailable,
+                code: format!("neru_hints:{message}"),
+            },
+            title: "neru hints".into(),
+            body: message,
+            deadline: Instant::now() + NOTICE_DURATION,
+        });
+        true
     }
 
     /// Turns a finished calibration into the targets JSON for `neru hints`, or `None` after

@@ -217,6 +217,31 @@ mod session {
     }
 
     #[test]
+    fn a_second_press_failing_for_the_same_reason_reports_it_again() {
+        let mut state = shell();
+        let failed = || {
+            let outcome = NeruCalibrationOutcome {
+                result: Err(NeruCalibrationError::PointerMoved),
+                pointer_restored: true,
+            };
+            NeruCalibrationDone::for_test(Ok(outcome), GRID, EXTENT)
+        };
+        let moved = "Calibration failed: the pointer moved. Keep the mouse still and try again.";
+
+        state.finish_neru_calibration(failed(), GRID, EXTENT);
+        assert_eq!(notice(&state), Some(moved));
+        state.visible_endpoint_notice = None;
+        state.finish_neru_calibration(failed(), GRID, EXTENT);
+        assert_eq!(notice(&state), Some(moved), "§V.16: calibration failure");
+
+        let missing = "neru not found at /nowhere/neru.";
+        assert!(state.show_neru_notice(missing));
+        state.visible_endpoint_notice = None;
+        assert!(state.show_neru_notice(missing));
+        assert_eq!(notice(&state), Some(missing), "§V.16: missing neru");
+    }
+
+    #[test]
     fn an_unrestored_pointer_is_reported_after_a_success() {
         let mut state = shell();
         let done = NeruCalibrationDone::for_test(Ok(calibrated(false)), GRID, EXTENT);

@@ -60,7 +60,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T5 | x | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
 | T6 | ~ | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
 | T7 | x | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
-| T8 | . | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
+| T8 | x | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
 
 ## Bugs
 
