@@ -1,0 +1,246 @@
+{
+  "label": "ghostty-s1-titlebartabs",
+  "term": "xterm-ghostty",
+  "winsize": {
+    "cols": 157,
+    "rows": 70,
+    "xpixel": 1259,
+    "ypixel": 1205
+  },
+  "focus_event": true,
+  "window": {
+    "x": 647,
+    "y": 73,
+    "width": 1263,
+    "height": 1249
+  },
+  "displays": {
+    "displays": [
+      {
+        "name": "MateView",
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1280,
+        "scale": 1
+      },
+      {
+        "name": "Built-in Retina Display",
+        "x": -1728,
+        "y": 1280,
+        "width": 1728,
+        "height": 1117,
+        "scale": 1
+      }
+    ]
+  },
+  "cursor_before": {
+    "x": 1280,
+    "y": 996,
+    "display": "MateView",
+    "display_index": 0
+  },
+  "kitty": null,
+  "points": [
+    [
+      1089,
+      572
+    ],
+    [
+      1467,
+      822
+    ]
+  ],
+  "observed": {
+    "cell": [
+      {
+        "b": 35,
+        "x": 56,
+        "y": 27,
+        "press": true
+      },
+      {
+        "b": 35,
+        "x": 103,
+        "y": 42,
+        "press": true
+      }
+    ],
+    "pixel": [
+      {
+        "b": 35,
+        "x": 440,
+        "y": 457,
+        "press": true
+      },
+      {
+        "b": 35,
+        "x": 818,
+        "y": 707,
+        "press": true
+      }
+    ]
+  },
+  "calibration": {
+    "scale": [
+      1.0,
+      1.0
+    ],
+    "cell_pt": [
+      8.0,
+      17.0
+    ],
+    "edges": [
+      [
+        1097,
+        57
+      ],
+      [
+        574,
+        28
+      ]
+    ],
+    "origins": {
+      "pixel": [
+        649.0,
+        115.0
+      ],
+      "edge": [
+        649.0,
+        115.0
+      ]
+    },
+    "window_offset": {
+      "pixel": [
+        2.0,
+        42.0
+      ],
+      "edge": [
+        2.0,
+        42.0
+      ]
+    }
+  },
+  "clicks": [
+    {
+      "method": "pixel",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        661,
+        124
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        78,
+        35
+      ],
+      "point": [
+        1269,
+        702
+      ],
+      "report": {
+        "b": 0,
+        "x": 78,
+        "y": 35,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        156,
+        70
+      ],
+      "point": [
+        1893,
+        1296
+      ],
+      "report": {
+        "skipped": "no clean motion report: pointer not over the probe window"
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        661,
+        124
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        78,
+        35
+      ],
+      "point": [
+        1269,
+        702
+      ],
+      "report": {
+        "b": 0,
+        "x": 78,
+        "y": 35,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        156,
+        70
+      ],
+      "point": [
+        1893,
+        1296
+      ],
+      "report": {
+        "skipped": "no clean motion report: pointer not over the probe window"
+      }
+    }
+  ],
+  "elapsed_s": 13.68,
+  "raw": "b'\\x1b[I\\x1b[<35;56;27M\\x1b[<35;103;42M\\x1b[<35;440;457M\\x1b[<35;818;707M\\x1b[<35;56;27M\\x1b[<35;57;27M\\x1b[<35;56;27M\\x1b[<35;56;28M\\x1b[<35;2;1M\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;78;35M\\x1b[<0;78;35M\\x1b[<0;78;35m\\x1b[<35;156;69M\\x1b[<35;2;1M\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;78;35M\\x1b[<0;78;35M\\x1b[<0;78;35m\\x1b[<35;156;69M\\x1b[<35;79;52M'",
+  "interference": [
+    {
+      "point": [
+        1893,
+        1296
+      ],
+      "reports": 1
+    },
+    {
+      "point": [
+        1893,
+        1296
+      ],
+      "reports": 1
+    }
+  ],
+  "cursor_after": {
+    "x": 1280,
+    "y": 996,
+    "display": "MateView",
+    "display_index": 0
+  }
+}

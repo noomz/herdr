@@ -1,0 +1,237 @@
+{
+  "label": "ghostty-s2-default",
+  "term": "xterm-ghostty",
+  "winsize": {
+    "cols": 157,
+    "rows": 77,
+    "xpixel": 2518,
+    "ypixel": 2640
+  },
+  "focus_event": true,
+  "window": {
+    "x": 1287,
+    "y": 340,
+    "width": 1263,
+    "height": 1356
+  },
+  "displays": {
+    "displays": [
+      {
+        "name": "MateView",
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1707,
+        "scale": 1
+      },
+      {
+        "name": "Built-in Retina Display",
+        "x": -1728,
+        "y": 1324,
+        "width": 1728,
+        "height": 1117,
+        "scale": 1
+      }
+    ]
+  },
+  "cursor_before": {
+    "x": 1507,
+    "y": 1454,
+    "display": "MateView",
+    "display_index": 0
+  },
+  "kitty": null,
+  "points": [
+    [
+      1729,
+      882
+    ],
+    [
+      2107,
+      1153
+    ]
+  ],
+  "observed": {
+    "cell": [
+      {
+        "b": 35,
+        "x": 56,
+        "y": 30,
+        "press": true
+      },
+      {
+        "b": 35,
+        "x": 103,
+        "y": 46,
+        "press": true
+      }
+    ],
+    "pixel": [
+      {
+        "b": 35,
+        "x": 880,
+        "y": 1016,
+        "press": true
+      },
+      {
+        "b": 35,
+        "x": 1636,
+        "y": 1558,
+        "press": true
+      }
+    ]
+  },
+  "calibration": {
+    "scale": [
+      2.0,
+      2.0
+    ],
+    "cell_pt": [
+      8.019108280254777,
+      17.142857142857142
+    ],
+    "edges": [
+      [
+        1737,
+        57
+      ],
+      [
+        884,
+        31
+      ]
+    ],
+    "origins": {
+      "pixel": [
+        1289.0,
+        374.0
+      ],
+      "edge": [
+        1287.9299363057326,
+        369.7142857142858
+      ]
+    },
+    "window_offset": {
+      "pixel": [
+        2.0,
+        34.0
+      ],
+      "edge": [
+        0.9299363057325536,
+        29.71428571428578
+      ]
+    }
+  },
+  "clicks": [
+    {
+      "method": "pixel",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        1301,
+        383
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        78,
+        38
+      ],
+      "point": [
+        1910,
+        1017
+      ],
+      "report": {
+        "b": 0,
+        "x": 78,
+        "y": 38,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        156,
+        77
+      ],
+      "point": [
+        2536,
+        1685
+      ],
+      "report": {
+        "b": 0,
+        "x": 156,
+        "y": 77,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        1300,
+        378
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        78,
+        38
+      ],
+      "point": [
+        1909,
+        1013
+      ],
+      "report": {
+        "b": 0,
+        "x": 78,
+        "y": 38,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        156,
+        77
+      ],
+      "point": [
+        2535,
+        1681
+      ],
+      "report": {
+        "b": 0,
+        "x": 156,
+        "y": 77,
+        "press": true
+      }
+    }
+  ],
+  "elapsed_s": 13.5,
+  "raw": "b'\\x1b[I\\x1b[<35;56;30M\\x1b[<35;103;46M\\x1b[<35;880;1016M\\x1b[<35;1636;1558M\\x1b[<35;56;30M\\x1b[<35;57;30M\\x1b[<35;56;30M\\x1b[<35;56;31M\\x1b[<35;2;1M\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;78;38M\\x1b[<0;78;38M\\x1b[<0;78;38m\\x1b[<35;156;77M\\x1b[<0;156;77M\\x1b[<0;156;77m\\x1b[<35;2;1M\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;78;38M\\x1b[<0;78;38M\\x1b[<0;78;38m\\x1b[<35;156;77M\\x1b[<0;156;77M\\x1b[<0;156;77m\\x1b[<35;28;64M'",
+  "interference": [],
+  "cursor_after": {
+    "x": 1507,
+    "y": 1454,
+    "display": "MateView",
+    "display_index": 0
+  }
+}

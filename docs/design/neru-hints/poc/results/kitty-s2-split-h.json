@@ -1,0 +1,125 @@
+{
+  "label": "kitty-s2-split-h",
+  "term": "xterm-kitty",
+  "winsize": {
+    "cols": 60,
+    "rows": 33,
+    "xpixel": 1080,
+    "ypixel": 1419
+  },
+  "focus_event": false,
+  "window": {
+    "x": 989,
+    "y": 383,
+    "width": 1100,
+    "height": 750
+  },
+  "displays": {
+    "displays": [
+      {
+        "name": "MateView",
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1707,
+        "scale": 1
+      },
+      {
+        "name": "Built-in Retina Display",
+        "x": -1728,
+        "y": 1324,
+        "width": 1728,
+        "height": 1117,
+        "scale": 1
+      }
+    ]
+  },
+  "cursor_before": {
+    "x": 1507,
+    "y": 1454,
+    "display": "MateView",
+    "display_index": 0
+  },
+  "kitty": {
+    "os_window": {
+      "active_tab_history": [],
+      "background_opacity": 1.0,
+      "id": 1,
+      "is_active": true,
+      "is_focused": true,
+      "last_focused": true,
+      "platform_window_id": 18216,
+      "wm_class": "kitty",
+      "wm_name": "kitty"
+    },
+    "window": {
+      "at_prompt": false,
+      "columns": 60,
+      "created_at": 1794655302251751000,
+      "cwd": "/Users/noomz",
+      "has_activity_since_last_focus": false,
+      "id": 2,
+      "in_alternate_screen": false,
+      "is_active": false,
+      "is_focused": false,
+      "is_self": true,
+      "last_cmd_exit_status": 0,
+      "last_focused_at": 0.0,
+      "lines": 33,
+      "needs_attention": false,
+      "neighbors": {
+        "left": [
+          1
+        ],
+        "right": [
+          1
+        ]
+      },
+      "pid": 15541,
+      "program_status": [],
+      "session_name": "kitty-s2-split-h",
+      "title": "sh",
+      "title_overridden": false
+    }
+  },
+  "points": [
+    [
+      1374,
+      683
+    ],
+    [
+      1704,
+      833
+    ]
+  ],
+  "observed": {
+    "cell": [
+      null,
+      {
+        "b": 35,
+        "x": 19,
+        "y": 21,
+        "press": true
+      }
+    ],
+    "pixel": [
+      null,
+      {
+        "b": 35,
+        "x": 326,
+        "y": 881,
+        "press": true
+      }
+    ]
+  },
+  "error": "no motion report at a probe point",
+  "elapsed_s": 2.14,
+  "raw": "b'\\x1b[<35;19;21M\\x1b[<288;326;881M\\x1b[<35;326;881M\\x1b[<288;326;881M'",
+  "interference": [],
+  "cursor_after": {
+    "x": 1507,
+    "y": 1454,
+    "display": "MateView",
+    "display_index": 0
+  }
+}

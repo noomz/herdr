@@ -1,0 +1,274 @@
+{
+  "label": "kitty-s1-split-h-search",
+  "term": "xterm-kitty",
+  "winsize": {
+    "cols": 60,
+    "rows": 34,
+    "xpixel": 540,
+    "ypixel": 714
+  },
+  "focus_event": false,
+  "window": {
+    "x": 669,
+    "y": 277,
+    "width": 1100,
+    "height": 750
+  },
+  "displays": {
+    "displays": [
+      {
+        "name": "MateView",
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1280,
+        "scale": 1
+      },
+      {
+        "name": "Built-in Retina Display",
+        "x": -1728,
+        "y": 1280,
+        "width": 1728,
+        "height": 1117,
+        "scale": 1
+      }
+    ]
+  },
+  "cursor_before": {
+    "x": 1280,
+    "y": 996,
+    "display": "MateView",
+    "display_index": 0
+  },
+  "kitty": {
+    "os_window": {
+      "active_tab_history": [],
+      "background_opacity": 1.0,
+      "id": 1,
+      "is_active": true,
+      "is_focused": true,
+      "last_focused": true,
+      "platform_window_id": 19026,
+      "wm_class": "kitty",
+      "wm_name": "kitty"
+    },
+    "window": {
+      "at_prompt": false,
+      "columns": 60,
+      "created_at": 1794656020163649000,
+      "cwd": "/Users/noomz",
+      "has_activity_since_last_focus": false,
+      "id": 2,
+      "in_alternate_screen": false,
+      "is_active": false,
+      "is_focused": false,
+      "is_self": true,
+      "last_cmd_exit_status": 0,
+      "last_focused_at": 0.0,
+      "lines": 34,
+      "needs_attention": false,
+      "neighbors": {
+        "left": [
+          1
+        ],
+        "right": [
+          1
+        ]
+      },
+      "pid": 86386,
+      "program_status": [],
+      "session_name": "kitty-s1-split-h-search",
+      "title": "sh",
+      "title_overridden": false
+    }
+  },
+  "search_tries": 3,
+  "points": [
+    [
+      1549,
+      427
+    ],
+    [
+      1589,
+      467
+    ]
+  ],
+  "observed": {
+    "cell": [
+      null,
+      {
+        "b": 35,
+        "x": 41,
+        "y": 9,
+        "press": true
+      }
+    ],
+    "pixel": [
+      {
+        "b": 35,
+        "x": 328,
+        "y": 143,
+        "press": true
+      },
+      {
+        "b": 35,
+        "x": 368,
+        "y": 183,
+        "press": true
+      }
+    ]
+  },
+  "calibration": {
+    "scale": [
+      1.0,
+      1.0
+    ],
+    "cell_pt": [
+      9.0,
+      21.0
+    ],
+    "edges": [
+      [
+        1554,
+        38
+      ],
+      [
+        431,
+        8
+      ]
+    ],
+    "origins": {
+      "pixel": [
+        1221.0,
+        284.0
+      ],
+      "edge": [
+        1221.0,
+        284.0
+      ]
+    },
+    "window_offset": {
+      "pixel": [
+        552.0,
+        7.0
+      ],
+      "edge": [
+        552.0,
+        7.0
+      ]
+    }
+  },
+  "clicks": [
+    {
+      "method": "pixel",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        1234,
+        294
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        30,
+        17
+      ],
+      "point": [
+        1486,
+        630
+      ],
+      "report": {
+        "b": 0,
+        "x": 30,
+        "y": 17,
+        "press": true
+      }
+    },
+    {
+      "method": "pixel",
+      "cell": [
+        59,
+        34
+      ],
+      "point": [
+        1748,
+        988
+      ],
+      "report": {
+        "b": 0,
+        "x": 59,
+        "y": 34,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        2,
+        1
+      ],
+      "point": [
+        1234,
+        294
+      ],
+      "report": {
+        "b": 0,
+        "x": 2,
+        "y": 1,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        30,
+        17
+      ],
+      "point": [
+        1486,
+        630
+      ],
+      "report": {
+        "b": 0,
+        "x": 30,
+        "y": 17,
+        "press": true
+      }
+    },
+    {
+      "method": "edge",
+      "cell": [
+        59,
+        34
+      ],
+      "point": [
+        1748,
+        988
+      ],
+      "report": {
+        "b": 0,
+        "x": 59,
+        "y": 34,
+        "press": true
+      }
+    }
+  ],
+  "elapsed_s": 14.48,
+  "raw": "b'\\x1b[<35;37;7M\\x1b[<35;41;9M\\x1b[<35;328;143M\\x1b[<35;368;183M\\x1b[<35;37;7M\\x1b[<35;38;7M\\x1b[<35;37;7M\\x1b[<35;37;8M\\x1b[<35;2;1M\\x1b[I\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;30;17M\\x1b[<0;30;17M\\x1b[<0;30;17m\\x1b[<35;59;34M\\x1b[<0;59;34M\\x1b[<0;59;34m\\x1b[<35;2;1M\\x1b[<0;2;1M\\x1b[<0;2;1m\\x1b[<35;30;17M\\x1b[<0;30;17M\\x1b[<0;30;17m\\x1b[<35;59;34M\\x1b[<0;59;34M\\x1b[<0;59;34m\\x1b[<35;7;34M'",
+  "interference": [],
+  "cursor_after": {
+    "x": 1280,
+    "y": 996,
+    "display": "MateView",
+    "display_index": 0
+  }
+}
