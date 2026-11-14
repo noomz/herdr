@@ -11,6 +11,7 @@ const HELP: &str = "Usage:
   herdr machine list [--json]
   herdr machine status [<label-or-id>] [--json]
   herdr machine reconnect <label-or-id>
+  herdr machine show <label-or-id> [--workspace <id> | --tab <id> | --pane <id>]
   herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]
   herdr machine rename <profile-id> --label <label>
   herdr machine remove <profile-id>
@@ -21,6 +22,8 @@ Add prepares the remote Herdr installation and starts its server before saving.
 Missing or incompatible installations require approval in an interactive terminal.
 Changes apply automatically to open local Herdr clients.
 Removing or disabling a machine leaves its remote sessions running.
+Show asks the attached Herdr client to display a machine, as if it were selected in the
+sidebar, and to focus one of its workspaces, tabs, or panes. Use `local` for this machine.
 Saved machines contain only a label, SSH target, explicit Herdr session, and enabled state.
 SSH credentials and key material remain owned by OpenSSH.";
 
@@ -39,6 +42,7 @@ pub(super) fn run_machine_command(args: &[String]) -> std::io::Result<i32> {
         Some("list") => list(&args[1..]),
         Some("status") => status(&args[1..]),
         Some("reconnect") => reconnect(&args[1..]),
+        Some("show") => show(&args[1..]),
         Some("add") => add(&args[1..]),
         Some("rename") => rename(&args[1..]),
         Some("remove") => remove(&args[1..]),
@@ -205,6 +209,56 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
         profile.id
     );
     Ok(0)
+}
+
+const SHOW_USAGE: &str =
+    "usage: herdr machine show <label-or-id> [--workspace <id> | --tab <id> | --pane <id>]";
+
+fn show(args: &[String]) -> std::io::Result<i32> {
+    match parse_show_args(args) {
+        Ok(params) => super::send_ok_request(crate::api::schema::Method::MachineShow(params)),
+        Err(error) => {
+            eprintln!("{error}");
+            Ok(2)
+        }
+    }
+}
+
+fn parse_show_args(args: &[String]) -> Result<crate::api::schema::MachineShowParams, String> {
+    let args = super::expand_equals_args(args, &["--workspace", "--tab", "--pane"]);
+    let mut machine = None;
+    let mut targets = [None, None, None];
+    let mut index = 0;
+    while index < args.len() {
+        let slot = match args[index].as_str() {
+            "--workspace" => 0,
+            "--tab" => 1,
+            "--pane" => 2,
+            positional if !positional.starts_with('-') && machine.is_none() => {
+                machine = Some(positional.to_owned());
+                index += 1;
+                continue;
+            }
+            _ => return Err(SHOW_USAGE.into()),
+        };
+        let Some(value) = args.get(index + 1) else {
+            return Err(format!("missing value for {}", args[index]));
+        };
+        if targets[slot].replace(value.clone()).is_some() {
+            return Err(format!("{} can only be specified once", args[index]));
+        }
+        index += 2;
+    }
+    if targets.iter().flatten().count() > 1 {
+        return Err("use only one of --workspace, --tab, or --pane".into());
+    }
+    let [workspace_id, tab_id, pane_id] = targets;
+    Ok(crate::api::schema::MachineShowParams {
+        machine: machine.ok_or(SHOW_USAGE)?,
+        workspace_id,
+        tab_id,
+        pane_id,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -617,6 +671,33 @@ mod tests {
                 },
                 "{args:?}"
             );
+        }
+    }
+
+    #[test]
+    fn show_parser_builds_the_machine_show_request() {
+        let parse = |args: &[&str]| {
+            parse_show_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+                .map(|params| serde_json::to_value(params).unwrap())
+        };
+        assert_eq!(parse(&["drm"]), Ok(serde_json::json!({"machine": "drm"})));
+        assert_eq!(
+            parse(&["--pane=w1:p2", "Build machine"]),
+            Ok(serde_json::json!({"machine": "Build machine", "pane_id": "w1:p2"}))
+        );
+        assert_eq!(
+            parse(&["local", "--workspace", "w1"]),
+            Ok(serde_json::json!({"machine": "local", "workspace_id": "w1"}))
+        );
+        for args in [
+            &[][..],
+            &["drm", "--tab"],
+            &["drm", "--tab", "w1:t1", "--pane", "w1:p1"],
+            &["drm", "--tab", "w1:t1", "--tab", "w1:t2"],
+            &["drm", "other"],
+            &["drm", "--agent", "a"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
         }
     }
 

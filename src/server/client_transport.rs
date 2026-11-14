@@ -420,6 +420,7 @@ pub(crate) enum ServerEvent {
         surface_delta: bool,
         surface_scroll: bool,
         floats: bool,
+        show_machine: bool,
         writer: ClientWriter,
     },
     ClientShellFloatButtons {
@@ -873,6 +874,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_scroll,
                     hello.floats,
                     hello.float_buttons && hello.floats,
+                    hello.show_machine,
                 )),
             )
         }
@@ -973,6 +975,7 @@ pub(crate) fn handle_client_handshake(
         surface_scroll,
         floats,
         _,
+        show_machine,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -990,6 +993,7 @@ pub(crate) fn handle_client_handshake(
             surface_delta,
             surface_scroll,
             floats,
+            show_machine,
             writer,
         }
     } else {
@@ -1592,6 +1596,7 @@ mod tests {
             surface_scroll: false,
             floats: false,
             float_buttons: false,
+            show_machine: true,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -2144,12 +2149,14 @@ mod tests {
                 surface_delta,
                 surface_scroll,
                 floats,
+                show_machine,
                 writer,
             } => {
                 assert!(!surface_reuse);
                 assert!(!surface_delta);
                 assert!(!surface_scroll);
                 assert!(!floats);
+                assert!(show_machine);
                 assert_eq!(client_id, 43);
                 assert_eq!((surface_cols, surface_rows), (80, 29));
                 assert_eq!((cell_width_px, cell_height_px), (8, 16));

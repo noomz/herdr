@@ -6,6 +6,7 @@ pub mod common;
 pub mod events;
 pub mod floats;
 pub mod integrations;
+pub mod machines;
 pub(crate) mod operations;
 pub mod panes;
 pub mod plugins;
@@ -22,6 +23,7 @@ pub use common::*;
 pub use events::*;
 pub use floats::*;
 pub use integrations::*;
+pub use machines::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
@@ -159,6 +161,7 @@ operations::define_operations! {
     FloatSetHideRule(FloatSetHideRuleParams) => "float.set_hide_rule", true, false;
     FloatClose(FloatTarget) => "float.close", true, false;
     FloatButtonInvoke(FloatButtonInvokeParams) => "float.button.invoke", true, true;
+    MachineShow(MachineShowParams) => "machine.show", false, false;
 }
 
 #[cfg(test)]

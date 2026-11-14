@@ -15,6 +15,7 @@ pub(crate) enum EndpointControlMessage {
     FloatFocus(crate::protocol::floats::FloatFocus),
     FloatButtons(Option<crate::protocol::endpoint::EndpointFloatButtons>),
     FloatButtonResult(crate::protocol::endpoint::EndpointFloatButtonResult),
+    ShowMachine(crate::api::schema::MachineShow),
     Ignored,
 }
 
@@ -29,6 +30,17 @@ pub(crate) fn decode_endpoint_control(
         return Ok(serde_json::from_str(data)
             .map(EndpointControlMessage::AgentCompletions)
             .unwrap_or(EndpointControlMessage::Ignored));
+    }
+    if kind == crate::protocol::endpoint::SHOW_MACHINE_KIND {
+        return Ok(
+            serde_json::from_str::<crate::api::schema::MachineShowParams>(data)
+                .ok()
+                .and_then(|params| params.parse().ok())
+                .map_or(
+                    EndpointControlMessage::Ignored,
+                    EndpointControlMessage::ShowMachine,
+                ),
+        );
     }
     if kind == crate::protocol::endpoint::AGENT_VIEW_PROJECTION_KIND {
         let Ok(projection): Result<crate::protocol::endpoint::EndpointAgentViewProjection, _> =
@@ -176,6 +188,36 @@ mod tests {
             decode(&value),
             EndpointControlMessage::FloatButtons(None)
         ));
+    }
+
+    #[test]
+    fn show_machine_control_decodes_a_valid_request_and_ignores_an_invalid_one() {
+        let params = crate::api::schema::MachineShowParams {
+            machine: "Build".into(),
+            workspace_id: None,
+            tab_id: Some("w1:t2".into()),
+            pane_id: None,
+        };
+        let crate::protocol::ServerMessage::EndpointControl { kind, data } =
+            crate::protocol::endpoint::show_machine_message(&params).unwrap()
+        else {
+            panic!("expected optional control");
+        };
+        let EndpointControlMessage::ShowMachine(decoded) =
+            decode_endpoint_control(&kind, &data).unwrap()
+        else {
+            panic!("expected show-machine request");
+        };
+        assert_eq!(decoded, params.parse().unwrap());
+        for data in [
+            "not json",
+            r#"{"machine":"Build","tab_id":"w1:t2","pane_id":"w1:p1"}"#,
+        ] {
+            assert!(matches!(
+                decode_endpoint_control(&kind, data).unwrap(),
+                EndpointControlMessage::Ignored
+            ));
+        }
     }
 
     #[test]

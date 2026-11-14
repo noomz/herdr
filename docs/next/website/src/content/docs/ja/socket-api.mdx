@@ -95,6 +95,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | サーバー | `ping`、`server.stop`、`server.reload_config`、`server.agent_manifests`、`server.reload_agent_manifests` |
 | 通知 | `notification.show` |
 | クライアント | `client.window_title.set`、`client.window_title.clear` |
+| マシン | `machine.show` |
 | セッション | `session.snapshot` |
 | ワークスペース | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
@@ -275,6 +276,14 @@ reason の候補は `shown`、`disabled`、`rate_limited`、`no_foreground_clien
 ```
 
 `client.window_title.clear` はタイトルを `ui.window_title` に戻します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
+
+フォアグラウンドのクライアントに保存済みマシン（このマシンは `local`）を表示させ、必要ならワークスペース、タブ、ペインのいずれかにフォーカスさせます。
+
+```json
+{"id":"req_show","method":"machine.show","params":{"machine":"Build machine","pane_id":"w1:p2"}}
+```
+
+`machine` はクライアントが知っている保存済みマシンのラベルまたはプロファイル ID です。`workspace_id`、`tab_id`、`pane_id` は最大 1 つだけ指定でき、複数指定すると `invalid_params` を返します。対応するフォアグラウンドクライアントに要求が届くとレスポンスは `type: "ok"` で、届かない場合は `no_capable_client` です。クライアントはサイドバーと同じ方法でマシンを選択します。不明または曖昧なラベルには通知を表示します。クライアントをフォアグラウンドに持つのは表示中のマシンのサーバーだけで、ほかのサーバーは `no_capable_client` を返します。
 
 Worktree メソッドは Git チェックアウトを Herdr ワークスペースとして管理します。`worktree.create` はチェックアウトを作成し、新しい `workspace`、`tab`、`root_pane`、`worktree` のレコードを返します。要求されたブランチがローカルに既存ならそれをチェックアウトし、なければ要求されたベースまたは `HEAD` からブランチを作成します。`worktree.open` は既存のチェックアウトを開くか、すでに開いているワークスペースを返します。`worktree.remove` はリンクされた子ワークスペースに対して `git worktree remove` を実行し、ブランチは決して削除しません。
 

@@ -95,6 +95,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 服务器 | `ping`、`server.stop`、`server.reload_config`、`server.agent_manifests`、`server.reload_agent_manifests` |
 | 通知 | `notification.show` |
 | 客户端 | `client.window_title.set`、`client.window_title.clear` |
+| 机器 | `machine.show` |
 | 会话 | `session.snapshot` |
 | 工作区 | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
@@ -275,6 +276,14 @@ herdr notification show "build failed" --body "api workspace" --position top-lef
 ```
 
 `client.window_title.clear` 把标题交还给 `ui.window_title`。响应是 `type: "client_window_title"`,带 `changed` 和 `set`、`cleared` 或 `no_foreground_client` 之一的 reason。
+
+让前台客户端显示一台已保存的机器（本机用 `local`），并可聚焦其中一个工作区、标签页或窗格：
+
+```json
+{"id":"req_show","method":"machine.show","params":{"machine":"Build machine","pane_id":"w1:p2"}}
+```
+
+`machine` 是客户端所知的已保存机器标签或配置 ID。`workspace_id`、`tab_id`、`pane_id` 最多设置一个；设置多个会返回 `invalid_params`。请求送达支持它的前台客户端时响应为 `type: "ok"`，否则为 `no_capable_client`。客户端随后按侧边栏的方式选择该机器。标签未知或有歧义时显示通知。只有客户端当前显示的机器的服务器把它作为前台客户端；其他服务器返回 `no_capable_client`。
 
 Worktree 方法把 Git 检出作为 Herdr 工作区管理。`worktree.create` 创建检出,并返回新的 `workspace`、`tab`、`root_pane` 和 `worktree` 记录。请求的分支已在本地存在时检出它;否则从请求的 base 或 `HEAD` 创建分支。`worktree.open` 打开已有检出,或返回已打开的工作区。`worktree.remove` 对关联的子工作区运行 `git worktree remove`,从不删除分支。
 

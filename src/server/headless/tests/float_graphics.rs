@@ -212,6 +212,7 @@ impl Harness {
                 pixel_mouse: true,
                 direct_graphics: true,
                 endpoint_keybindings: false,
+                show_machine: false,
                 mouse_capture: false,
                 surface_active: true,
                 writer,

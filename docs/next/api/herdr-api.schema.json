@@ -2516,6 +2516,37 @@
           ],
           "type": "object"
         },
+        "MachineShowParams": {
+          "description": "At most one of `workspace_id`, `tab_id`, or `pane_id` may be set.",
+          "properties": {
+            "machine": {
+              "description": "Saved machine label or profile ID as the attached client knows it, or `local`.",
+              "type": "string"
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tab_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "machine"
+          ],
+          "type": "object"
+        },
         "NotificationShowParams": {
           "properties": {
             "body": {
@@ -6718,6 +6749,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/FloatButtonInvokeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "machine.show",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/MachineShowParams"
             }
           },
           "required": [

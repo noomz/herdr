@@ -58,6 +58,7 @@ fn connect_shell_with_controls(
             pixel_mouse: false,
             direct_graphics: false,
             endpoint_keybindings: false,
+            show_machine: false,
             mouse_capture: false,
             surface_active: true,
             writer,

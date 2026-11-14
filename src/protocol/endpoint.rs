@@ -37,6 +37,7 @@ pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
 /// A direct terminal attach client asks the server to forward the attached terminal's Kitty
 /// images. Older servers ignore it, so old and new peers keep text-only attach.
 pub const ATTACH_GRAPHICS_KIND: &str = "endpoint.attach-graphics.v1";
+pub const SHOW_MACHINE_KIND: &str = "endpoint.show-machine.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {
@@ -135,6 +136,8 @@ pub struct EndpointClientHello {
     #[serde(default)]
     pub float_buttons: bool,
     #[serde(default)]
+    pub show_machine: bool,
+    #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
     pub surface_codecs: Vec<String>,
@@ -189,6 +192,15 @@ pub fn agent_completions_message(
     Ok(ServerMessage::EndpointControl {
         kind: AGENT_COMPLETIONS_KIND.into(),
         data: serde_json::to_string(projection)?,
+    })
+}
+
+pub fn show_machine_message(
+    request: &crate::api::schema::MachineShowParams,
+) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: SHOW_MACHINE_KIND.into(),
+        data: serde_json::to_string(request)?,
     })
 }
 
@@ -289,6 +301,7 @@ mod tests {
             surface_scroll: false,
             floats: false,
             float_buttons: false,
+            show_machine: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -440,6 +453,7 @@ mod tests {
         value.as_object_mut().unwrap().remove("surface_scroll");
         value.as_object_mut().unwrap().remove("floats");
         value.as_object_mut().unwrap().remove("float_buttons");
+        value.as_object_mut().unwrap().remove("show_machine");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
@@ -447,6 +461,7 @@ mod tests {
         assert!(!decoded.surface_scroll);
         assert!(!decoded.floats);
         assert!(!decoded.float_buttons);
+        assert!(!decoded.show_machine);
     }
 
     #[test]
