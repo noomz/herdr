@@ -759,6 +759,7 @@ impl ClientShellState {
                 .scroll
                 .min(u16::try_from(self.hits.release_notes_max_scroll).unwrap_or(u16::MAX));
         }
+        self.hits.labels = neru_targets::drawn_labels(&self.hits, &frame);
         if self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online) {
             frame.cursor = None;
             self.hits.panes.clear();

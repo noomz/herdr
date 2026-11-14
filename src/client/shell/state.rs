@@ -164,6 +164,9 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    /// The text drawn in each labelled control, keyed by hit rectangle and read from the composed
+    /// frame. neru hints titles its targets with it (`neru_targets.rs`).
+    pub(super) labels: HashMap<Rect, String>,
 }
 
 #[derive(Clone)]

@@ -36,7 +36,7 @@ impl MachineDiagnostics {
 }
 
 /// Saved machines wait out a reconnect backoff whenever they are not online or disabled.
-fn machine_retryable(endpoint: &ClientShellEndpoint) -> bool {
+pub(super) fn machine_retryable(endpoint: &ClientShellEndpoint) -> bool {
     !endpoint.endpoint_id.is_local()
         && matches!(
             endpoint.status,

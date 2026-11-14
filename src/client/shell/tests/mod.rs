@@ -262,6 +262,7 @@ mod keybindings_settings;
 mod link_hover;
 mod mobile;
 mod mouse_selection;
+mod neru_targets;
 mod pane_rearrangement_mouse;
 mod popup_focus_projection;
 mod startup_overlays;
