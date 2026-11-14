@@ -46,6 +46,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 12. Restoring mouse modes re-sends the full mode set the client needs (any-motion, SGR, and pixel mode only if a pane requests it). It never sends `?1016l` alone, because in kitty that also resets the report encoding to legacy X10.
 13. A target that contains child targets (a workspace row with its group toggle, a machine row with its collapse toggle or retryable status badge) is sent as the widest run of its cells that no child covers, and is dropped when no cell is left. Its center never lands on a child.
 14. While calibration runs, the client swallows every host mouse report, from the moment it turns on pixel reporting until the report from the warp back has arrived or timed out. This includes reports queued before the first warp. None reaches `ClientShell::handle_mouse` or a pane, so calibration warps change no hover state and send no mouse events to pane apps. Only the calibrator reads them.
+15. While a `ContextMenu` or `GlobalMenu` overlay is open, the `keys.neru_hints` binding, prefix included, runs the action. It is checked before `route_overlay_key`, and it leaves the menu open, so the menu's rows become the targets. After the prefix, any other key goes to the menu as before. Every other overlay (rename, new tab, worktree dialogs, onboarding, settings, help) keeps taking every key, so the binding does nothing there.
 
 ## Tasks
 
@@ -57,6 +58,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T4 | x | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
 | T5 | x | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
 | T6 | ~ | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
+| T7 | | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
 
 ## Bugs
 
@@ -64,6 +66,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | --- | --- | --- | --- |
 | B1 | 2026-11-14 | T1 probe turned pixel mode off with `?1016l` alone. kitty then sent legacy `ESC [ M` reports, which the SGR parser ignored, so calibration saw no motion. | V12 |
 | B2 | 2026-11-14 | T1 probe divided Ghostty's ioctl extent (2446 px, 152 columns) as floats. The extent includes leftover padding, so the pitch drifted and a far-edge click landed one column off. | V9 |
+| B3 | 2026-11-14 | T6: an open overlay sends every key to `route_overlay_key`, so `prefix+f` never reached the prefix table. Menu rows, the only targets while a menu is open (design note section 2), could not be reached from the keyboard. | V15 |
 
 ## Open design questions
 
