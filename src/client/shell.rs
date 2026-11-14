@@ -26,6 +26,11 @@ mod link_hover;
 mod mobile;
 mod mouse;
 mod neru_calibration;
+mod neru_session;
+#[cfg(unix)]
+pub(crate) use neru_session::{
+    neru_unavailable_reason, run_neru_calibration, run_neru_hints, NeruHintsEvent,
+};
 mod neru_targets;
 mod notification_policy;
 mod notifications;

@@ -33,5 +33,7 @@ pub(super) enum ClientLoopEvent {
         /// latest target have the same identity after restoration.
         force: bool,
     },
+    #[cfg(unix)]
+    NeruHints(shell::NeruHintsEvent),
     Timer,
 }

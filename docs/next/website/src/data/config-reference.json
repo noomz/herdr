@@ -722,6 +722,12 @@
           "description": "Enter keyboard copy mode for the focused pane."
         },
         {
+          "key": "keys.neru_hints",
+          "type": "keybinding",
+          "default": "\"prefix+f\"",
+          "description": "Label herdr's clickable controls with neru hints, so you can click them from the keyboard. macOS only; needs neru 1.58.0 or later and a terminal that reports pixel mouse positions (kitty, Ghostty)."
+        },
+        {
           "key": "keys.focus_pane_left",
           "type": "keybinding",
           "default": "\"prefix+h\"",
@@ -1541,6 +1547,18 @@
           "type": "boolean",
           "default": "true",
           "description": "Add keepalive fallbacks and private connection reuse for `herdr --remote`. Set false to run plain ssh unchanged."
+        }
+      ]
+    },
+    {
+      "id": "neru",
+      "title": "neru",
+      "keys": [
+        {
+          "key": "neru.path",
+          "type": "string",
+          "default": "\"neru\"",
+          "description": "The neru binary that `keys.neru_hints` runs, resolved on `PATH` when it has no `/`."
         }
       ]
     },

@@ -333,3 +333,41 @@ Use **move and observe, pixel variant**:
 6. Move the pointer back and restore the saved mouse modes, re-sending the full set (§V.8). If the start point is on a display neru cannot warp to (finding 12), report that the pointer could not be restored.
 
 Calibrate on every use. It costs tens of milliseconds, and herdr cannot see window moves, so a cached origin can go stale without warning.
+
+## End-to-end verification (T6, 2026-11-14, partial)
+
+Setup: herdr `b52744c8` release build, neru v1.62.0, built-in Retina display only (scale 2). Each host ran a separate test instance against an isolated named session (`XDG_CONFIG_HOME` in a temp dir, `herdr --session neru-t6`), so the user's own server was not touched. `neru.path` pointed at a wrapper that logged each neru call and saved the targets JSON, then ran the real neru. Clicks on targets used `neru action move_mouse` to the target center and `left_click --bare`, the same click neru makes on a label pick. One real label pick per host used a synthetic keystroke into neru's overlay. herdr state was read back with `herdr workspace list` and `herdr tab list` over the test socket.
+
+### Results
+
+| Check | kitty, scale 2 | Ghostty, scale 2 | Invariants |
+| --- | --- | --- | --- |
+| Workspace row | pass | pass (2 rows) | 1, 2 |
+| Tab | pass | pass (2 tabs) | 1, 2 |
+| `+` (opens the new-tab name dialog) | pass | pass | 1, 2 |
+| Group collapse, then expand | pass | pass | 2, 13 |
+| Sidebar toggle `«`, collapse and back | pass | not sent: off-screen, see below | 2, 11 |
+| Narrow layout "switch workspace" button (kitty vertical split, 59 columns) | pass | | 1, 2 |
+| Menu row | **fail**: see finding 1 | not run (same cause) | 1, 2 |
+| Float button | not run: needs a plugin float | not run | 1, 2 |
+| Real neru label pick | pass (`KA` → workspace alpha) | pass (`G` → tab t3) | 2 |
+| Titles are visible text | pass | pass | 3 |
+| Busy session: 17 workspaces, 8 tabs | 29 targets: 14 visible workspace rows of 17, 8 of 8 tabs; scrolled-off rows not sent | 39 targets, whole sidebar visible | 1 |
+| Missing neru (`neru.path` to a missing file) | pass: "neru not found at …", no neru call, no zombie child; the other attached client showed nothing | | 6, 7 |
+| Pointer moved during calibration (warps every 30 ms) | pass: "Calibration failed: the pointer moved …", neru not started, pointer warped back | | 4, 8, 10 |
+| Pane app with any-motion + SGR, then also pixel mode | pass: 0 reports reached the pane during calibration; afterwards SGR cell reports, and SGR pixel reports in pixel mode, never X10 | | 12, 14 |
+| kitty horizontal split (herdr in one half) | pass: 3 of 3 clicks hit, calibration took 4 warps | | 2 |
+| Redraw between send and pick (workspace switched by the API while labels were up) | pass: the click landed on the empty tab-bar cell now under the label; nothing broke | | 5 |
+| Window taller than the display | Ghostty window ran 43 pt below the 1117 pt screen; the `«` row is off-screen and was not sent | | 11 |
+| SSH client | not run: localhost has no key login set up | | 7 |
+| Scale 1 | not run: the scale-1 display (MateView) is not attached | | 2, 9 |
+| Host window on a second display | not run: no second display attached | | 8, 10 |
+
+Calibration costs: 2 warps plus the restore warp when the window center reports, 4 in the split cases. Each neru call took about 220 ms through the logging wrapper, so a full run took about 2 s; without the wrapper's Python timestamp it is shorter.
+
+### Findings
+
+1. **Menu rows cannot become targets from the keybinding.** While any overlay is open, `ClientShell::route_key_press` (`src/client/shell/input.rs:653`) sends every key to `route_overlay_key`, so `prefix+f` never reaches the prefix table. Design note section 2 makes an open overlay's rows the only targets, but no key press can start the action while it is open. With the menu open, `ctrl+b f` started no neru call. Text-input overlays such as the new-tab dialog take the keys as text.
+2. **`[neru]` is not live-reloaded.** `herdr server reload-config` and the client's reload apply `[keys]` and `[ui]` (`ClientShellConfig::apply_live_config`), not `neru.path`. A changed path takes effect only in a new client. Design note section 7 does not say which is intended.
+3. **Collapsed-sidebar titles are terse and repeat.** With the sidebar collapsed, the visible text of workspace rows is a number and a dot, so titles are `1·`, `2·`, `▾L`, and `1·` appears three times. This meets §V.3 as written, but neru's search mode cannot tell those targets apart.
+4. **Each new client opens on the onboarding overlay** in a fresh config dir, and the overlay takes `prefix+f` (finding 1). This affects only first runs.

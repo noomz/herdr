@@ -9,8 +9,8 @@
 //! The main loop owns the host mouse modes (`client::neru_modes`). Calibration runs on a worker
 //! thread and asks for pixel reports through [`NeruCalibrationHost::start_reports`].
 
-// The client action (§T.5) is the first caller outside tests.
-#![cfg_attr(not(test), allow(dead_code))]
+// Only Unix clients calibrate (`client::neru_hints`).
+#![cfg_attr(windows, allow(dead_code))]
 
 use std::fmt;
 use std::path::PathBuf;
@@ -332,19 +332,44 @@ impl NeruCli {
         Self { path: path.into() }
     }
 
+    /// The version `neru --version` prints, as `(major, minor, patch)`.
+    pub(super) fn version(&self) -> Result<(u32, u32, u32), NeruCommandError> {
+        let output = self.run("--version", &["--version"], None)?;
+        parse_version(&output).ok_or_else(|| {
+            failed(
+                "--version",
+                format!(
+                    "unexpected output: {}",
+                    first_line(&output).unwrap_or_default()
+                ),
+            )
+        })
+    }
+
+    /// Starts hint mode on `targets_json`. neru returns once hint mode is active, not when the
+    /// user picks a label (§V.5).
+    pub(super) fn hints(&self, targets_json: String) -> Result<(), NeruCommandError> {
+        self.run(
+            "hints",
+            &["hints", "--targets", "-", "--action", "left_click"],
+            Some(targets_json.into_bytes()),
+        )
+        .map(drop)
+    }
+
     pub(super) fn query_window(&self) -> Result<NeruScreenRect, NeruCommandError> {
-        let output = self.run("query window", &["query", "window", "--json"])?;
+        let output = self.run("query window", &["query", "window", "--json"], None)?;
         parse_window(&output).map_err(|detail| failed("query window", detail))
     }
 
     pub(super) fn query_cursor(&self) -> Result<ScreenPoint, NeruCommandError> {
-        let output = self.run("query cursor", &["query", "cursor", "--json"])?;
+        let output = self.run("query cursor", &["query", "cursor", "--json"], None)?;
         parse_cursor(&output).map_err(|detail| failed("query cursor", detail))
     }
 
     /// Display rectangles only. Their scale field reads 1 on HiDPI displays (§V.9).
     pub(super) fn query_displays(&self) -> Result<Vec<NeruScreenRect>, NeruCommandError> {
-        let output = self.run("query displays", &["query", "displays", "--json"])?;
+        let output = self.run("query displays", &["query", "displays", "--json"], None)?;
         parse_displays(&output).map_err(|detail| failed("query displays", detail))
     }
 
@@ -353,14 +378,26 @@ impl NeruCli {
         self.run(
             "action move_mouse",
             &["action", "move_mouse", "--x", &x, "--y", &y],
+            None,
         )
         .map(drop)
     }
 
-    fn run(&self, command: &'static str, args: &[&str]) -> Result<Vec<u8>, NeruCommandError> {
+    /// Runs neru with `args`, writing `input` to its stdin when given.
+    fn run(
+        &self,
+        command: &'static str,
+        args: &[&str],
+        input: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, NeruCommandError> {
+        let stdin = if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
         let child = Command::new(&self.path)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -372,7 +409,7 @@ impl NeruCli {
             })?;
         let output = crate::remote::wait_with_output_timeout(
             child,
-            None,
+            input,
             COMMAND_TIMEOUT,
             Arc::new(AtomicBool::new(false)),
         )
@@ -435,6 +472,23 @@ struct WirePoint {
 #[derive(serde::Deserialize)]
 struct WireDisplays {
     displays: Vec<WireRect>,
+}
+
+/// The first `major.minor.patch` in `neru --version` output (`Neru version v1.62.0`).
+fn parse_version(output: &[u8]) -> Option<(u32, u32, u32)> {
+    let text = String::from_utf8_lossy(output);
+    text.split_whitespace().find_map(|word| {
+        let mut parts = word.trim_start_matches('v').splitn(3, '.');
+        // Keep the leading digits, so `0-rc1` reads as 0.
+        let mut next = || {
+            let part = parts.next()?;
+            let end = part
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(part.len());
+            part[..end].parse::<u32>().ok()
+        };
+        Some((next()?, next()?, next()?))
+    })
 }
 
 fn parse_window(json: &[u8]) -> Result<NeruScreenRect, String> {

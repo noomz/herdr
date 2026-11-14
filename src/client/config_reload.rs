@@ -42,14 +42,18 @@ pub(super) fn apply_reload(
             state.endpoint_sgr_pixels_requested,
             state.pixel_mouse_available(),
         );
-        if enabled != state.mouse_capture_active
-            || sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire)
-        {
-            set_mouse_capture(enabled, sgr_pixels).map_err(ClientError::ConnectionFailed)?;
+        if state.neru_calibrating {
+            // Calibration restores the modes from client state when it ends.
+        } else {
+            if enabled != state.mouse_capture_active
+                || sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire)
+            {
+                set_mouse_capture(enabled, sgr_pixels).map_err(ClientError::ConnectionFailed)?;
+            }
+            host_mouse_capture_active.store(enabled, Ordering::Release);
+            host_sgr_pixels_active.store(sgr_pixels, Ordering::Release);
         }
         state.mouse_capture_active = enabled;
-        host_mouse_capture_active.store(enabled, Ordering::Release);
-        host_sgr_pixels_active.store(sgr_pixels, Ordering::Release);
     }
     let pixel_mouse_available = state.pixel_mouse_available();
     let (frame, resize) = if let Some(shell) = state.shell.as_mut() {

@@ -4,9 +4,6 @@
 //! writes frames. A calibration worker that wrote modes itself could split a frame's escape
 //! sequence.
 
-// The client action (§T.5) is the first caller outside tests.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 

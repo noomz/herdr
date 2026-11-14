@@ -72,6 +72,9 @@ pub(super) struct ClientState {
         Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) repaint_pending: bool,
+    /// neru hints calibration owns the host mouse modes (`neru_hints.rs`). Mode writers update
+    /// state only until calibration restores the modes (§V.8, §V.12).
+    pub(super) neru_calibrating: bool,
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
     /// an acknowledged target snapshot/surface pair commits.
     pub(super) presentation_frozen: bool,
@@ -136,6 +139,7 @@ impl ClientState {
             remote_image_paste_key: None,
             redraw_on_focus_gained: false,
             repaint_pending: false,
+            neru_calibrating: false,
             presentation_frozen: false,
             deferred_local_activation: None,
             draw_host_cursor: false,

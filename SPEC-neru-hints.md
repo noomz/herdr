@@ -21,7 +21,7 @@ Background, measurements and rejected approaches are in `docs/design/neru-hints/
 ## Interfaces
 
 - Client action: a new action, bound in the prefix table like other client actions, that sends the current hit map to neru.
-- External command: herdr starts neru as a child process and writes the targets JSON to its stdin, `neru hints --targets -`. The neru binary path is configurable; the default is `neru` on `PATH`.
+- External command: herdr starts neru as a child process and writes the targets JSON to its stdin, `neru hints --targets - --action left_click`. The command returns as soon as hint mode is active (about 20 ms, neru v1.62.0), not when the user picks a label. The neru binary path is configurable; the default is `neru` on `PATH`.
 - Targets JSON: neru's documented shape, `{"hints":[{"x","y","width","height","title"}]}`, in global top-left screen points.
 - Calibration: move and observe with SGR pixel reports, chosen in T1 (research note, "Calibration measurements", Decision). herdr turns on any-motion SGR pixel reporting, warps the pointer with `neru action move_mouse` to a point inside `neru query window` (window center first, then a 3 × 3 grid until one point reports), then to a second point 40 pt away. The two pixel reports give the scale and the grid origin. herdr then moves the pointer back and restores its mouse modes. It needs no config values.
 - Other neru commands used: `neru query window --json`, `neru query cursor --json`, `neru query displays --json`, `neru action move_mouse --x --y`. herdr reads only display rectangles from `query displays`, never its scale (§V.9). They tell a moved pointer from a window on a display neru cannot reach (§V.10), and they drop off-screen targets (§V.11).
@@ -36,7 +36,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 2. Choosing a label triggers the same action as a real left click on that control. The click's center lands inside the control's rendered cells on every supported host and scale.
 3. Each target's title is the control's visible text where it has some (workspace name, tab title, menu row, button label), so neru's search mode can find it.
 4. When calibration fails or is not reliable, herdr does not start neru and reports why. It never sends targets it knows to be offset.
-5. If the hit map changes between sending and clicking (redraw, resize, tab switch), the click can land on a different control. The action keeps that window small and its behavior defined. See the open question on stale targets.
+5. If the hit map changes between sending and clicking (redraw, resize, tab switch), the click can land on a different control. herdr accepts this risk. It builds the targets on the main thread from the current hit map after calibration returns, immediately before it starts neru. If the grid size or cell pitch changed since calibration started, it does not send them and reports why.
 6. The action never blocks the client's render or input loop. A slow, failing or missing neru process is reported and its child process is reaped.
 7. Unavailable cases (SSH client, no GUI host, unsupported host, missing or too-old neru) report a clear reason and leave the session untouched.
 8. Mouse reporting modes, pixel mouse state and the host pointer return to their previous state after calibration, whether calibration succeeds or fails. If the pointer started on a display neru cannot warp to, herdr reports that it could not restore the pointer.
@@ -46,6 +46,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 12. Restoring mouse modes re-sends the full mode set the client needs (any-motion, SGR, and pixel mode only if a pane requests it). It never sends `?1016l` alone, because in kitty that also resets the report encoding to legacy X10.
 13. A target that contains child targets (a workspace row with its group toggle, a machine row with its collapse toggle or retryable status badge) is sent as the widest run of its cells that no child covers, and is dropped when no cell is left. Its center never lands on a child.
 14. While calibration runs, the client swallows every host mouse report, from the moment it turns on pixel reporting until the report from the warp back has arrived or timed out. This includes reports queued before the first warp. None reaches `ClientShell::handle_mouse` or a pane, so calibration warps change no hover state and send no mouse events to pane apps. Only the calibrator reads them.
+15. While a `ContextMenu` or `GlobalMenu` overlay is open, the `keys.neru_hints` binding, prefix included, runs the action. It is checked before `route_overlay_key`, and it leaves the menu open, so the menu's rows become the targets. After the prefix, any other key goes to the menu as before. Every other overlay (rename, new tab, worktree dialogs, onboarding, settings, help) keeps taking every key, so the binding does nothing there.
 
 ## Tasks
 
@@ -55,8 +56,9 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T2 | x | Design and document the target list: which hit-map entries become targets, their titles, how overlays and floats stack, and the size limit. Write the config keys and the unavailable-case messages. | 1, 3, 7 |
 | T3 | x | Implement the pure conversion from hit map and calibration to targets JSON. Unit-test it with fixed hit maps, cell sizes, origins and scales. | 1, 2, 3, 9, 11, 13 |
 | T4 | x | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
-| T5 | | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
-| T6 | | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
+| T5 | x | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
+| T6 | ~ | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
+| T7 | | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
 
 ## Bugs
 
@@ -64,6 +66,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | --- | --- | --- | --- |
 | B1 | 2026-11-14 | T1 probe turned pixel mode off with `?1016l` alone. kitty then sent legacy `ESC [ M` reports, which the SGR parser ignored, so calibration saw no motion. | V12 |
 | B2 | 2026-11-14 | T1 probe divided Ghostty's ioctl extent (2446 px, 152 columns) as floats. The extent includes leftover padding, so the pitch drifted and a far-edge click landed one column off. | V9 |
+| B3 | 2026-11-14 | T6: an open overlay sends every key to `route_overlay_key`, so `prefix+f` never reached the prefix table. Menu rows, the only targets while a menu is open (design note section 2), could not be reached from the keyboard. | V15 |
 
 ## Open design questions
 
@@ -75,7 +78,4 @@ Resolved by T1 (evidence in the research note, "Calibration measurements") and T
 - **Which controls.** Only controls a left click at the target's center reaches in the current state, in `handle_mouse` layer order. Panes, splits, scrollbars, dividers and background areas are never targets (design note, sections 1–3).
 - **Overlays.** An open overlay is exclusive: only its rows and buttons are targets. An open popup pane gives no targets, and herdr reports that (design note, section 2).
 - **Calibration lifetime.** Calibrate on every use. It costs tens of milliseconds (one warp is about 7 ms), and herdr cannot see window moves.
-
-Still open:
-
-- **Stale targets.** neru exits hint mode on a screen change but not on a herdr redraw. Should herdr hold its layout while neru is open (and how would it know neru closed), or accept the risk and document it?
+- **Stale targets.** Accept the risk and document it (§V.5). `neru hints --targets -` returns once hint mode is active, so herdr cannot tell when neru closes without `neru watch`, which §I does not list. Holding the layout until `neru watch --event mode_exit` reports the mode closed is a possible later extension, not part of T5.
