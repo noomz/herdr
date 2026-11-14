@@ -3020,3 +3020,126 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }
+
+fn show(
+    machine: &str,
+    target: Option<crate::api::schema::MachineShowTarget>,
+) -> crate::api::schema::MachineShow {
+    crate::api::schema::MachineShow {
+        machine: machine.into(),
+        target,
+    }
+}
+
+#[test]
+fn show_machine_from_local_selects_the_remote_and_its_target() {
+    let (mut state, remote) = state_with_remote();
+
+    let outcome = state.show_machine(
+        &ClientEndpointId::Local,
+        show(
+            "Build",
+            Some(crate::api::schema::MachineShowTarget::Pane("pane_1".into())),
+        ),
+    );
+
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "pane_1"
+    ));
+}
+
+#[test]
+fn show_machine_from_the_active_machine_can_return_to_local_or_focus_in_place() {
+    let (mut state, remote) = state_with_remote();
+    assert!(state.activate_endpoint_projection(&remote));
+
+    let outcome = state.show_machine(
+        &remote,
+        show(
+            "local",
+            Some(crate::api::schema::MachineShowTarget::Workspace(
+                "ws_1".into(),
+            )),
+        ),
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        }] if workspace_id == "ws_1"
+    ));
+
+    let ClientEndpointId::Ssh(profile_id) = &remote else {
+        panic!("remote endpoint");
+    };
+    let outcome = state.show_machine(
+        &remote,
+        show(
+            profile_id.as_str(),
+            Some(crate::api::schema::MachineShowTarget::Tab("tab_1".into())),
+        ),
+    );
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::TabFocus(target)
+                if target.tab_id == "tab_1")
+    ));
+}
+
+#[test]
+fn show_machine_from_a_background_machine_is_ignored() {
+    let (mut state, remote) = state_with_remote();
+
+    let outcome = state.show_machine(&remote, show("Build", None));
+
+    assert!(outcome.actions.is_empty());
+    assert!(state.visible_endpoint_notice.is_none());
+    assert_eq!(state.active_endpoint_id, ClientEndpointId::Local);
+}
+
+#[test]
+fn show_machine_reports_unknown_and_ambiguous_labels() {
+    let (mut state, _) = state_with_remote();
+
+    let outcome = state.show_machine(&ClientEndpointId::Local, show("nosuch", None));
+    assert!(outcome.actions.is_empty());
+    assert!(outcome.repaint);
+    assert_eq!(
+        state
+            .visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str()),
+        Some("unknown machine nosuch")
+    );
+
+    let mut twin = remote_profile();
+    twin.id = ProfileId::parse("fedcba9876543210fedcba9876543210").unwrap();
+    state.set_endpoint_catalog(&[remote_profile(), twin]);
+    let outcome = state.show_machine(&ClientEndpointId::Local, show("Build", None));
+    assert!(outcome.actions.is_empty());
+    assert!(state
+        .visible_endpoint_notice
+        .as_ref()
+        .is_some_and(|notice| notice.body.contains("ambiguous")));
+}
+
+#[test]
+fn show_machine_retries_a_machine_that_is_not_ready() {
+    let (mut state, remote) = state_with_remote();
+    state.mark_endpoint_disconnected(&remote);
+
+    let outcome = state.show_machine(&ClientEndpointId::Local, show("Build", None));
+
+    assert!(outcome.actions.is_empty());
+    assert_eq!(state.take_machine_retries(), vec![remote.clone()]);
+    assert_eq!(
+        state.endpoint_status(&remote),
+        Some(ClientEndpointStatus::Connecting)
+    );
+}

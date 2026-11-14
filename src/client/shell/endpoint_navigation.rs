@@ -228,6 +228,63 @@ impl ClientShellState {
         false
     }
 
+    /// Shows a machine, and optionally one of its targets, on behalf of a plugin or script.
+    /// Only the local server or the machine already on screen may change the view.
+    pub(crate) fn show_machine(
+        &mut self,
+        origin: &ClientEndpointId,
+        request: crate::api::schema::MachineShow,
+    ) -> ClientShellInput {
+        let mut outcome = ClientShellInput::default();
+        if !origin.is_local() && origin != &self.active_endpoint_id {
+            return outcome;
+        }
+        let endpoint_id = match self.resolve_machine(&request.machine) {
+            Ok(endpoint_id) => endpoint_id,
+            Err(message) => {
+                outcome.repaint = self.receive_endpoint_unavailable(message);
+                return outcome;
+            }
+        };
+        let target = request.target.map(|target| match target {
+            crate::api::schema::MachineShowTarget::Workspace(id) => {
+                ClientEndpointFocusTarget::Workspace(id)
+            }
+            crate::api::schema::MachineShowTarget::Tab(id) => ClientEndpointFocusTarget::Tab(id),
+            crate::api::schema::MachineShowTarget::Pane(id) => ClientEndpointFocusTarget::Pane(id),
+        });
+        match target {
+            Some(target) => self.focus_or_activate(endpoint_id, target, &mut outcome),
+            None => self.activate_endpoint(endpoint_id, &mut outcome),
+        };
+        outcome
+    }
+
+    /// Resolves `local`, a saved profile ID, or a unique saved label, like `--machine`.
+    fn resolve_machine(&self, machine: &str) -> Result<ClientEndpointId, String> {
+        if machine == "local" {
+            return Ok(ClientEndpointId::Local);
+        }
+        let saved = || {
+            self.endpoints
+                .iter()
+                .filter(|endpoint| !endpoint.endpoint_id.is_local())
+        };
+        if let Some(endpoint) = saved().find(|endpoint| {
+            matches!(&endpoint.endpoint_id, ClientEndpointId::Ssh(id) if id.as_str() == machine)
+        }) {
+            return Ok(endpoint.endpoint_id.clone());
+        }
+        let mut labelled = saved().filter(|endpoint| endpoint.label == machine);
+        match (labelled.next(), labelled.next()) {
+            (Some(endpoint), None) => Ok(endpoint.endpoint_id.clone()),
+            (Some(_), Some(_)) => Err(format!(
+                "machine label {machine} is ambiguous; use its profile ID"
+            )),
+            (None, _) => Err(format!("unknown machine {machine}")),
+        }
+    }
+
     /// Selecting a machine that is waiting to reconnect asks for an attempt now.
     fn select_unready_machine(
         &mut self,
