@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let a user click any herdr control from the keyboard with neru. A herdr client action sends neru the screen positions of herdr's clickable controls, so neru labels those controls and nothing else. When the user picks a label, neru clicks it, and herdr handles the click like any other mouse click.
+Let a user click any herdr control from the keyboard with neru. A herdr client action sends neru the screen positions of herdr's clickable controls, so neru labels those controls and nothing else. When the user picks a label, neru clicks it, and herdr handles the click like any other mouse click. neru also labels each visible pane's text input, at the pane's terminal cursor.
 
 Background, measurements and rejected approaches are in `docs/design/neru-hints/research.md`. Its PoC section shows why this feature exists. neru's default scan sees only one text area per terminal window. neru's `segment` strategy labels herdr's controls, but in a real session it also labels every word of pane output: 729 targets on one kitty window.
 
@@ -26,13 +26,15 @@ Background, measurements and rejected approaches are in `docs/design/neru-hints/
 - Calibration: move and observe with SGR pixel reports, chosen in T1 (research note, "Calibration measurements", Decision). herdr turns on any-motion SGR pixel reporting, warps the pointer with `neru action move_mouse` to a point inside `neru query window` (window center first, then a 3 × 3 grid until one point reports), then to a second point 40 pt away. The two pixel reports give the scale and the grid origin. herdr then moves the pointer back and restores its mouse modes. It needs no config values.
 - Other neru commands used: `neru query window --json`, `neru query cursor --json`, `neru query displays --json`, `neru action move_mouse --x --y`. herdr reads only display rectangles from `query displays`, never its scale (§V.9). They tell a moved pointer from a window on a display neru cannot reach (§V.10), and they drop off-screen targets (§V.11).
 
+- Pane cursors: the server adds each pane's cursor (cell relative to `inner_rect`, and whether it is visible) to `PaneSurfacePane`, behind a new endpoint capability `pane_cursors_v1`. A server without the capability (an older herdr on another machine) sends no cursors, and its panes get no targets.
+
 - Config keys: `keys.neru_hints` (binding, default `prefix+f`) runs the action. `neru.path` (default `"neru"`) names the neru binary.
 
 The target list, titles, size budget, config keys and unavailable-case messages are in `docs/design/neru-hints/design.md` (T2).
 
 ## Invariants
 
-1. Every target sent to neru is a control in the sending client's current hit map. Pane text, pane bodies and host terminal chrome are never targets.
+1. Every target sent to neru is a control in the sending client's current hit map. Pane text, pane bodies and host terminal chrome are never targets, except one pane-cursor target per pane (§V.18).
 2. Choosing a label triggers the same action as a real left click on that control. The click's center lands inside the control's rendered cells on every supported host and scale.
 3. Each target's title is the control's visible text where it has some (workspace name, tab title, menu row, button label), so neru's search mode can find it.
 4. When calibration fails or is not reliable, herdr does not start neru and reports why. It never sends targets it knows to be offset.
@@ -49,6 +51,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 15. While a `ContextMenu` or `GlobalMenu` overlay is open, the `keys.neru_hints` binding, prefix included, runs the action. It is checked before `route_overlay_key`, and it leaves the menu open, so the menu's rows become the targets. After the prefix, any other key goes to the menu as before. Every other overlay (rename, new tab, worktree dialogs, onboarding, settings, help) keeps taking every key, so the binding does nothing there.
 16. Every press of `keys.neru_hints` that does not start neru shows its reason, even when an earlier press failed for the same reason. A neru notice is never suppressed by the once-per-server-boot filter for endpoint notices (`endpoint_notice_seen`). If the same notice is still on screen, it stays visible for its full duration again.
 17. A press that ends with the pointer not restored says so in the notice that ends the press, together with any other reason. A later notice never replaces the restore note.
+18. Each visible pane whose cursor is visible and inside its viewport (not scrolled back) gets one target: its cursor cell. The title is the pane's border title, else its agent name, else `pane`. There is no target when the cursor is hidden, the pane is scrolled back, a float or the toast covers the cell, an overlay is open, or the pane's server lacks `pane_cursors_v1`. Picking the label is a real click at that cell: it focuses the pane and reaches its app like any click (§V.2).
 
 ## Tasks
 
@@ -62,6 +65,10 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T6 | x | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
 | T7 | x | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
 | T8 | x | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
+| T9 | . | Measure where the terminal cursor sits, and whether it is visible, in Claude Code, Codex, a shell prompt, vim and less inside herdr. Record the results in the research note and decide what happens when the cursor is hidden. | 18 |
+| T10 | . | Server and protocol: send each pane's cursor behind `pane_cursors_v1`. Test a new client with an old server and an old client with a new server. | 18 |
+| T11 | . | Targets: pane-cursor targets in `neru_targets.rs`, with occlusion and titles. Unit-test them with fixed hit maps. | 1, 2, 3, 18 |
+| T12 | . | Verify live in kitty and Ghostty: label a pane that is not focused (Claude Code), pick it, and type into its input. | 1, 2, 18 |
 
 ## Bugs
 
