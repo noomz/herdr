@@ -15,6 +15,7 @@ pub(crate) enum EndpointControlMessage {
     FloatFocus(crate::protocol::floats::FloatFocus),
     FloatButtons(Option<crate::protocol::endpoint::EndpointFloatButtons>),
     FloatButtonResult(crate::protocol::endpoint::EndpointFloatButtonResult),
+    PaneCursors(crate::protocol::endpoint::EndpointPaneCursors),
     ShowMachine(crate::api::schema::MachineShow),
     Ignored,
 }
@@ -75,6 +76,11 @@ pub(crate) fn decode_endpoint_control(
                 .ok()
                 .filter(valid_float_button_metadata);
         return Ok(EndpointControlMessage::FloatButtons(metadata));
+    }
+    if kind == crate::protocol::endpoint::PANE_CURSORS_KIND {
+        return Ok(serde_json::from_str(data)
+            .map(EndpointControlMessage::PaneCursors)
+            .unwrap_or(EndpointControlMessage::Ignored));
     }
     if kind == crate::protocol::endpoint::FLOAT_BUTTON_RESULT_KIND {
         return Ok(serde_json::from_str(data)
@@ -187,6 +193,31 @@ mod tests {
         assert!(matches!(
             decode(&value),
             EndpointControlMessage::FloatButtons(None)
+        ));
+    }
+
+    #[test]
+    fn pane_cursor_control_decodes_a_valid_set_and_ignores_an_invalid_one() {
+        let decode = |data: &str| {
+            decode_endpoint_control(crate::protocol::endpoint::PANE_CURSORS_KIND, data).unwrap()
+        };
+        let EndpointControlMessage::PaneCursors(cursors) = decode(
+            r#"{"boot_id":"boot","cursors":[{"pane_id":"w1:p1","x":3,"y":0,"visible":true}]}"#,
+        ) else {
+            panic!("expected pane cursors");
+        };
+        assert_eq!(
+            cursors.cursors,
+            vec![crate::protocol::endpoint::EndpointPaneCursor {
+                pane_id: "w1:p1".into(),
+                x: 3,
+                y: 0,
+                visible: true,
+            }]
+        );
+        assert!(matches!(
+            decode(r#"{"boot_id":"boot","cursors":[{"pane_id":"w1:p1","x":-1}]}"#),
+            EndpointControlMessage::Ignored
         ));
     }
 

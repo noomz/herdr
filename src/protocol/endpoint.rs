@@ -34,6 +34,10 @@ pub const FLOAT_BUTTONS_CAPABILITY: &str = "float_buttons_v1";
 pub const FLOAT_BUTTONS_KIND: &str = "endpoint.float-buttons.v1";
 pub const FLOAT_BUTTON_RESULT_KIND: &str = "endpoint.float-button-result.v1";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+/// Each visible pane's terminal cursor, for clients that target pane inputs (neru hints).
+/// It rides in the same render write as the surface it describes, so it never overtakes it.
+pub const PANE_CURSORS_CAPABILITY: &str = "pane_cursors_v1";
+pub const PANE_CURSORS_KIND: &str = "endpoint.pane-cursors.v1";
 /// A direct terminal attach client asks the server to forward the attached terminal's Kitty
 /// images. Older servers ignore it, so old and new peers keep text-only attach.
 pub const ATTACH_GRAPHICS_KIND: &str = "endpoint.attach-graphics.v1";
@@ -44,6 +48,21 @@ pub struct EndpointAgentCompletions {
     pub boot_id: String,
     pub revision: u64,
     pub completions: std::collections::BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointPaneCursors {
+    pub boot_id: String,
+    pub cursors: Vec<EndpointPaneCursor>,
+}
+
+/// A pane's cursor cell, relative to the pane's `inner_rect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointPaneCursor {
+    pub pane_id: String,
+    pub x: u16,
+    pub y: u16,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +156,8 @@ pub struct EndpointClientHello {
     pub float_buttons: bool,
     #[serde(default)]
     pub show_machine: bool,
+    #[serde(default)]
+    pub pane_cursors: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -258,6 +279,7 @@ impl EndpointServerWelcome {
                 AGENT_COMPLETIONS_CAPABILITY.into(),
                 super::floats::CAPABILITY.into(),
                 FLOAT_BUTTONS_CAPABILITY.into(),
+                PANE_CURSORS_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -302,6 +324,7 @@ mod tests {
             floats: false,
             float_buttons: false,
             show_machine: false,
+            pane_cursors: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -454,6 +477,7 @@ mod tests {
         value.as_object_mut().unwrap().remove("floats");
         value.as_object_mut().unwrap().remove("float_buttons");
         value.as_object_mut().unwrap().remove("show_machine");
+        value.as_object_mut().unwrap().remove("pane_cursors");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
@@ -462,6 +486,7 @@ mod tests {
         assert!(!decoded.floats);
         assert!(!decoded.float_buttons);
         assert!(!decoded.show_machine);
+        assert!(!decoded.pane_cursors);
     }
 
     #[test]
@@ -480,6 +505,7 @@ mod tests {
                 AGENT_COMPLETIONS_CAPABILITY.to_string(),
                 super::super::floats::CAPABILITY.to_string(),
                 FLOAT_BUTTONS_CAPABILITY.to_string(),
+                PANE_CURSORS_CAPABILITY.to_string(),
             ]
         );
     }

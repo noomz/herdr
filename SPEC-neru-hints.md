@@ -26,7 +26,7 @@ Background, measurements and rejected approaches are in `docs/design/neru-hints/
 - Calibration: move and observe with SGR pixel reports, chosen in T1 (research note, "Calibration measurements", Decision). herdr turns on any-motion SGR pixel reporting, warps the pointer with `neru action move_mouse` to a point inside `neru query window` (window center first, then a 3 × 3 grid until one point reports), then to a second point 40 pt away. The two pixel reports give the scale and the grid origin. herdr then moves the pointer back and restores its mouse modes. It needs no config values.
 - Other neru commands used: `neru query window --json`, `neru query cursor --json`, `neru query displays --json`, `neru action move_mouse --x --y`. herdr reads only display rectangles from `query displays`, never its scale (§V.9). They tell a moved pointer from a window on a display neru cannot reach (§V.10), and they drop off-screen targets (§V.11).
 
-- Pane cursors: the server adds each pane's cursor (cell relative to `inner_rect`, and whether it is visible) to `PaneSurfacePane`, behind a new endpoint capability `pane_cursors_v1`. A server without the capability (an older herdr on another machine) sends no cursors, and its panes get no targets.
+- Pane cursors: the server sends each pane's cursor (cell relative to `inner_rect`, and whether it is visible) as an `EndpointControl` message of kind `endpoint.pane-cursors.v1`, data `{boot_id, cursors:[{pane_id, x, y, visible}]}`. It is gated by the endpoint capability `pane_cursors_v1` and a `pane_cursors` flag in the client hello (serde default `false`). The server sends it only when the cursor set changes, in the same render write as a surface or patch. `PaneSurfacePane` does not change (§V.19). A server without the capability (an older herdr on another machine) sends no cursors, and its panes get no targets.
 
 - Config keys: `keys.neru_hints` (binding, default `prefix+f`) runs the action. `neru.path` (default `"neru"`) names the neru binary.
 
@@ -52,6 +52,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 16. Every press of `keys.neru_hints` that does not start neru shows its reason, even when an earlier press failed for the same reason. A neru notice is never suppressed by the once-per-server-boot filter for endpoint notices (`endpoint_notice_seen`). If the same notice is still on screen, it stays visible for its full duration again.
 17. A press that ends with the pointer not restored says so in the notice that ends the press, together with any other reason. A later notice never replaces the restore note.
 18. Each visible pane whose cursor is visible and inside its viewport (not scrolled back) gets one target: its cursor cell. The title is the pane's border title, else its agent name, else `pane`. There is no target when the cursor is hidden, the pane is scrolled back, a float or the toast covers the cell, an overlay is open, or the pane's server lacks `pane_cursors_v1`. Picking the label is a real click at that cell: it focuses the pane and reaches its app like any click (§V.2).
+19. Pane cursors travel only in `endpoint.pane-cursors.v1`. The wire layout of `PaneSurfacePane`, `PaneSurface` and `PaneSurfacePatch` never changes, so generation-1 peers of any version still decode each other. The server sends cursors only to a client whose hello sets `pane_cursors`. The cursor control is appended to the same render write as its surface or patch (full, identical-frame and retained-patch paths), never sent on `writer.control`, so it cannot overtake the surface it describes. The server records a cursor set as sent only after that write succeeds. The client drops a set whose `boot_id` is not its server's.
 
 ## Tasks
 
@@ -66,7 +67,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T7 | x | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
 | T8 | x | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
 | T9 | x | Measure where the terminal cursor sits, and whether it is visible, in Claude Code, Codex, a shell prompt, vim and less inside herdr. Record the results in the research note and decide what happens when the cursor is hidden. | 18 |
-| T10 | . | Server and protocol: send each pane's cursor behind `pane_cursors_v1`. Test a new client with an old server and an old client with a new server. | 18 |
+| T10 | x | Server and protocol: send each pane's cursor behind `pane_cursors_v1`. Test a new client with an old server and an old client with a new server. | 18, 19 |
 | T11 | . | Targets: pane-cursor targets in `neru_targets.rs`, with occlusion and titles. Unit-test them with fixed hit maps. | 1, 2, 3, 18 |
 | T12 | . | Verify live in kitty and Ghostty: label a pane that is not focused (Claude Code), pick it, and type into its input. | 1, 2, 18 |
 
@@ -79,6 +80,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | B3 | 2026-11-14 | T6: an open overlay sends every key to `route_overlay_key`, so `prefix+f` never reached the prefix table. Menu rows, the only targets while a menu is open (design note section 2), could not be reached from the keyboard. | V15 |
 | B4 | 2026-11-14 | T6: `show_neru_notice` used `push_endpoint_notice` with kind `Unavailable`, which shows each code once per server boot (`endpoint_notice_seen`, `src/client/shell/actions.rs`). The code is `neru_hints:<message>`, so a second press failing for the same reason showed nothing. | V16 |
 | B5 | 2026-11-14 | T6: `finish_neru_calibration` showed `POINTER_NOT_RESTORED`, then the calibration error replaced it in the single notice slot (`visible_endpoint_notice`). On a real second display the unrestored pointer was never reported. | V17 |
+| B6 | 2026-11-15 | T10 plan: §I put pane cursors in `PaneSurfacePane`. That struct is bincode-encoded by position in `PaneSurface`, `PaneSurfacePatch` and the delta, reuse and scroll codecs, and the generation-1 wire is frozen (`src/protocol/wire.rs:1382`: compatible additions go through `EndpointControl`). A new field breaks old and new peers in both directions. | V19 |
 
 ## Open design questions
 

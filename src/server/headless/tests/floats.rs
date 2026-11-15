@@ -59,6 +59,7 @@ fn connect_shell_with_controls(
             direct_graphics: false,
             endpoint_keybindings: false,
             show_machine: false,
+            pane_cursors: false,
             mouse_capture: false,
             surface_active: true,
             writer,
@@ -112,11 +113,7 @@ async fn float_button_endpoint_rejects_clients_without_opt_in() {
             "plugin_id": "plugin", "entrypoint": "shell", "controls_revision": "revision", "button_id": "close"
         }
     })).unwrap();
-    server.handle_client_shell_endpoint_request(
-        7,
-        server.app.boot_id.clone(),
-        Box::new(request),
-    );
+    server.handle_client_shell_endpoint_request(7, server.app.boot_id.clone(), Box::new(request));
     let message = read_server_messages(control_rx.recv_timeout(Duration::from_secs(1)).unwrap());
     let ServerMessage::ClientShellEndpointResponseChunk { data, .. } = &message[0] else {
         panic!("endpoint response")

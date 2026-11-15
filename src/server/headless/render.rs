@@ -236,6 +236,34 @@ impl HeadlessServer {
     /// Whether a pane the client shows asked for SGR pixel mouse reports. Host
     /// reports go to whichever pane is under the pointer, so an unfocused pane
     /// needs pixels from the host too (#4750); others get them as cells.
+    /// Frames the pane cursor control when this client negotiated it and its set changed.
+    /// Callers append the bytes to the surface's render write and commit only on success.
+    pub(super) fn prepare_pane_cursors(
+        &self,
+        client_id: u64,
+        panes: &[protocol::PaneSurfacePane],
+    ) -> Option<(Vec<crate::protocol::endpoint::EndpointPaneCursor>, Vec<u8>)> {
+        let client = self.clients.get(&client_id)?;
+        if !client.shell_pane_cursors_enabled {
+            return None;
+        }
+        let cursors = super::retained_surface::surface_pane_cursors(&self.app, panes);
+        if client.shell_pane_cursors.as_ref() == Some(&cursors) {
+            return None;
+        }
+        let data = serde_json::to_string(&crate::protocol::endpoint::EndpointPaneCursors {
+            boot_id: self.app.boot_id.clone(),
+            cursors: cursors.clone(),
+        })
+        .ok()?;
+        let framed = Self::frame_server_message(&ServerMessage::EndpointControl {
+            kind: crate::protocol::endpoint::PANE_CURSORS_KIND.into(),
+            data,
+        })
+        .ok()?;
+        Some((cursors, framed))
+    }
+
     fn shell_visible_pane_wants_sgr_pixels(&self, client_id: u64) -> bool {
         if self
             .shell_focused_runtime(client_id)
@@ -1050,6 +1078,9 @@ impl HeadlessServer {
                     });
             let float_buttons =
                 self.prepare_float_buttons(client_id, float_layer.as_ref().map(|(layer, _)| layer));
+            let pane_cursors = surface_parts
+                .as_ref()
+                .and_then(|(panes, ..)| self.prepare_pane_cursors(client_id, panes));
             let float_controls_generation = self.app.state.float_controls_generation;
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
@@ -1092,12 +1123,15 @@ impl HeadlessServer {
                 }
                 client.clear_deferred_render();
                 crate::render_prof::event("full_render.skip_identical");
-                if float_layer.is_some() || float_buttons.is_some() {
+                if float_layer.is_some() || float_buttons.is_some() || pane_cursors.is_some() {
                     let mut framed = Vec::new();
                     if let Some((_, bytes)) = &float_layer {
                         framed.extend_from_slice(bytes);
                     }
                     if let Some((_, bytes)) = &float_buttons {
+                        framed.extend_from_slice(bytes);
+                    }
+                    if let Some((_, bytes)) = &pane_cursors {
                         framed.extend_from_slice(bytes);
                     }
                     match writer.render.try_send(framed) {
@@ -1109,6 +1143,9 @@ impl HeadlessServer {
                                 client.shell_float_buttons_revision = buttons.revision;
                                 client.shell_float_buttons = Some(buttons);
                                 client.shell_float_buttons_generation = float_controls_generation;
+                            }
+                            if let Some((cursors, _)) = pane_cursors {
+                                client.shell_pane_cursors = Some(cursors);
                             }
                         }
                         Err(std::sync::mpsc::TrySendError::Full(_)) => client.defer_full_render(),
@@ -1220,6 +1257,9 @@ impl HeadlessServer {
             if let Some((_, framed)) = &float_buttons {
                 serialized.extend_from_slice(framed);
             }
+            if let Some((_, framed)) = &pane_cursors {
+                serialized.extend_from_slice(framed);
+            }
             let send = if native_upload.is_some() || self.native_graphics.is_pending(client_id) {
                 writer.render.send_ordered(serialized)
             } else {
@@ -1250,6 +1290,9 @@ impl HeadlessServer {
                         client.shell_float_buttons_revision = buttons.revision;
                         client.shell_float_buttons = Some(buttons);
                         client.shell_float_buttons_generation = float_controls_generation;
+                    }
+                    if let Some((cursors, _)) = pane_cursors {
+                        client.shell_pane_cursors = Some(cursors);
                     }
                     if shell_graphics_pending || shell_assets_deferred || direct_graphics_pending {
                         client.defer_full_render();

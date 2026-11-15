@@ -180,6 +180,10 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_float_button_response: Option<(PendingFloatButton, Vec<u8>)>,
     pub(crate) shell_pending_float_buttons: HashMap<String, PendingFloatButton>,
     pub(crate) shell_show_machine: bool,
+    /// Whether this shell negotiated `pane_cursors_v1`.
+    pub(crate) shell_pane_cursors_enabled: bool,
+    /// Pane cursor set last delivered in a successful render write; `None` forces a resend.
+    pub(crate) shell_pane_cursors: Option<Vec<crate::protocol::endpoint::EndpointPaneCursor>>,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
@@ -266,6 +270,8 @@ impl ClientConnection {
             shell_float_button_response: None,
             shell_pending_float_buttons: HashMap::new(),
             shell_show_machine: false,
+            shell_pane_cursors_enabled: false,
+            shell_pane_cursors: None,
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
             host_keyboard_protocol_active: None,

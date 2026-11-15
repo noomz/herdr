@@ -1990,6 +1990,7 @@ impl HeadlessServer {
                 surface_scroll,
                 floats,
                 show_machine,
+                pane_cursors,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -2036,6 +2037,7 @@ impl HeadlessServer {
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
                 connection.shell_show_machine = show_machine;
+                connection.shell_pane_cursors_enabled = pane_cursors;
                 connection.render_state.enable_surface_reuse(surface_reuse);
                 connection.render_state.enable_surface_delta(surface_delta);
                 connection
@@ -2440,6 +2442,7 @@ impl HeadlessServer {
                 client.host_mouse_capture_active = None;
                 client.host_sgr_pixels_active = None;
                 client.host_keyboard_report_all_active = None;
+                client.shell_pane_cursors = None;
                 // A frozen activation drops float layers, so resend the current one after commit.
                 if client.shell_floats.is_some() {
                     client.shell_floats = Some(Default::default());

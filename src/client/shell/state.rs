@@ -968,6 +968,8 @@ pub(crate) struct ClientShellState {
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
     pub(super) popup_terminal_id: Option<String>,
     pub(super) floats: super::floats::ClientFloats,
+    /// Latest pane cursor set from the active endpoint (`pane_cursors_v1`).
+    pub(super) pane_cursors: Option<crate::protocol::endpoint::EndpointPaneCursors>,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_collapsed_manual: bool,
     pub(super) sidebar_width: u16,
@@ -1156,6 +1158,7 @@ impl ClientShellState {
             },
             popup_terminal_id: None,
             floats: Default::default(),
+            pane_cursors: None,
             sidebar_collapsed,
             sidebar_collapsed_manual: preferences.sidebar_collapsed.is_some(),
             sidebar_width,
@@ -1757,6 +1760,42 @@ impl ClientShellState {
 
     pub(crate) fn has_presented_surface(&self) -> bool {
         self.pane_surface.is_some()
+    }
+
+    /// Stores the active endpoint's pane cursors. A set from another server boot is dropped;
+    /// `None` (endpoint without `pane_cursors_v1`) clears them.
+    pub(crate) fn set_pane_cursors(
+        &mut self,
+        cursors: Option<crate::protocol::endpoint::EndpointPaneCursors>,
+    ) {
+        self.pane_cursors = cursors.filter(|cursors| {
+            self.snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.boot_id == cursors.boot_id)
+        });
+    }
+
+    /// The cursor of `pane_id`, relative to its `inner_rect`, when the server sent one.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by neru pane-cursor targets (SPEC-neru-hints T11)"
+        )
+    )]
+    pub(crate) fn pane_cursor(
+        &self,
+        pane_id: &str,
+    ) -> Option<&crate::protocol::endpoint::EndpointPaneCursor> {
+        let cursors = self.pane_cursors.as_ref()?;
+        let snapshot = self.snapshot.as_ref()?;
+        if cursors.boot_id != snapshot.boot_id {
+            return None;
+        }
+        cursors
+            .cursors
+            .iter()
+            .find(|cursor| cursor.pane_id == pane_id)
     }
 
     pub(crate) fn set_pane_surface(&mut self, surface: PaneSurfaceFrame) {

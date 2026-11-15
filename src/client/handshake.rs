@@ -225,6 +225,7 @@ pub(super) fn do_handshake(
             floats: true,
             float_buttons: true,
             show_machine: true,
+            pane_cursors: true,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],

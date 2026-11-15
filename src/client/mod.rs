@@ -2257,6 +2257,19 @@ async fn run_client_loop(
                                 }
                                 continue;
                             }
+                            Ok(endpoint::EndpointControlMessage::PaneCursors(cursors)) => {
+                                if !activation_message && endpoint_active {
+                                    let negotiated = write_stream
+                                        .connection(&endpoint_id)
+                                        .is_some_and(|connection| {
+                                            connection.negotiation.supports_pane_cursors()
+                                        });
+                                    if let Some(shell) = state.shell.as_mut() {
+                                        shell.set_pane_cursors(negotiated.then_some(cursors));
+                                    }
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::FloatButtonResult(result)) => {
                                 if !activation_message && endpoint_active {
                                     let repaint = state.shell.as_mut().is_some_and(|shell| {

@@ -157,6 +157,23 @@ fn retained_cursor(
     if !app.state.pane_exposes_host_cursor(workspace_index, pane_id) {
         return None;
     }
+    let area = Rect::new(
+        pane.inner_rect.x,
+        pane.inner_rect.y,
+        pane.inner_rect.width,
+        pane.inner_rect.height,
+    );
+    surface_pane_cursor(app, pane, area)
+}
+
+/// The cursor of a surface pane's terminal in `area` coordinates, hidden while scrolled back.
+/// `None` while synchronized output is active or when the cursor is outside `area`.
+fn surface_pane_cursor(
+    app: &app::App,
+    pane: &protocol::PaneSurfacePane,
+    area: Rect,
+) -> Option<protocol::CursorState> {
+    let (workspace_index, pane_id) = app.parse_pane_id(&pane.pane_id)?;
     let runtime = app.state.runtime_for_pane_in_workspace(
         &app.terminal_runtimes,
         workspace_index,
@@ -165,12 +182,6 @@ fn retained_cursor(
     if runtime.synchronized_output_active() {
         return None;
     }
-    let area = Rect::new(
-        pane.inner_rect.x,
-        pane.inner_rect.y,
-        pane.inner_rect.width,
-        pane.inner_rect.height,
-    );
     runtime
         .cursor_state(area, true)
         .map(|cursor| protocol::CursorState {
@@ -179,6 +190,26 @@ fn retained_cursor(
             visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
             shape: cursor.shape,
         })
+}
+
+/// Every surface pane's cursor cell relative to its `inner_rect` (§I pane cursors).
+pub(super) fn surface_pane_cursors(
+    app: &app::App,
+    panes: &[protocol::PaneSurfacePane],
+) -> Vec<crate::protocol::endpoint::EndpointPaneCursor> {
+    panes
+        .iter()
+        .filter_map(|pane| {
+            let area = Rect::new(0, 0, pane.inner_rect.width, pane.inner_rect.height);
+            let cursor = surface_pane_cursor(app, pane, area)?;
+            Some(crate::protocol::endpoint::EndpointPaneCursor {
+                pane_id: pane.pane_id.clone(),
+                x: cursor.x,
+                y: cursor.y,
+                visible: cursor.visible,
+            })
+        })
+        .collect()
 }
 
 struct RetainedRecipient<'a> {
@@ -200,6 +231,7 @@ struct CollectedPanePatch {
 struct RetainedRecipientUpdate {
     client_id: u64,
     patch: protocol::PaneSurfacePatch,
+    pane_cursors: Option<(Vec<crate::protocol::endpoint::EndpointPaneCursor>, Vec<u8>)>,
     graphics: Option<(
         protocol::PaneSurfaceFrame,
         crate::kitty_graphics::surface::DeliveryCache,
@@ -471,7 +503,13 @@ impl HeadlessServer {
             } else {
                 None
             };
-            if patch.rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
+            let pane_cursors = self.prepare_pane_cursors(client_id, &panes);
+            if patch.rows.is_empty()
+                && !cursor_changed
+                && !metadata_changed
+                && !graphics_changed
+                && pane_cursors.is_none()
+            {
                 continue;
             }
             let graphics = graphics.map(|(graphics, delivery, sources)| {
@@ -483,6 +521,7 @@ impl HeadlessServer {
             updates.push(RetainedRecipientUpdate {
                 client_id,
                 patch,
+                pane_cursors,
                 graphics,
             });
         }
@@ -503,6 +542,7 @@ impl HeadlessServer {
             let RetainedRecipientUpdate {
                 client_id,
                 patch,
+                pane_cursors,
                 mut graphics,
             } = update;
             if let Some((surface, _, _)) = &graphics {
@@ -568,6 +608,9 @@ impl HeadlessServer {
                 };
                 serialized.extend_from_slice(&file_frame);
             }
+            if let Some((_, framed)) = &pane_cursors {
+                serialized.extend_from_slice(framed);
+            }
             crate::render_prof::counter("retained_surface.bytes", serialized.len() as u64);
             let send = if native_upload.is_some() || self.native_graphics.is_pending(client_id) {
                 writer.render.send_ordered(serialized)
@@ -595,6 +638,9 @@ impl HeadlessServer {
                         client.clear_deferred_render();
                     }
                     client.render_state.commit_sent_frame(prepared);
+                    if let Some((cursors, _)) = pane_cursors {
+                        client.shell_pane_cursors = Some(cursors);
+                    }
                     sent += 1;
                 }
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {

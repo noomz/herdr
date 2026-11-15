@@ -425,3 +425,33 @@ mod menu_binding {
         ));
     }
 }
+
+#[test]
+fn pane_cursors_keep_only_the_active_server_boot() {
+    use crate::protocol::endpoint::{EndpointPaneCursor, EndpointPaneCursors};
+    let cursor = EndpointPaneCursor {
+        pane_id: "w1:p1".into(),
+        x: 4,
+        y: 2,
+        visible: true,
+    };
+    let set = |boot_id: &str| {
+        Some(EndpointPaneCursors {
+            boot_id: boot_id.into(),
+            cursors: vec![cursor.clone()],
+        })
+    };
+    let mut state = shell();
+    assert!(state.pane_cursor("w1:p1").is_none());
+
+    state.set_pane_cursors(set("other-boot"));
+    assert!(state.pane_cursor("w1:p1").is_none());
+
+    state.set_pane_cursors(set("boot-1"));
+    assert_eq!(state.pane_cursor("w1:p1"), Some(&cursor));
+    assert!(state.pane_cursor("w1:p2").is_none());
+
+    // An endpoint without `pane_cursors_v1` clears the set.
+    state.set_pane_cursors(None);
+    assert!(state.pane_cursor("w1:p1").is_none());
+}

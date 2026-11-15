@@ -52,6 +52,10 @@ impl EndpointNegotiation {
             && self.supports_method("float.button.invoke")
     }
 
+    pub(crate) fn supports_pane_cursors(&self) -> bool {
+        self.supports_capability(crate::protocol::endpoint::PANE_CURSORS_CAPABILITY)
+    }
+
     pub(crate) fn supports_surface_interest(&self) -> bool {
         self.supports_capability(crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY)
             && self.supports_capability(
@@ -407,6 +411,20 @@ mod tests {
         assert!(
             EndpointNegotiation::new(vec![method], vec![layer, controls]).supports_float_buttons()
         );
+    }
+
+    #[test]
+    fn pane_cursor_negotiation_requires_the_capability() {
+        let older_server = EndpointNegotiation::new(
+            vec![],
+            vec![crate::protocol::endpoint::FLOAT_BUTTONS_CAPABILITY.to_owned()],
+        );
+        assert!(!older_server.supports_pane_cursors());
+        let newer_server = EndpointNegotiation::new(
+            vec![],
+            vec![crate::protocol::endpoint::PANE_CURSORS_CAPABILITY.to_owned()],
+        );
+        assert!(newer_server.supports_pane_cursors());
     }
 
     struct FakeTransport {
