@@ -378,3 +378,20 @@ Calibration costs: 2 warps plus the restore warp when the window center reports,
 5. **A repeated failure reason is not reported again.** `show_neru_notice` (`src/client/shell/neru_session.rs`) goes through `push_endpoint_notice` with kind `Unavailable`, which shows each code only once per server boot (`endpoint_notice_seen`, `src/client/shell/actions.rs`). The code is `neru_hints:<message>`, so a second press that fails for the same reason (missing neru, calibration failure) shows nothing. §V.4 and §V.7 say herdr reports why each time. Found while reading the code after a missing notice in the second-display run. That live reading was not reliable: with the logging wrapper, calibration takes about 2 s, and some checks ran before it ended. The unit test for T8 fails on the old code. Fixed in T8 (§V.16): `show_neru_notice` sets the notice directly. Live rerun after T8, window on the built-in display and pointer on the virtual display: two presses, with the first notice expired before the second, each showed "Calibration failed: neru cannot move the pointer to this window's display." and restored the pointer.
 6. **Tiling window managers with focus-follows-mouse** (AeroSpace here, 150 ms delay) can move focus to the window under a pointer that starts on another display. `neru query window` then names that window, no calibration point reports, and herdr fails with "the terminal sent no mouse report". This is correct (§V.4). It affects only test harnesses: a person pressing the key has focus on the herdr window.
 7. **An unrestored pointer was not reported when calibration also failed.** `finish_neru_calibration` (`src/client/shell/neru_session.rs`) showed "Could not move the pointer back", then the calibration error replaced it in the single notice slot. §V.8 says herdr reports it. The virtual-display run missed this because its restore warp reached the start point. Fixed in T6: every later notice from that call ends with the restore note. The unit test fails on the old code.
+
+## Pane cursors (T9, 2026-11-15)
+
+Question: does each app's terminal cursor sit on its text input, so a pane-cursor target (§V.18) reaches the input?
+
+Method: an isolated kitty window running herdr (`XDG_CONFIG_HOME` and `XDG_STATE_HOME` in a temp dir; without `XDG_STATE_HOME` the client reads the user's machine list from `state_dir()/client/endpoints.json` and can open on a remote workspace). Each app ran in the focused pane, driven with `herdr pane send-text` and `send-keys`. herdr forwards the focused pane's cursor to the host, so `kitty @ get-text --add-cursor` shows the cursor the server holds for that pane: its visibility (`?25h`/`?25l`) and cell.
+
+| App | Cursor | Where |
+| --- | --- | --- |
+| zsh (powerlevel10k prompt) | visible | after the prompt, where typed text goes |
+| vim, normal and insert mode | visible | the edit position; follows typing |
+| less | visible | after `(END)` on the prompt line |
+| Claude Code, idle and after typing `hello` | visible | in the input box after `❯`; follows typing |
+| Codex, idle and after typing `hello` | visible | in the input box after `›`; follows typing |
+| Any app after `ESC[?25l` | hidden | (no position to use) |
+
+Decision: §V.18 stands as written. The cursor cell is the input in every app tested, including both agent TUIs. A hidden cursor gives no target; there is no fallback position, because any guess (pane center, last row) can click something else in the app.
