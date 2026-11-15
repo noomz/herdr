@@ -9,6 +9,9 @@ use super::workspaces::WorkspaceInfo;
 pub struct SessionSnapshot {
     pub version: String,
     pub protocol: u32,
+    /// Changes whenever the server restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_workspace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

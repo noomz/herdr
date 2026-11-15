@@ -19,7 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::Listener as _;
 #[cfg(windows)]
@@ -213,8 +213,6 @@ pub struct HeadlessServer {
     tab_geometry_controllers: HashMap<String, u64>,
     /// Stable tab id whose viewers may see and interact with the one terminal popup.
     popup_owner_tab_id: Option<String>,
-    /// Process-local identity used to reject shell replacements from an earlier server boot.
-    client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
     /// Keying on the client means a newly attached terminal is written to even
     /// when the title itself has not changed, without every code path that
@@ -367,14 +365,6 @@ impl HeadlessServer {
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
-            client_shell_boot_id: format!(
-                "{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
             sent_window_title: None,
             api_window_title: None,
             server_keybindings,
@@ -1971,7 +1961,7 @@ impl HeadlessServer {
                 };
                 let (seed_snapshot, completion_projection) = client_shell_snapshot(
                     &self.app,
-                    &self.client_shell_boot_id,
+                    &self.app.boot_id,
                     connection.shell_projection_revision,
                     config_diagnostic,
                     None,
@@ -2582,7 +2572,7 @@ impl HeadlessServer {
                 let command_surface_revision = self.clients.get(&client_id).and_then(|client| {
                     (matches!(client.mode, ClientConnectionMode::ClientShell)
                         && client.shell_endpoint_command_in_flight
-                        && boot_id == self.client_shell_boot_id)
+                        && boot_id == self.app.boot_id)
                         .then_some(client.shell_endpoint_command_surface_revision)
                         .flatten()
                 });

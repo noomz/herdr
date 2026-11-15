@@ -634,7 +634,7 @@ impl HeadlessServer {
                 };
                 let (mut candidate, mut completions) = client_shell_snapshot(
                     &self.app,
-                    &self.client_shell_boot_id,
+                    &self.app.boot_id,
                     client.shell_projection_revision,
                     None,
                     location.as_ref(),
@@ -846,7 +846,7 @@ impl HeadlessServer {
                     next_shell_graphics_delivery = Some(delivery);
                     client.render_state.prepare_pane_surface_with_file(
                         protocol::PaneSurfaceFrame {
-                            boot_id: self.client_shell_boot_id.clone(),
+                            boot_id: self.app.boot_id.clone(),
                             projection_revision: shell_projection_revision,
                             surface_revision: 0,
                             frame,

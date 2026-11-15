@@ -3027,8 +3027,67 @@ fn show(
 ) -> crate::api::schema::MachineShow {
     crate::api::schema::MachineShow {
         machine: machine.into(),
+        boot_id: None,
         target,
     }
+}
+
+fn show_boot(machine: &str, boot_id: &str) -> crate::api::schema::MachineShow {
+    crate::api::schema::MachineShow {
+        boot_id: Some(boot_id.into()),
+        ..show(
+            machine,
+            Some(crate::api::schema::MachineShowTarget::Tab("tab_1".into())),
+        )
+    }
+}
+
+#[test]
+fn show_machine_boot_id_beats_a_label_from_the_senders_namespace() {
+    let (mut state, remote) = state_with_remote();
+    assert!(state.activate_endpoint_projection(&remote));
+
+    let outcome = state.show_machine(&remote, show_boot("Build", "boot-1"));
+
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
+        }] if tab_id == "tab_1"
+    ));
+}
+
+#[test]
+fn show_machine_boot_id_selects_the_saved_machine_with_that_boot() {
+    let (mut state, remote) = state_with_remote();
+
+    let outcome = state.show_machine(&ClientEndpointId::Local, show_boot("local", "remote-boot"));
+
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
+        }] if endpoint_id == &remote && tab_id == "tab_1"
+    ));
+}
+
+#[test]
+fn show_machine_unknown_boot_id_notifies_without_falling_back_to_the_label() {
+    let (mut state, _) = state_with_remote();
+
+    let outcome = state.show_machine(&ClientEndpointId::Local, show_boot("Build", "stale-boot"));
+
+    assert!(outcome.actions.is_empty());
+    assert_eq!(state.active_endpoint_id, ClientEndpointId::Local);
+    assert_eq!(
+        state
+            .visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str()),
+        Some("machine Build is not connected here")
+    );
 }
 
 #[test]

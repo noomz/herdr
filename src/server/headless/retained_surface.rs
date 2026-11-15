@@ -286,7 +286,7 @@ impl HeadlessServer {
             let Some(surface) = client.render_state.last_pane_surface() else {
                 fallback!("no_baseline");
             };
-            if surface.boot_id != self.client_shell_boot_id
+            if surface.boot_id != self.app.boot_id
                 || surface.projection_revision != client.shell_projection_revision
                 || surface.frame.width != *cols
                 || surface.frame.height != *rows
@@ -431,7 +431,7 @@ impl HeadlessServer {
             let cursor = retained_cursor(&self.app, &panes);
             let cursor_changed = cursor != surface.frame.cursor;
             let patch = protocol::PaneSurfacePatch {
-                boot_id: self.client_shell_boot_id.clone(),
+                boot_id: self.app.boot_id.clone(),
                 projection_revision,
                 base_surface_revision,
                 surface_revision: 0,

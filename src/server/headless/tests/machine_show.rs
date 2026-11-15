@@ -87,3 +87,29 @@ fn machine_show_fails_without_a_capable_foreground_client() {
     assert_eq!(response["error"]["code"], "no_capable_client");
     assert!(control.recv_timeout(Duration::from_millis(50)).is_err());
 }
+
+#[test]
+fn session_snapshot_reports_the_server_boot_id() {
+    let mut server = test_headless_server();
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+        request: api::schema::Request {
+            id: "snapshot".into(),
+            method: api::schema::Method::SessionSnapshot(Default::default()),
+        },
+        respond_to,
+        response_write_complete: None,
+    });
+    let response: serde_json::Value = serde_json::from_str(
+        &response_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(!server.app.boot_id.is_empty());
+    assert_eq!(
+        response["result"]["snapshot"]["boot_id"],
+        server.app.boot_id.as_str()
+    );
+}

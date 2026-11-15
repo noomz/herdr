@@ -25,7 +25,7 @@ impl HeadlessServer {
             self.send_to_client(client_id, message);
             return false;
         }
-        if boot_id != self.client_shell_boot_id {
+        if boot_id != self.app.boot_id {
             let message = crate::server::client_commands::error_message(
                 boot_id,
                 request_id,
@@ -76,10 +76,7 @@ impl HeadlessServer {
             return false;
         }
 
-        let api_request_id = format!(
-            "endpoint:{}:{client_id}:{request_id}",
-            self.client_shell_boot_id
-        );
+        let api_request_id = format!("endpoint:{}:{client_id}:{request_id}", self.app.boot_id);
         request.id = api_request_id.clone();
         let (respond_to, response_rx) = std::sync::mpsc::channel();
         if let Err(err) = crate::server::client_commands::spawn_response_waiter(
