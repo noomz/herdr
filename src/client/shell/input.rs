@@ -814,10 +814,10 @@ impl ClientShellState {
             .bindings
             .iter()
             .any(|binding| binding.trigger.is_prefix());
-        if neru_has_prefix_binding
-            && matches!(self.mode, ClientShellMode::Terminal | ClientShellMode::Copy)
-            && keybinds.matches_prefix(key)
-        {
+        // A menu can open in resize or navigate mode. The prefix leaves those modes, as it does
+        // without a menu.
+        if neru_has_prefix_binding && keybinds.matches_prefix(key) {
+            self.navigate_workspace_id = None;
             self.mode = ClientShellMode::Prefix;
             outcome.repaint = true;
             return true;

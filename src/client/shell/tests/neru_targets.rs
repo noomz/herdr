@@ -354,6 +354,31 @@ mod menu_binding {
     }
 
     #[test]
+    fn the_binding_runs_from_a_menu_opened_in_resize_or_navigate_mode() {
+        use crate::input::{KeybindAction, KeybindMatch};
+        for (action, mode) in [
+            (KeybindAction::EnterResizeMode, ClientShellMode::Resize),
+            (KeybindAction::WorkspacePicker, ClientShellMode::Navigate),
+        ] {
+            for (name, mut state) in open_menus() {
+                state.record_binding(
+                    KeybindMatch::Action(action),
+                    &mut ClientShellInput::default(),
+                );
+                assert_eq!(state.mode, mode, "{name}");
+                assert!(menu_open(&state), "{name} {mode:?}");
+
+                prefix_then(&mut state, KeyCode::Char('f'));
+
+                assert!(state.take_neru_hints_request(), "{name} {mode:?}");
+                assert!(menu_open(&state), "{name} {mode:?}");
+                assert_eq!(state.mode, ClientShellMode::Terminal, "{name} {mode:?}");
+                assert_eq!(state.navigate_workspace_id, None, "{name} {mode:?}");
+            }
+        }
+    }
+
+    #[test]
     fn another_key_after_the_prefix_reaches_the_menu() {
         for (name, mut state) in open_menus() {
             prefix_then(&mut state, KeyCode::Down);
