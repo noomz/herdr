@@ -2357,8 +2357,15 @@
         "MachineShowParams": {
           "description": "At most one of `workspace_id`, `tab_id`, or `pane_id` may be set.",
           "properties": {
+            "boot_id": {
+              "description": "`boot_id` from the machine's `session.snapshot`. When set, the client shows the machine\nit is connected to with that boot ID and ignores `machine`, which belongs to the sender.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "machine": {
-              "description": "Saved machine label or profile ID as the attached client knows it, or `local`.",
+              "description": "Saved machine label or profile ID as the attached client knows it, or `local`. With\n`boot_id`, the sender's own label, used only in the client's notice.",
               "type": "string"
             },
             "pane_id": {
@@ -10511,6 +10518,13 @@
                 "$ref": "#/schemas/success_response/$defs/AgentInfo"
               },
               "type": "array"
+            },
+            "boot_id": {
+              "description": "Changes whenever the server restarts.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "focused_pane_id": {
               "type": [
