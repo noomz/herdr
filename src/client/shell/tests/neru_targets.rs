@@ -217,6 +217,51 @@ mod session {
     }
 
     #[test]
+    fn a_second_press_failing_for_the_same_reason_reports_it_again() {
+        let mut state = shell();
+        let failed = || {
+            let outcome = NeruCalibrationOutcome {
+                result: Err(NeruCalibrationError::PointerMoved),
+                pointer_restored: true,
+            };
+            NeruCalibrationDone::for_test(Ok(outcome), GRID, EXTENT)
+        };
+        let moved = "Calibration failed: the pointer moved. Keep the mouse still and try again.";
+
+        state.finish_neru_calibration(failed(), GRID, EXTENT);
+        assert_eq!(notice(&state), Some(moved));
+        state.visible_endpoint_notice = None;
+        state.finish_neru_calibration(failed(), GRID, EXTENT);
+        assert_eq!(notice(&state), Some(moved), "§V.16: calibration failure");
+
+        let missing = "neru not found at /nowhere/neru.";
+        assert!(state.show_neru_notice(missing));
+        state.visible_endpoint_notice = None;
+        assert!(state.show_neru_notice(missing));
+        assert_eq!(notice(&state), Some(missing), "§V.16: missing neru");
+    }
+
+    #[test]
+    fn an_unrestored_pointer_is_reported_with_the_calibration_failure() {
+        let mut state = shell();
+        let outcome = NeruCalibrationOutcome {
+            result: Err(NeruCalibrationError::PointerMoved),
+            pointer_restored: false,
+        };
+        let done = NeruCalibrationDone::for_test(Ok(outcome), GRID, EXTENT);
+
+        let (json, _) = state.finish_neru_calibration(done, GRID, EXTENT);
+
+        assert_eq!(json, None);
+        let body = notice(&state).expect("notice");
+        assert!(
+            body.starts_with("Calibration failed: the pointer moved."),
+            "{body}"
+        );
+        assert!(body.ends_with(POINTER_NOT_RESTORED), "§V.8: {body}");
+    }
+
+    #[test]
     fn an_unrestored_pointer_is_reported_after_a_success() {
         let mut state = shell();
         let done = NeruCalibrationDone::for_test(Ok(calibrated(false)), GRID, EXTENT);
@@ -255,5 +300,128 @@ mod session {
         );
         assert!(state.take_neru_hints_request());
         assert!(!state.take_neru_hints_request());
+    }
+}
+
+mod menu_binding {
+    //! §V.15: an open menu lets `keys.neru_hints` through and stays open.
+    use super::*;
+    use crate::raw_input::RawInputEvent;
+
+    fn press(state: &mut ClientShellState, code: KeyCode, modifiers: KeyModifiers) {
+        state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            code, modifiers,
+        ))]);
+    }
+
+    fn prefix_then(state: &mut ClientShellState, code: KeyCode) {
+        press(state, KeyCode::Char('b'), KeyModifiers::CONTROL);
+        press(state, code, KeyModifiers::empty());
+    }
+
+    fn open_menus() -> [(&'static str, ClientShellState); 2] {
+        let mut global = shell();
+        global.toggle_global_menu();
+        let mut context = shell();
+        context.open_tab_context_menu("tab_2".into(), 10, 3);
+        assert!(matches!(
+            context.overlay,
+            Some(ClientShellOverlay::ContextMenu(_))
+        ));
+        [("global", global), ("context", context)]
+    }
+
+    fn menu_open(state: &ClientShellState) -> bool {
+        matches!(
+            state.overlay,
+            Some(ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_))
+        )
+    }
+
+    #[test]
+    fn the_binding_runs_the_action_and_leaves_each_menu_open() {
+        for (name, mut state) in open_menus() {
+            press(&mut state, KeyCode::Char('b'), KeyModifiers::CONTROL);
+            assert_eq!(state.mode, ClientShellMode::Prefix, "{name}");
+            assert!(menu_open(&state), "{name}: prefix keeps the menu");
+
+            press(&mut state, KeyCode::Char('f'), KeyModifiers::empty());
+
+            assert!(state.take_neru_hints_request(), "{name}");
+            assert!(menu_open(&state), "{name}: the action keeps the menu");
+            assert_eq!(state.mode, ClientShellMode::Terminal, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_binding_runs_from_a_menu_opened_in_resize_or_navigate_mode() {
+        use crate::input::{KeybindAction, KeybindMatch};
+        for (action, mode) in [
+            (KeybindAction::EnterResizeMode, ClientShellMode::Resize),
+            (KeybindAction::WorkspacePicker, ClientShellMode::Navigate),
+        ] {
+            for (name, mut state) in open_menus() {
+                state.record_binding(
+                    KeybindMatch::Action(action),
+                    &mut ClientShellInput::default(),
+                );
+                assert_eq!(state.mode, mode, "{name}");
+                assert!(menu_open(&state), "{name} {mode:?}");
+
+                prefix_then(&mut state, KeyCode::Char('f'));
+
+                assert!(state.take_neru_hints_request(), "{name} {mode:?}");
+                assert!(menu_open(&state), "{name} {mode:?}");
+                assert_eq!(state.mode, ClientShellMode::Terminal, "{name} {mode:?}");
+                assert_eq!(state.navigate_workspace_id, None, "{name} {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn another_key_after_the_prefix_reaches_the_menu() {
+        for (name, mut state) in open_menus() {
+            prefix_then(&mut state, KeyCode::Down);
+
+            assert!(!state.take_neru_hints_request(), "{name}");
+            assert_eq!(state.mode, ClientShellMode::Terminal, "{name}");
+            let highlighted = match &state.overlay {
+                Some(ClientShellOverlay::GlobalMenu(menu)) => menu.highlighted,
+                Some(ClientShellOverlay::ContextMenu(menu)) => menu.highlighted,
+                other => panic!("{name}: menu closed: {other:?}"),
+            };
+            assert_eq!(
+                highlighted, 1,
+                "{name}: Down after the prefix moves the menu"
+            );
+
+            prefix_then(&mut state, KeyCode::Esc);
+            assert!(
+                !menu_open(&state),
+                "{name}: Esc after the prefix closes the menu"
+            );
+        }
+    }
+
+    #[test]
+    fn a_text_input_overlay_takes_the_binding_as_text() {
+        let mut state = shell();
+        state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            title: "rename pane",
+            input: TextEditor::new("", true),
+            target: ClientRenameTarget::Pane {
+                pane_id: "pane_1".into(),
+            },
+        }));
+
+        prefix_then(&mut state, KeyCode::Char('f'));
+
+        assert!(!state.take_neru_hints_request());
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::Rename(ClientRenameOverlay { ref input, .. }))
+                if input.as_str() == "f"
+        ));
     }
 }

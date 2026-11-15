@@ -17,7 +17,13 @@ use super::neru_calibration::{
     NeruCommandError, ScreenPoint, POINTER_NOT_RESTORED,
 };
 use super::neru_targets::{collect, to_targets, NeruCollectError, NeruScreenRect, NeruTargets};
-use super::{ClientEndpointNoticeKind, ClientShellState};
+use super::{
+    ClientEndpointNoticeKey, ClientEndpointNoticeKind, ClientShellState,
+    ClientVisibleEndpointNotice,
+};
+
+/// How long a neru notice stays on screen; the same as other unavailable notices.
+const NOTICE_DURATION: Duration = Duration::from_secs(8);
 
 /// The oldest neru with `hints --targets` (§C).
 const MIN_NERU_VERSION: (u32, u32, u32) = (1, 58, 0);
@@ -248,14 +254,24 @@ impl ClientShellState {
     }
 
     /// Reports a neru hints message as a client notice. Returns true when it needs a repaint.
+    /// Every press reports its reason (§V.16), so this skips the once-per-boot filter that
+    /// `push_endpoint_notice` applies. A timed-out endpoint's notice still takes precedence.
     pub(crate) fn show_neru_notice(&mut self, message: impl Into<String>) -> bool {
+        if self.timed_out_endpoint.is_some() {
+            return false;
+        }
         let message = message.into();
-        self.push_endpoint_notice(
-            ClientEndpointNoticeKind::Unavailable,
-            format!("neru_hints:{message}"),
-            "neru hints",
-            message,
-        )
+        self.visible_endpoint_notice = Some(ClientVisibleEndpointNotice {
+            key: ClientEndpointNoticeKey {
+                boot_id: "neru".into(),
+                kind: ClientEndpointNoticeKind::Unavailable,
+                code: format!("neru_hints:{message}"),
+            },
+            title: "neru hints".into(),
+            body: message,
+            deadline: Instant::now() + NOTICE_DURATION,
+        });
+        true
     }
 
     /// Turns a finished calibration into the targets JSON for `neru hints`, or `None` after
@@ -273,28 +289,39 @@ impl ClientShellState {
             Ok(outcome) => outcome,
             Err(message) => return (None, self.show_neru_notice(message)),
         };
-        if !outcome.pointer_restored {
+        let restored = outcome.pointer_restored;
+        if !restored {
             repaint |= self.show_neru_notice(POINTER_NOT_RESTORED);
         }
+        // The notice slot holds one message, so a later notice repeats the restore note (§V.8).
+        let note = |message: String| match restored {
+            true => message,
+            false => format!("{message} {POINTER_NOT_RESTORED}"),
+        };
         let calibrated = match outcome.result {
             Ok(calibrated) => calibrated,
-            Err(error) => return (None, repaint | self.show_neru_notice(error.to_string())),
+            Err(error) => {
+                return (
+                    None,
+                    repaint | self.show_neru_notice(note(error.to_string())),
+                )
+            }
         };
         if (grid, extent_px) != (done.grid, done.extent_px) {
             let message = "Calibration failed: the terminal resized. Try again.";
-            return (None, repaint | self.show_neru_notice(message));
+            return (None, repaint | self.show_neru_notice(note(message.into())));
         }
         // A notice pushed above draws a toast over the chrome. Compose first, so the hit map has
         // the toast and no target sits under it (§V.1, design section 4.1).
         let Some(targets) = self.neru_targets_now(&calibrated, grid, repaint) else {
             return (
                 None,
-                repaint | self.show_neru_notice("Close the popup first."),
+                repaint | self.show_neru_notice(note("Close the popup first.".into())),
             );
         };
         if targets.sent == 0 {
             let message = "No clickable controls on screen.";
-            return (None, repaint | self.show_neru_notice(message));
+            return (None, repaint | self.show_neru_notice(note(message.into())));
         }
         if targets.sent == targets.total {
             return (Some(targets.json), repaint);
@@ -303,7 +330,7 @@ impl ClientShellState {
             "neru hints: sent {} of {} controls.",
             targets.sent, targets.total
         );
-        repaint |= self.show_neru_notice(message);
+        repaint |= self.show_neru_notice(note(message));
         match self.neru_targets_now(&calibrated, grid, repaint) {
             Some(targets) if targets.sent > 0 => (Some(targets.json), repaint),
             _ => (None, repaint),

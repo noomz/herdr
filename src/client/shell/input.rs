@@ -652,6 +652,9 @@ impl ClientShellState {
         if self.popup_pending {
             return None;
         }
+        if self.route_menu_neru_hints_key(key, outcome) {
+            return None;
+        }
         if self.overlay.is_some() {
             self.route_overlay_key(key, outcome);
             return None;
@@ -753,6 +756,73 @@ impl ClientShellState {
                 None
             }
         }
+    }
+
+    /// An open menu lets `keys.neru_hints` through, so its rows can be labelled
+    /// (SPEC-neru-hints.md §V.15). The prefix enters prefix mode and leaves the menu
+    /// open; after it, any key other than the binding goes to the menu.
+    fn route_menu_neru_hints_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if !matches!(
+            self.overlay,
+            Some(ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_))
+        ) || matches!(key.code, KeyCode::Modifier(_))
+        {
+            return false;
+        }
+        let is_neru_hints = |binding: Option<crate::input::KeybindMatch>| {
+            matches!(
+                binding,
+                Some(crate::input::KeybindMatch::Action(
+                    crate::input::KeybindAction::NeruHints
+                ))
+            )
+        };
+        let keybinds = &self.config.keybinds;
+        if self.mode == ClientShellMode::Prefix {
+            self.mode = self.copy_or_terminal_mode();
+            outcome.repaint = true;
+            if is_neru_hints(crate::input::resolve_prefix_binding(
+                &keybinds.keybinds,
+                key,
+            )) {
+                self.record_binding(
+                    crate::input::KeybindMatch::Action(crate::input::KeybindAction::NeruHints),
+                    outcome,
+                );
+            } else {
+                self.route_overlay_key(key, outcome);
+            }
+            return true;
+        }
+        if is_neru_hints(crate::input::resolve_direct_binding(
+            &keybinds.keybinds,
+            key,
+        )) {
+            self.record_binding(
+                crate::input::KeybindMatch::Action(crate::input::KeybindAction::NeruHints),
+                outcome,
+            );
+            return true;
+        }
+        let neru_has_prefix_binding = keybinds
+            .keybinds
+            .neru_hints
+            .bindings
+            .iter()
+            .any(|binding| binding.trigger.is_prefix());
+        // A menu can open in resize or navigate mode. The prefix leaves those modes, as it does
+        // without a menu.
+        if neru_has_prefix_binding && keybinds.matches_prefix(key) {
+            self.navigate_workspace_id = None;
+            self.mode = ClientShellMode::Prefix;
+            outcome.repaint = true;
+            return true;
+        }
+        false
     }
 
     pub(super) fn copy_or_terminal_mode(&self) -> ClientShellMode {
