@@ -395,3 +395,21 @@ Method: an isolated kitty window running herdr (`XDG_CONFIG_HOME` and `XDG_STATE
 | Any app after `ESC[?25l` | hidden | (no position to use) |
 
 Decision: §V.18 stands as written. The cursor cell is the input in every app tested, including both agent TUIs. A hidden cursor gives no target; there is no fallback position, because any guess (pane center, last row) can click something else in the app.
+
+## Pane-cursor targets, live (T12, 2026-11-15)
+
+Setup: herdr `da9e548a` release build, neru v1.62.0, built-in Retina display only (2056 × 1329 pt, scale 2; `neru query displays` reports scale 1, see §V.9). One isolated named session (`herdr --session neru-t12`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` in a temp dir, `onboarding = false`), with `neru.path` pointing at the T6 logging wrapper. Tab 1 had two panes: a fish shell in `w1:p1`, focused, and Claude Code 2.1.325 idle in `w1:p2`, not focused. kitty ran as a separate instance with its own `--listen-on` socket. Ghostty ran as a separate `open -na` instance attached to the same session. `ctrl+b f` came from `kitty @ send-key` in kitty and from System Events in Ghostty. The label pick and `hello` were real keystrokes into neru's overlay and the host (System Events), except kitty's `hello`, which was sent with `kitty @ send-text`. Focus and pane text were read back with `herdr pane list` and `herdr pane read`.
+
+| Check | kitty | Ghostty |
+| --- | --- | --- |
+| Targets sent | 10: 8 controls plus 2 pane cursors, `pane` (the fish prompt) and `claude` (the Claude Code input) | the same 10 |
+| Claude Code cursor target | 9 × 21 pt at (895, 1125), the cell after `❯` | 8 × 17 pt at (1239, 1001), the cell after `❯` |
+| Label pick (`LA`) | pass: focus moved from `w1:p1` to `w1:p2` | pass |
+| Typed `hello` | pass: `❯ hello` in Claude Code's input; the fish pane unchanged | pass |
+
+Calibration took 2 warps plus the restore warp on both hosts.
+
+Findings (harness only, no herdr change):
+
+1. **Unix socket paths have a 104-byte limit.** With `XDG_CONFIG_HOME` under a long temp dir, the server could not bind `sessions/<name>/herdr-client.sock`, and the client failed with "server did not become ready within 15s". A kitty `--listen-on` path under the same dir was ignored for the same reason. Use a short root.
+2. **neru finds its IPC socket through `TMPDIR`.** A client started with `env -i` lost `TMPDIR`, and herdr correctly reported "neru query window failed: [IPC_SERVER_NOT_RUNNING] …" (§V.7). A normal login shell has `TMPDIR`, so this affects only stripped test environments.
