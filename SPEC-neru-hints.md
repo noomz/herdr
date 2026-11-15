@@ -48,6 +48,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 14. While calibration runs, the client swallows every host mouse report, from the moment it turns on pixel reporting until the report from the warp back has arrived or timed out. This includes reports queued before the first warp. None reaches `ClientShell::handle_mouse` or a pane, so calibration warps change no hover state and send no mouse events to pane apps. Only the calibrator reads them.
 15. While a `ContextMenu` or `GlobalMenu` overlay is open, the `keys.neru_hints` binding, prefix included, runs the action. It is checked before `route_overlay_key`, and it leaves the menu open, so the menu's rows become the targets. After the prefix, any other key goes to the menu as before. Every other overlay (rename, new tab, worktree dialogs, onboarding, settings, help) keeps taking every key, so the binding does nothing there.
 16. Every press of `keys.neru_hints` that does not start neru shows its reason, even when an earlier press failed for the same reason. A neru notice is never suppressed by the once-per-server-boot filter for endpoint notices (`endpoint_notice_seen`). If the same notice is still on screen, it stays visible for its full duration again.
+17. A press that ends with the pointer not restored says so in the notice that ends the press, together with any other reason. A later notice never replaces the restore note.
 
 ## Tasks
 
@@ -58,7 +59,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T3 | x | Implement the pure conversion from hit map and calibration to targets JSON. Unit-test it with fixed hit maps, cell sizes, origins and scales. | 1, 2, 3, 9, 11, 13 |
 | T4 | x | Implement calibration with the method chosen in T1, including restoring mouse and pointer state on success and failure. | 2, 4, 8, 9, 10, 12 |
 | T5 | x | Implement the client action: keybinding, availability checks, starting neru without blocking, writing stdin, reaping the child, and reporting errors. | 5, 6, 7, 14 |
-| T6 | ~ | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
+| T6 | x | Verify end to end on a real Mac in kitty and Ghostty, at scale 1 and 2. Check that each label type clicks its control: workspace row, tab, `+`, sidebar toggle, menu row, float button. Also check a busy session (target count matches the hit map), a missing neru, an SSH client, a redraw between sending and clicking, a kitty split, a host window on the second display, and pointer movement during calibration. | 1-14 |
 | T7 | x | Let `keys.neru_hints` through `ContextMenu` and `GlobalMenu` overlays before `route_overlay_key` (`src/client/shell/input.rs:653`). Test that the binding runs the action with each menu open and leaves it open, that a non-neru key after the prefix reaches the menu, and that a text-input overlay still takes the keys as text. Rerun the T6 menu-row cell. | 1, 15 |
 | T8 | x | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
 
@@ -70,6 +71,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | B2 | 2026-11-14 | T1 probe divided Ghostty's ioctl extent (2446 px, 152 columns) as floats. The extent includes leftover padding, so the pitch drifted and a far-edge click landed one column off. | V9 |
 | B3 | 2026-11-14 | T6: an open overlay sends every key to `route_overlay_key`, so `prefix+f` never reached the prefix table. Menu rows, the only targets while a menu is open (design note section 2), could not be reached from the keyboard. | V15 |
 | B4 | 2026-11-14 | T6: `show_neru_notice` used `push_endpoint_notice` with kind `Unavailable`, which shows each code once per server boot (`endpoint_notice_seen`, `src/client/shell/actions.rs`). The code is `neru_hints:<message>`, so a second press failing for the same reason showed nothing. | V16 |
+| B5 | 2026-11-14 | T6: `finish_neru_calibration` showed `POINTER_NOT_RESTORED`, then the calibration error replaced it in the single notice slot (`visible_endpoint_notice`). On a real second display the unrestored pointer was never reported. | V17 |
 
 ## Open design questions
 
