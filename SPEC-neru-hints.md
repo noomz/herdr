@@ -68,7 +68,7 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T8 | x | Show every neru failure notice on every press (§V.16): `show_neru_notice` must not go through the once-per-boot `endpoint_notice_seen` filter. Test that two presses failing for the same reason (missing neru, calibration failure) each show the notice. Rerun the T6 second-display cell. | 4, 7, 16 |
 | T9 | x | Measure where the terminal cursor sits, and whether it is visible, in Claude Code, Codex, a shell prompt, vim and less inside herdr. Record the results in the research note and decide what happens when the cursor is hidden. | 18 |
 | T10 | x | Server and protocol: send each pane's cursor behind `pane_cursors_v1`. Test a new client with an old server and an old client with a new server. | 18, 19 |
-| T11 | . | Targets: pane-cursor targets in `neru_targets.rs`, with occlusion and titles. Unit-test them with fixed hit maps. | 1, 2, 3, 18 |
+| T11 | x | Targets: pane-cursor targets in `neru_targets.rs`, with occlusion and titles. Unit-test them with fixed hit maps. | 1, 2, 3, 18 |
 | T12 | . | Verify live in kitty and Ghostty: label a pane that is not focused (Claude Code), pick it, and type into its input. | 1, 2, 18 |
 
 ## Bugs

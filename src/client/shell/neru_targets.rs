@@ -2,7 +2,8 @@
 //!
 //! [`collect`] walks the hit map in the order a left press is dispatched and keeps each control
 //! that a click at its target's center reaches now (§V.1, §V.2). [`to_targets`] turns those cell
-//! rectangles into neru's `--targets` JSON in global top-left screen points.
+//! rectangles into neru's `--targets` JSON in global top-left screen points. Pane bodies are
+//! never targets, except one cell per pane at its terminal cursor (§V.18).
 
 // Only Unix clients build targets (`client::neru_hints`).
 #![cfg_attr(windows, allow(dead_code))]
@@ -58,6 +59,18 @@ pub(super) struct NeruLayerState {
     pub(super) mobile: NeruMobile,
     pub(super) retryable_machines: Vec<ClientEndpointId>,
     pub(super) collapsed_machines: Vec<ClientEndpointId>,
+    /// Visible pane cursors from the active server (`pane_cursors_v1`).
+    pub(super) pane_cursors: Vec<NeruPaneCursor>,
+}
+
+/// A visible terminal cursor, as a cell relative to its pane's `inner_rect`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct NeruPaneCursor {
+    pub(super) pane_id: String,
+    pub(super) x: u16,
+    pub(super) y: u16,
+    /// The pane's agent name, the title when the pane draws no border title.
+    pub(super) agent: Option<String>,
 }
 
 /// A control a left click at the center of `rect` reaches, in grid cells.
@@ -214,6 +227,69 @@ fn collect_base(claims: &mut Claims, hits: &ShellHitMap, state: &NeruLayerState)
         claims.target(*rect, || "agent".into());
     }
     claims.rows(&hits.agents, "agent");
+    collect_pane_cursors(claims, hits, state);
+}
+
+/// One target per tiled pane at its visible cursor cell (§V.18), after every chrome control.
+/// Floats and the toast claimed their cells earlier, so a covered cursor gets no target.
+fn collect_pane_cursors(claims: &mut Claims, hits: &ShellHitMap, state: &NeruLayerState) {
+    // A press on a scrollable pane's scrollbar or on a split handle starts a drag before it
+    // reaches the pane body (`handle_mouse`).
+    for hit in &hits.panes {
+        if hit
+            .scroll
+            .is_some_and(|metrics| metrics.max_offset_from_bottom > 0)
+        {
+            claims.block(hit.scrollbar_rect.unwrap_or_default());
+        }
+    }
+    for split in &hits.pane_splits {
+        claims.block(split.hit_rect);
+    }
+    for hit in &hits.panes {
+        if hit.layer != PaneHitLayer::Tiled
+            || hit
+                .scroll
+                .is_some_and(|metrics| metrics.offset_from_bottom > 0)
+        {
+            continue;
+        }
+        let Some(cursor) = state
+            .pane_cursors
+            .iter()
+            .find(|cursor| cursor.pane_id == hit.pane_id)
+        else {
+            continue;
+        };
+        let inner = hit.inner_rect;
+        if cursor.x >= inner.width || cursor.y >= inner.height {
+            continue;
+        }
+        let cell = Rect::new(inner.x + cursor.x, inner.y + cursor.y, 1, 1);
+        let covered = |rect: Rect| {
+            hits.notification_toast.intersects(rect)
+                || hits.floats.iter().any(|float| float.outer.intersects(rect))
+        };
+        let border_title = border_title_rect(hit)
+            .filter(|rect| !covered(*rect))
+            .and_then(|rect| claims.labels.get(&rect).cloned());
+        claims.target(cell, || {
+            border_title
+                .or_else(|| cursor.agent.clone())
+                .unwrap_or_else(|| "pane".into())
+        });
+    }
+}
+
+/// The top border cells between a pane's corners, where its border title is drawn. `None`
+/// when the pane has no top border, so the row is terminal output.
+fn border_title_rect(hit: &PaneHit) -> Option<Rect> {
+    (hit.inner_rect.y > hit.rect.y && hit.rect.width > 2)
+        .then(|| Rect::new(hit.rect.x + 1, hit.rect.y, hit.rect.width - 2, 1))
+}
+
+fn is_box_drawing(c: char) -> bool {
+    ('\u{2500}'..='\u{257f}').contains(&c)
 }
 
 /// The visible text of every control that draws some, read from the composed frame (§V.3).
@@ -245,14 +321,23 @@ pub(super) fn drawn_labels(hits: &ShellHitMap, frame: &FrameData) -> HashMap<Rec
     rects.extend(rows(&hits.pane_target_rows));
     rects.extend(rows(&hits.worktree_rows));
     rects.extend(rows(&hits.settings_choices));
-    rects
+    let mut labels: HashMap<Rect, String> = rects
         .into_iter()
         .filter(|rect| !rect.is_empty())
         .filter_map(|rect| {
             let text = clean_title(&frame_text(frame, rect));
             (!text.is_empty()).then_some((rect, text))
         })
-        .collect()
+        .collect();
+    // Pane border titles sit between box-drawing runs: ` claude ` in `╭─ claude ───╮`.
+    for rect in hits.panes.iter().filter_map(border_title_rect) {
+        let raw = frame_text(frame, rect).replace(is_box_drawing, " ");
+        let text = clean_title(&raw);
+        if !text.is_empty() {
+            labels.insert(rect, text);
+        }
+    }
+    labels
 }
 
 /// The symbols in `rect`, row by row, with a space between rows.
@@ -593,6 +678,28 @@ impl ClientShellState {
                 .map(|endpoint| endpoint.endpoint_id.clone())
                 .collect(),
             collapsed_machines: self.collapsed_endpoints.iter().cloned().collect(),
+            pane_cursors: self
+                .hits
+                .panes
+                .iter()
+                .filter_map(|hit| {
+                    let cursor = self.pane_cursor(&hit.pane_id)?;
+                    let agent = self
+                        .snapshot
+                        .as_deref()?
+                        .agents
+                        .iter()
+                        .find(|agent| agent.pane_id == hit.pane_id)
+                        .and_then(agent_sidebar::agent_name)
+                        .map(str::to_string);
+                    cursor.visible.then(|| NeruPaneCursor {
+                        pane_id: cursor.pane_id.clone(),
+                        x: cursor.x,
+                        y: cursor.y,
+                        agent,
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -610,6 +717,7 @@ mod tests {
             mobile: NeruMobile::Off,
             retryable_machines: Vec::new(),
             collapsed_machines: Vec::new(),
+            pane_cursors: Vec::new(),
         }
     }
 
@@ -947,6 +1055,176 @@ mod tests {
             ["close", "+ new workspace"]
         );
         assert!(collect(&hits, &mode(NeruMobile::Inert)).unwrap().is_empty());
+    }
+
+    /// A pane with a one-row top border over `inner`.
+    fn bordered(id: &str, outer: Rect) -> PaneHit {
+        PaneHit {
+            inner_rect: Rect::new(outer.x, outer.y + 1, outer.width, outer.height - 1),
+            scrollbar_rect: None,
+            pane_id: id.into(),
+            ..pane(outer)
+        }
+    }
+
+    fn cursor(pane_id: &str, x: u16, y: u16, agent: Option<&str>) -> NeruPaneCursor {
+        NeruPaneCursor {
+            pane_id: pane_id.into(),
+            x,
+            y,
+            agent: agent.map(str::to_string),
+        }
+    }
+
+    fn with_cursors(cursors: Vec<NeruPaneCursor>) -> NeruLayerState {
+        NeruLayerState {
+            pane_cursors: cursors,
+            ..base()
+        }
+    }
+
+    #[test]
+    fn a_pane_cursor_is_its_cell_titled_by_border_title_then_agent_then_pane() {
+        let mut hits = ShellHitMap::default();
+        hits.panes.push(bordered("p1", rect(20, 1, 20, 10)));
+        hits.panes.push(bordered("p2", rect(40, 1, 20, 10)));
+        hits.panes.push(bordered("p3", rect(60, 1, 20, 10)));
+        hits.labels.insert(rect(21, 1, 18, 1), "reviewer".into());
+        let state = with_cursors(vec![
+            cursor("p1", 3, 2, Some("claude")),
+            cursor("p2", 0, 0, Some("codex")),
+            cursor("p3", 19, 8, None),
+        ]);
+
+        let controls = collect(&hits, &state).unwrap();
+
+        assert_eq!(titles(&controls), ["reviewer", "codex", "pane"]);
+        assert_eq!(controls[0].rect, rect(23, 4, 1, 1));
+        assert_eq!(controls[1].rect, rect(40, 2, 1, 1));
+        assert_eq!(controls[2].rect, rect(79, 10, 1, 1));
+    }
+
+    #[test]
+    fn no_cursor_target_when_scrolled_back_outside_the_viewport_or_not_tiled() {
+        let mut scrolled = bordered("scrolled", rect(0, 1, 20, 10));
+        scrolled.scroll = Some(crate::pane::ScrollMetrics {
+            offset_from_bottom: 3,
+            max_offset_from_bottom: 3,
+            viewport_rows: 9,
+        });
+        let mut floating = bordered("float", rect(40, 1, 20, 10));
+        floating.layer = PaneHitLayer::Float(FloatId::parse("f1").expect("float id"));
+        let mut hits = ShellHitMap::default();
+        hits.panes
+            .extend([scrolled, bordered("p", rect(20, 1, 20, 10)), floating]);
+        let state = with_cursors(vec![
+            cursor("scrolled", 1, 1, None),
+            // Past the 9-row viewport.
+            cursor("p", 1, 9, None),
+            cursor("float", 1, 1, None),
+            cursor("gone", 1, 1, None),
+        ]);
+
+        assert_eq!(collect(&hits, &state), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_float_toast_split_or_scrollbar_over_the_cursor_blocks_it() {
+        let mut scrollable = bordered("bar", rect(60, 1, 20, 10));
+        scrollable.scrollbar_rect = Some(rect(79, 2, 1, 9));
+        scrollable.scroll = Some(crate::pane::ScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 5,
+            viewport_rows: 9,
+        });
+        let mut hits = ShellHitMap {
+            notification_toast: rect(30, 2, 10, 3),
+            floats: vec![float("f1", rect(0, 2, 10, 5), &[])],
+            ..ShellHitMap::default()
+        };
+        hits.panes.extend([
+            bordered("under-float", rect(0, 1, 20, 10)),
+            bordered("under-toast", rect(20, 1, 20, 10)),
+            bordered("on-split", rect(40, 1, 20, 10)),
+            scrollable,
+        ]);
+        hits.pane_splits.push(PaneSplitHit {
+            direction: crate::protocol::PaneSurfaceSplitDirection::Horizontal,
+            pos: 59,
+            area: rect(40, 1, 40, 10),
+            hit_rect: rect(59, 1, 1, 10),
+            path: Vec::new(),
+            topology_signature: 0,
+        });
+        let state = with_cursors(vec![
+            cursor("under-float", 2, 2, None),
+            cursor("under-toast", 15, 1, None),
+            cursor("on-split", 19, 4, None),
+            cursor("bar", 19, 4, None),
+        ]);
+
+        assert_eq!(collect(&hits, &state), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_covered_border_title_falls_back_to_the_agent_name() {
+        // The float sits on the border row, clear of the cursor cell.
+        let mut hits = ShellHitMap {
+            floats: vec![float("f1", rect(25, 1, 4, 1), &[])],
+            ..ShellHitMap::default()
+        };
+        hits.panes.push(bordered("p", rect(20, 1, 20, 10)));
+        hits.labels.insert(rect(21, 1, 18, 1), "stale".into());
+
+        let controls = collect(
+            &hits,
+            &with_cursors(vec![cursor("p", 2, 2, Some("claude"))]),
+        );
+
+        assert_eq!(titles(&controls.unwrap()), ["claude"]);
+    }
+
+    #[test]
+    fn an_overlay_or_the_mobile_layout_gives_no_cursor_targets() {
+        let mut hits = ShellHitMap::default();
+        hits.panes.push(bordered("p", rect(20, 1, 20, 10)));
+        let cursors = vec![cursor("p", 2, 2, None)];
+        let overlay = NeruLayerState {
+            overlay: Some(NeruOverlay::Help),
+            ..with_cursors(cursors.clone())
+        };
+        let mobile = NeruLayerState {
+            mobile: NeruMobile::Switch,
+            ..with_cursors(cursors.clone())
+        };
+
+        assert_eq!(
+            titles(&collect(&hits, &with_cursors(cursors)).unwrap()),
+            ["pane"]
+        );
+        assert_eq!(collect(&hits, &overlay), Ok(Vec::new()));
+        assert_eq!(collect(&hits, &mobile), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn border_titles_are_read_between_box_drawing_runs_only_when_bordered() {
+        let buffer = ratatui::buffer::Buffer::with_lines([
+            "╭─ claude ─╮$ prompt   ",
+            "│ output   │more output",
+        ]);
+        let frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+        let mut hits = ShellHitMap::default();
+        hits.panes.push(bordered("bordered", rect(0, 0, 12, 2)));
+        // No top border: row 0 is terminal output.
+        hits.panes.push(pane(rect(12, 0, 11, 2)));
+
+        let labels = drawn_labels(&hits, &frame);
+
+        assert_eq!(
+            labels.get(&rect(1, 0, 10, 1)).map(String::as_str),
+            Some("claude")
+        );
+        assert_eq!(labels.len(), 1, "{labels:?}");
     }
 
     #[test]

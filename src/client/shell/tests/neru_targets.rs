@@ -132,6 +132,131 @@ fn an_open_menu_gives_only_its_launcher_and_rows_and_a_row_press_activates_it() 
     ));
 }
 
+/// Two side-by-side panes with top borders: `pane_1` (focused, border title `claude`) and
+/// `pane_2` (unfocused, no border title, agent `codex`), each with a cursor on its prompt.
+fn two_pane_shell(pane_1_cursor_visible: bool) -> ClientShellState {
+    let mut projected = snapshot();
+    let mut second = projected.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.focused = false;
+    projected.panes.push(second);
+    projected.agents.push(ClientShellAgent {
+        pane_id: "pane_2".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("codex".into()),
+        display_agent: None,
+        agent: Some("codex".into()),
+        title: Some("terminal title".into()),
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Idle,
+        state_change_seq: 0,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: false,
+    });
+    let buffer = Buffer::with_lines([
+        "─ claude ───────────",
+        "$ ls      > hi      ",
+        "                    ",
+    ]);
+    let mut frame = surface();
+    frame.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+    let pane = |pane_id: &str, x: u16, focused: bool| PaneSurfacePane {
+        pane_id: pane_id.into(),
+        rect: SurfaceRect {
+            x,
+            y: 0,
+            width: 10,
+            height: 3,
+        },
+        inner_rect: SurfaceRect {
+            x,
+            y: 1,
+            width: 10,
+            height: 2,
+        },
+        focused,
+        ..frame.panes[0].clone()
+    };
+    frame.panes = vec![pane("pane_1", 0, true), pane("pane_2", 10, false)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(frame);
+    let cursor = |pane_id: &str, visible: bool| crate::protocol::endpoint::EndpointPaneCursor {
+        pane_id: pane_id.into(),
+        x: 2,
+        y: 0,
+        visible,
+    };
+    state.set_pane_cursors(Some(crate::protocol::endpoint::EndpointPaneCursors {
+        boot_id: "boot-1".into(),
+        cursors: vec![
+            cursor("pane_1", pane_1_cursor_visible),
+            cursor("pane_2", true),
+        ],
+    }));
+    state.compose(106, 24).unwrap();
+    state
+}
+
+#[test]
+fn each_visible_pane_cursor_is_a_target_and_a_press_there_focuses_its_pane() {
+    let state = two_pane_shell(true);
+    let targets = controls(&state);
+    let inner = |pane_id: &str| {
+        state
+            .hits
+            .panes
+            .iter()
+            .find(|hit| hit.pane_id == pane_id)
+            .unwrap()
+            .inner_rect
+    };
+
+    let claude = find(&targets, "claude");
+    let codex = find(&targets, "codex");
+    assert_eq!(
+        claude.rect,
+        Rect::new(inner("pane_1").x + 2, inner("pane_1").y, 1, 1)
+    );
+    assert_eq!(
+        codex.rect,
+        Rect::new(inner("pane_2").x + 2, inner("pane_2").y, 1, 1)
+    );
+    // Pane bodies give nothing else.
+    assert!(targets.iter().all(|target| target.title != "pane"));
+
+    let mut state = two_pane_shell(true);
+    let outcome = press_center(&mut state, codex);
+    let focused: Vec<_> = outcome
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ClientShellAction::Endpoint { request, .. } => match &request.method {
+                crate::api::schema::Method::PaneFocus(target) => Some(target.pane_id.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(focused, ["pane_2"]);
+}
+
+#[test]
+fn a_hidden_pane_cursor_gives_no_target() {
+    let state = two_pane_shell(false);
+
+    let targets = controls(&state);
+
+    assert!(
+        targets.iter().all(|target| target.title != "claude"),
+        "{targets:?}"
+    );
+    find(&targets, "codex");
+}
+
 mod session {
     use super::*;
     use crate::client::shell::neru_calibration::{

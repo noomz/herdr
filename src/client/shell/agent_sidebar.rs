@@ -272,12 +272,7 @@ pub(super) fn agent_row(
     let tab_label = tab
         .filter(|tab| tab_count > 1 || tab.custom_label)
         .map(|tab| tab.label.as_str());
-    let agent_label = agent
-        .display_agent
-        .as_deref()
-        .or(agent.name.as_deref())
-        .or(agent.agent.as_deref())
-        .or(agent.title.as_deref());
+    let agent_label = agent_name(agent).or(agent.title.as_deref());
     let labels = agent
         .state_labels
         .iter()
@@ -395,4 +390,13 @@ fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str 
         AgentStatus::Working => "working",
         AgentStatus::Idle | AgentStatus::Unknown => "idle",
     }
+}
+
+/// The agent's name as the sidebar shows it, without the terminal-title fallback.
+pub(super) fn agent_name(agent: &crate::protocol::ClientShellAgent) -> Option<&str> {
+    agent
+        .display_agent
+        .as_deref()
+        .or(agent.name.as_deref())
+        .or(agent.agent.as_deref())
 }

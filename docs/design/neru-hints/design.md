@@ -110,7 +110,7 @@ The mobile layout turns on at or below `ui.mobile_width_threshold` columns (defa
 
 These fields are clickable but are not controls, or a single click at their center does not do one defined thing (§V.1):
 
-- `panes`, `popup`, `pane_splits`, and float bodies: pane input and split drags
+- `panes`, `popup`, `pane_splits`, and float bodies: pane input and split drags. The one exception is a tiled pane's visible cursor cell (§V.18). It is a target after every chrome control and below floats, the toast, split handles and scrollable scrollbars. Its title is the drawn border title, then the agent name, then `pane`.
 - all scrollbars and their metrics: `workspace_scrollbar`, `agent_scrollbar`, `help_scrollbar`, `navigator_scrollbar`, `product_announcement_scrollbar`, `release_notes_scrollbar`
 - drag handles: `sidebar_divider`, `sidebar_section_divider`
 - background areas: `workspace_body`, `agent_body`, `tab_bar`, `help_popup`, `settings_popup`, `navigator_popup`

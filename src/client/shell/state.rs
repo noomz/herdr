@@ -1776,13 +1776,8 @@ impl ClientShellState {
     }
 
     /// The cursor of `pane_id`, relative to its `inner_rect`, when the server sent one.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by neru pane-cursor targets (SPEC-neru-hints T11)"
-        )
-    )]
+    // Only Unix clients build neru targets (`neru_targets`).
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn pane_cursor(
         &self,
         pane_id: &str,
