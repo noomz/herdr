@@ -125,7 +125,8 @@ bootstrap and recovery, subscribe first, then reconcile through authoritative
 reads as described under Event subscriptions below. Events invalidate cached state; they
 cannot be unconditionally replayed over a snapshot. Call `session.snapshot`
 again after reconnecting or when the local cache may be stale. Attached worktree provenance is included on workspace
-records. Full repo worktree discovery remains `worktree.list`.
+records. Full repo worktree discovery remains `worktree.list`. `boot_id` changes
+each time the server restarts; pass it to `machine.show` to name this machine.
 
 From the CLI, `herdr api snapshot` prints the live `session.snapshot` response
 as JSON for clients and agents that want a simple bootstrap command.
@@ -369,7 +370,7 @@ Ask the foreground client to show a saved machine, or this machine with `local`,
 {"id":"req_show","method":"machine.show","params":{"machine":"Build machine","pane_id":"w1:p2"}}
 ```
 
-`machine` is a saved machine label or profile ID as the client knows it. Set at most one of `workspace_id`, `tab_id`, or `pane_id`; more than one returns `invalid_params`. The response is `type: "ok"` once the request reaches a foreground client that supports it, and `no_capable_client` otherwise. The client then selects the machine the same way the sidebar does. It shows a notice for an unknown or ambiguous label. Only the server of the machine the client is showing has it as the foreground client; other servers return `no_capable_client`.
+`machine` is a saved machine label or profile ID as the client knows it. Labels belong to each client, so a plugin that names a machine from another server's saved list should also pass `boot_id` from that machine's `session.snapshot`. The client then shows the machine it is connected to with that boot ID and ignores the label, or shows a notice that the machine is not connected. Set at most one of `workspace_id`, `tab_id`, or `pane_id`; more than one returns `invalid_params`. The response is `type: "ok"` once the request reaches a foreground client that supports it, and `no_capable_client` otherwise. The client then selects the machine the same way the sidebar does. It shows a notice for an unknown or ambiguous label. Only the server of the machine the client is showing has it as the foreground client; other servers return `no_capable_client`.
 
 Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch.
 

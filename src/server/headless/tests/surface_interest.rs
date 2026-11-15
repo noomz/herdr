@@ -37,7 +37,7 @@ fn lifecycle_resize() -> crate::protocol::ClientMessage {
 }
 
 fn request_active_surface(server: &mut HeadlessServer, client_id: u64, request_id: &str) {
-    let boot_id = server.client_shell_boot_id.clone();
+    let boot_id = server.app.boot_id.clone();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
             client_id,
@@ -104,7 +104,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
     );
     assert!(input_rx.try_recv().is_err());
 
-    let boot_id = server.client_shell_boot_id.clone();
+    let boot_id = server.app.boot_id.clone();
     assert!(
         !server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
             client_id,
@@ -425,7 +425,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
         client.host_keyboard_report_all_active = Some(false);
     }
 
-    let boot_id = server.client_shell_boot_id.clone();
+    let boot_id = server.app.boot_id.clone();
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
             client_id,

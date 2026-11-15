@@ -766,6 +766,7 @@ fn session_snapshot_request_and_response_round_trip() {
             snapshot: Box::new(SessionSnapshot {
                 version: "0.1.2".into(),
                 protocol: 16,
+                boot_id: Some("boot-1".into()),
                 focused_workspace_id: None,
                 focused_tab_id: None,
                 focused_pane_id: None,

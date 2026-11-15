@@ -106,7 +106,7 @@ fn prepare_and_commit(server: &mut HeadlessServer, id: u64) -> (PathBuf, u64, u3
         .native_graphics
         .prepare(
             id,
-            &server.client_shell_boot_id,
+            &server.app.boot_id,
             &mut desired,
             &DeliveryCache::default(),
         )
@@ -144,7 +144,7 @@ fn prepare_scene_and_commit(
         .native_graphics
         .prepare(
             id,
-            &server.client_shell_boot_id,
+            &server.app.boot_id,
             &mut desired,
             &DeliveryCache::default(),
         )
@@ -182,7 +182,7 @@ fn assert_native_disabled(server: &mut HeadlessServer, id: u64) {
         .native_graphics
         .prepare(
             id,
-            &server.client_shell_boot_id,
+            &server.app.boot_id,
             &mut desired,
             &DeliveryCache::default(),
         )
@@ -225,7 +225,7 @@ fn native_image_banks_advance_only_on_started_ack_and_are_scoped_and_pruned() {
     let (_control, _render) = add_client(&mut server, 7);
     let (_other_control, _other_render) = add_client(&mut server, 8);
     let base = crate::kitty_graphics::surface::native_host_image_id(
-        &server.client_shell_boot_id,
+        &server.app.boot_id,
         &scene().placements[0].asset,
     );
 
@@ -272,7 +272,7 @@ fn native_image_banks_advance_only_on_started_ack_and_are_scoped_and_pruned() {
         .retained_assets
         .push(scene_for(1, 127).placements[0].asset.clone());
     let source_two_base = crate::kitty_graphics::surface::native_host_image_id(
-        &server.client_shell_boot_id,
+        &server.app.boot_id,
         &source_two.placements[0].asset,
     );
     let (source_two_transfer, source_two_image) =
@@ -314,7 +314,7 @@ fn inline_commit_updates_bank_only_for_a_new_asset_revision() {
     let mut exact = test_headless_server();
     let (_control, _render) = add_client(&mut exact, 7);
     let base = crate::kitty_graphics::surface::native_host_image_id(
-        &exact.client_shell_boot_id,
+        &exact.app.boot_id,
         &scene().placements[0].asset,
     );
     let (first_transfer, first_image) = prepare_scene_and_commit(&mut exact, 7, scene());
@@ -341,7 +341,7 @@ fn rejected_omitted_scene_does_not_prune_visible_bank_history() {
     let mut server = test_headless_server();
     let (_control, _render) = add_client(&mut server, 7);
     let base = crate::kitty_graphics::surface::native_host_image_id(
-        &server.client_shell_boot_id,
+        &server.app.boot_id,
         &scene().placements[0].asset,
     );
     let (first_transfer, first_image) = prepare_scene_and_commit(&mut server, 7, scene());
@@ -378,7 +378,7 @@ fn unqueued_native_prepare_does_not_advance_image_bank() {
     let mut server = test_headless_server();
     let (_control, _render) = add_client(&mut server, 7);
     let base = crate::kitty_graphics::surface::native_host_image_id(
-        &server.client_shell_boot_id,
+        &server.app.boot_id,
         &scene_for(3, 200).placements[0].asset,
     );
     let mut dropped_scene = scene_for(3, 200);
@@ -386,7 +386,7 @@ fn unqueued_native_prepare_does_not_advance_image_bank() {
         .native_graphics
         .prepare(
             7,
-            &server.client_shell_boot_id,
+            &server.app.boot_id,
             &mut dropped_scene,
             &DeliveryCache::default(),
         )

@@ -112,7 +112,7 @@ herdr pane read w1:p2 --source recent --lines 50
 
 `workspace.move_block` 会将有序的 `workspace_ids` 原子地移动到 `before_workspace_id` 之前;省略锚点则将该块移动到末尾。id 必须唯一,且锚点不能属于被移动的块。响应包含服务器确认的有序工作区列表。
 
-`session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅。初始化或恢复缓存时,应先建立订阅,再按下文事件订阅部分的说明读取服务器当前状态并核对、更新缓存。事件表示缓存可能过期,不能无条件重放到快照上。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。
+`session.snapshot` 为维护本地运行时缓存的客户端返回一次性引导快照。响应包含版本/协议元数据、当前聚焦的工作区/标签页/窗格 id、工作区记录、标签页记录、窗格记录、标签页布局快照和智能体记录。它不是订阅。初始化或恢复缓存时,应先建立订阅,再按下文事件订阅部分的说明读取服务器当前状态并核对、更新缓存。事件表示缓存可能过期,不能无条件重放到快照上。重新连接后或本地缓存可能已过期时,再次调用 `session.snapshot`。工作区记录也包含关联 worktree 的来源信息。完整的仓库 worktree 发现仍使用 `worktree.list`。`boot_id` 在服务器每次重启时变化；用 `machine.show` 指定本机时传入它。
 
 CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSON,让客户端和智能体可以简单地完成引导。
 
@@ -283,7 +283,7 @@ herdr notification show "build failed" --body "api workspace" --position top-lef
 {"id":"req_show","method":"machine.show","params":{"machine":"Build machine","pane_id":"w1:p2"}}
 ```
 
-`machine` 是客户端所知的已保存机器标签或配置 ID。`workspace_id`、`tab_id`、`pane_id` 最多设置一个；设置多个会返回 `invalid_params`。请求送达支持它的前台客户端时响应为 `type: "ok"`，否则为 `no_capable_client`。客户端随后按侧边栏的方式选择该机器。标签未知或有歧义时显示通知。只有客户端当前显示的机器的服务器把它作为前台客户端；其他服务器返回 `no_capable_client`。
+`machine` 是客户端所知的已保存机器标签或配置 ID。标签属于各个客户端，因此从其他服务器的已保存列表中指定机器的插件还应传入该机器 `session.snapshot` 中的 `boot_id`。客户端随后显示具有该 boot ID 的已连接机器并忽略标签；未连接时显示通知。`workspace_id`、`tab_id`、`pane_id` 最多设置一个；设置多个会返回 `invalid_params`。请求送达支持它的前台客户端时响应为 `type: "ok"`，否则为 `no_capable_client`。客户端随后按侧边栏的方式选择该机器。标签未知或有歧义时显示通知。只有客户端当前显示的机器的服务器把它作为前台客户端；其他服务器返回 `no_capable_client`。
 
 Worktree 方法把 Git 检出作为 Herdr 工作区管理。`worktree.create` 创建检出,并返回新的 `workspace`、`tab`、`root_pane` 和 `worktree` 记录。请求的分支已在本地存在时检出它;否则从请求的 base 或 `HEAD` 创建分支。`worktree.open` 打开已有检出,或返回已打开的工作区。`worktree.remove` 对关联的子工作区运行 `git worktree remove`,从不删除分支。
 

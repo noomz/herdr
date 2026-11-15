@@ -106,6 +106,7 @@ impl AppPolicy {
 
 pub struct App {
     pub state: AppState,
+    pub(crate) boot_id: String,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
@@ -627,8 +628,10 @@ impl App {
         let endpoint_commands =
             custom_commands::EndpointCommandRegistry::new(&state.keybinds.custom_commands);
 
+        let boot_id = state.server_boot_id.clone();
         let mut app = Self {
             pending_float_focus: Vec::new(),
+            boot_id,
             plugin_installation_leases,
             plugin_installation_cleanup_allowed,
             config_diagnostic_deadline: None,

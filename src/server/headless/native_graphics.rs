@@ -365,7 +365,7 @@ impl HeadlessServer {
         }
         let mut prepared = self.native_graphics.prepare_with_sources(
             client,
-            &self.client_shell_boot_id,
+            &self.app.boot_id,
             scene,
             delivery,
             sources,

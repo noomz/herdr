@@ -11,7 +11,7 @@ const HELP: &str = "Usage:
   herdr machine list [--json]
   herdr machine status [<label-or-id>] [--json]
   herdr machine reconnect <label-or-id>
-  herdr machine show <label-or-id> [--workspace <id> | --tab <id> | --pane <id>]
+  herdr machine show <label-or-id> [--boot-id <id>] [--workspace <id> | --tab <id> | --pane <id>]
   herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]
   herdr machine rename <profile-id> --label <label>
   herdr machine remove <profile-id>
@@ -24,6 +24,8 @@ Changes apply automatically to open local Herdr clients.
 Removing or disabling a machine leaves its remote sessions running.
 Show asks the attached Herdr client to display a machine, as if it were selected in the
 sidebar, and to focus one of its workspaces, tabs, or panes. Use `local` for this machine.
+With --boot-id, the client shows the machine whose server reports that `boot_id` in
+`herdr api snapshot`, whatever label the client gave it.
 Saved machines contain only a label, SSH target, explicit Herdr session, and enabled state.
 SSH credentials and key material remain owned by OpenSSH.";
 
@@ -211,8 +213,7 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
     Ok(0)
 }
 
-const SHOW_USAGE: &str =
-    "usage: herdr machine show <label-or-id> [--workspace <id> | --tab <id> | --pane <id>]";
+const SHOW_USAGE: &str = "usage: herdr machine show <label-or-id> [--boot-id <id>] [--workspace <id> | --tab <id> | --pane <id>]";
 
 fn show(args: &[String]) -> std::io::Result<i32> {
     match parse_show_args(args) {
@@ -225,15 +226,17 @@ fn show(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn parse_show_args(args: &[String]) -> Result<crate::api::schema::MachineShowParams, String> {
-    let args = super::expand_equals_args(args, &["--workspace", "--tab", "--pane"]);
+    let args = super::expand_equals_args(args, &["--workspace", "--tab", "--pane", "--boot-id"]);
     let mut machine = None;
     let mut targets = [None, None, None];
+    let mut boot_id = None;
     let mut index = 0;
     while index < args.len() {
         let slot = match args[index].as_str() {
-            "--workspace" => 0,
-            "--tab" => 1,
-            "--pane" => 2,
+            "--workspace" => &mut targets[0],
+            "--tab" => &mut targets[1],
+            "--pane" => &mut targets[2],
+            "--boot-id" => &mut boot_id,
             positional if !positional.starts_with('-') && machine.is_none() => {
                 machine = Some(positional.to_owned());
                 index += 1;
@@ -244,7 +247,7 @@ fn parse_show_args(args: &[String]) -> Result<crate::api::schema::MachineShowPar
         let Some(value) = args.get(index + 1) else {
             return Err(format!("missing value for {}", args[index]));
         };
-        if targets[slot].replace(value.clone()).is_some() {
+        if slot.replace(value.clone()).is_some() {
             return Err(format!("{} can only be specified once", args[index]));
         }
         index += 2;
@@ -255,6 +258,7 @@ fn parse_show_args(args: &[String]) -> Result<crate::api::schema::MachineShowPar
     let [workspace_id, tab_id, pane_id] = targets;
     Ok(crate::api::schema::MachineShowParams {
         machine: machine.ok_or(SHOW_USAGE)?,
+        boot_id,
         workspace_id,
         tab_id,
         pane_id,
@@ -689,11 +693,17 @@ mod tests {
             parse(&["local", "--workspace", "w1"]),
             Ok(serde_json::json!({"machine": "local", "workspace_id": "w1"}))
         );
+        assert_eq!(
+            parse(&["mac", "--boot-id=b1", "--tab", "w1:t1"]),
+            Ok(serde_json::json!({"machine": "mac", "boot_id": "b1", "tab_id": "w1:t1"}))
+        );
         for args in [
             &[][..],
             &["drm", "--tab"],
             &["drm", "--tab", "w1:t1", "--pane", "w1:p1"],
             &["drm", "--tab", "w1:t1", "--tab", "w1:t2"],
+            &["drm", "--boot-id", "b1", "--boot-id", "b2"],
+            &["drm", "--boot-id"],
             &["drm", "other"],
             &["drm", "--agent", "a"],
         ] {

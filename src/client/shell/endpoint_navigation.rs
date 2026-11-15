@@ -237,7 +237,11 @@ impl ClientShellState {
         if !self.may_change_view(origin) {
             return outcome;
         }
-        let endpoint_id = match self.resolve_machine(&request.machine) {
+        let resolved = match &request.boot_id {
+            Some(boot_id) => self.resolve_machine_boot(&request.machine, boot_id),
+            None => self.resolve_machine(&request.machine),
+        };
+        let endpoint_id = match resolved {
             Ok(endpoint_id) => endpoint_id,
             Err(message) => {
                 outcome.repaint = self.receive_endpoint_unavailable(message);
@@ -260,6 +264,23 @@ impl ClientShellState {
 
     fn may_change_view(&self, origin: &ClientEndpointId) -> bool {
         origin.is_local() || origin == &self.active_endpoint_id
+    }
+
+    fn resolve_machine_boot(
+        &self,
+        sender_label: &str,
+        boot_id: &str,
+    ) -> Result<ClientEndpointId, String> {
+        self.endpoints
+            .iter()
+            .find(|endpoint| {
+                endpoint
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.boot_id == boot_id)
+            })
+            .map(|endpoint| endpoint.endpoint_id.clone())
+            .ok_or_else(|| format!("machine {sender_label} is not connected here"))
     }
 
     fn resolve_machine(&self, machine: &str) -> Result<ClientEndpointId, String> {

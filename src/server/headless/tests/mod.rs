@@ -106,6 +106,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         .expect("spawn client accept thread");
     let server_keybindings = app_keybindings(&app);
     let headless_size = app.state.headless_size;
+    app.boot_id = "test-boot".into();
 
     HeadlessServer {
         app,
@@ -125,7 +126,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
         popup_owner_tab_id: None,
-        client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
         api_window_title: None,
         server_keybindings,
@@ -850,7 +850,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         })
     );
     let _initial_snapshot = client_shell_snapshot(&control_rx);
-    let boot_id = server.client_shell_boot_id.clone();
+    let boot_id = server.app.boot_id.clone();
 
     assert!(
         !server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
@@ -1924,7 +1924,7 @@ async fn client_shell_tab_focus_changes_only_the_source_connection() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
             client_id: 8,
-            boot_id: server.client_shell_boot_id.clone(),
+            boot_id: server.app.boot_id.clone(),
             request: Box::new(api::schema::Request {
                 id: "focus-second".into(),
                 method: api::schema::Method::TabFocus(api::schema::TabTarget {
@@ -1999,7 +1999,7 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointResponseChunkReady {
             client_id: 51,
-            boot_id: server.client_shell_boot_id.clone(),
+            boot_id: server.app.boot_id.clone(),
             request_id: "create-worktree".into(),
             final_chunk: true,
             data: serde_json::to_vec(&response).unwrap(),
@@ -2036,7 +2036,7 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
     assert!(
         server.handle_server_event(ServerEvent::ClientShellEndpointResponseChunkReady {
             client_id: 51,
-            boot_id: server.client_shell_boot_id.clone(),
+            boot_id: server.app.boot_id.clone(),
             request_id: "open-worktree".into(),
             final_chunk: true,
             data: serde_json::to_vec(&response).unwrap(),
@@ -2079,7 +2079,7 @@ async fn deferred_worktree_response_moves_only_its_source_client() {
     assert!(
         !server.handle_server_event(ServerEvent::ClientShellEndpointResponseChunkReady {
             client_id: 51,
-            boot_id: server.client_shell_boot_id.clone(),
+            boot_id: server.app.boot_id.clone(),
             request_id: "background-worktree".into(),
             final_chunk: true,
             data: serde_json::to_vec(&response).unwrap(),
@@ -3647,7 +3647,7 @@ async fn deferred_worktree_open_disconnect_keeps_other_clients_focus() {
     let (entered, release) = crate::worktree::test_list_gate::block(&repo);
     server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
         client_id: 51,
-        boot_id: server.client_shell_boot_id.clone(),
+        boot_id: server.app.boot_id.clone(),
         request: Box::new(api::schema::Request {
             id: "open-before-disconnect".into(),
             method: api::schema::Method::WorktreeOpen(api::schema::WorktreeOpenParams {

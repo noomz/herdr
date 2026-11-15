@@ -194,6 +194,7 @@ mod tests {
     fn show_machine_control_decodes_a_valid_request_and_ignores_an_invalid_one() {
         let params = crate::api::schema::MachineShowParams {
             machine: "Build".into(),
+            boot_id: Some("remote-boot".into()),
             workspace_id: None,
             tab_id: Some("w1:t2".into()),
             pane_id: None,

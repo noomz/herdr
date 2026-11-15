@@ -213,8 +213,6 @@ pub struct HeadlessServer {
     tab_geometry_controllers: HashMap<String, u64>,
     /// Stable tab id whose viewers may see and interact with the one terminal popup.
     popup_owner_tab_id: Option<String>,
-    /// Process-local identity used to reject shell replacements from an earlier server boot.
-    client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
     /// Keying on the client means a newly attached terminal is written to even
     /// when the title itself has not changed, without every code path that
@@ -345,7 +343,6 @@ impl HeadlessServer {
 
         let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
-        let client_shell_boot_id = app.state.server_boot_id.clone();
         let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
             server_config_diagnostic_summaries(config_diagnostics);
         #[cfg(not(unix))]
@@ -368,7 +365,6 @@ impl HeadlessServer {
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
-            client_shell_boot_id,
             sent_window_title: None,
             api_window_title: None,
             server_keybindings,
@@ -2054,7 +2050,7 @@ impl HeadlessServer {
                 };
                 let (seed_snapshot, completion_projection) = client_shell_snapshot(
                     &self.app,
-                    &self.client_shell_boot_id,
+                    &self.app.boot_id,
                     connection.shell_projection_revision,
                     config_diagnostic,
                     None,
@@ -2666,7 +2662,7 @@ impl HeadlessServer {
                 let command_surface_revision = self.clients.get(&client_id).and_then(|client| {
                     (matches!(client.mode, ClientConnectionMode::ClientShell)
                         && client.shell_endpoint_command_in_flight
-                        && boot_id == self.client_shell_boot_id)
+                        && boot_id == self.app.boot_id)
                         .then_some(client.shell_endpoint_command_surface_revision)
                         .flatten()
                 });

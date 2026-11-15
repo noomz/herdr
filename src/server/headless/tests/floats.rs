@@ -108,13 +108,13 @@ async fn float_button_endpoint_rejects_clients_without_opt_in() {
     let (control_rx, _render_rx) = connect_shell_with_controls(&mut server, 7, true);
     let request: api::schema::Request = serde_json::from_value(serde_json::json!({
         "id": "click", "method": "float.button.invoke", "params": {
-            "boot_id": server.client_shell_boot_id, "float_id": "f1", "workspace_id": null,
+            "boot_id": server.app.boot_id, "float_id": "f1", "workspace_id": null,
             "plugin_id": "plugin", "entrypoint": "shell", "controls_revision": "revision", "button_id": "close"
         }
     })).unwrap();
     server.handle_client_shell_endpoint_request(
         7,
-        server.client_shell_boot_id.clone(),
+        server.app.boot_id.clone(),
         Box::new(request),
     );
     let message = read_server_messages(control_rx.recv_timeout(Duration::from_secs(1)).unwrap());
@@ -155,7 +155,7 @@ async fn float_button_completion_goes_only_to_the_initiating_client() {
     server.app.state.plugin_command_logs.push(log.clone());
     server.app.state.plugin_commands_in_flight = 1;
     let target = FloatButtonInvokeParams {
-        boot_id: server.client_shell_boot_id.clone(),
+        boot_id: server.app.boot_id.clone(),
         float_id: "f1".into(),
         workspace_id: RequiredNullableString(None),
         plugin_id: "plugin".into(),
@@ -703,7 +703,7 @@ async fn a_client_shell_float_resize_resizes_the_program_terminal() {
     server.render_and_stream();
     let _ = render_rx.recv().expect("first render");
 
-    let boot_id = server.client_shell_boot_id.clone();
+    let boot_id = server.app.boot_id.clone();
     server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
         client_id: 7,
         boot_id,
@@ -1103,7 +1103,7 @@ async fn workspace_float_render_scale_profile() {
                 client.shell_floats = Some(layer.clone());
                 client.shell_float_buttons =
                     Some(crate::protocol::endpoint::EndpointFloatButtons {
-                        boot_id: server.client_shell_boot_id.clone(),
+                        boot_id: server.app.boot_id.clone(),
                         revision: 1,
                         floats: vec![],
                     });

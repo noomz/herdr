@@ -64,6 +64,7 @@ impl App {
         SessionSnapshot {
             version: crate::build_info::version(),
             protocol: crate::protocol::PROTOCOL_VERSION,
+            boot_id: Some(self.boot_id.clone()),
             focused_workspace_id,
             focused_tab_id,
             focused_pane_id,
@@ -111,6 +112,7 @@ mod tests {
             panic!("expected session snapshot response");
         };
         assert_eq!(success.id, "req_snapshot");
+        assert_eq!(snapshot.boot_id.as_deref(), Some(app.boot_id.as_str()));
         assert_eq!(snapshot.workspaces.len(), 1);
         assert_eq!(snapshot.tabs.len(), 2);
         assert_eq!(snapshot.panes.len(), 2);
