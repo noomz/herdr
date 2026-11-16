@@ -80,6 +80,7 @@ mod endpoint_requests;
 mod lifecycle;
 mod machine_show;
 mod native_graphics;
+mod neru_hints;
 mod notifications;
 mod render;
 mod retained_surface;
@@ -1991,6 +1992,7 @@ impl HeadlessServer {
                 floats,
                 show_machine,
                 pane_cursors,
+                neru_hints,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -2038,6 +2040,7 @@ impl HeadlessServer {
                 connection.shell_surface_active = surface_active;
                 connection.shell_show_machine = show_machine;
                 connection.shell_pane_cursors_enabled = pane_cursors;
+                connection.shell_neru_hints = neru_hints;
                 connection.render_state.enable_surface_reuse(surface_reuse);
                 connection.render_state.enable_surface_delta(surface_delta);
                 connection
@@ -2136,6 +2139,12 @@ impl HeadlessServer {
                 terminal_id,
                 takeover,
             } => self.attach_terminal_client(client_id, terminal_id, takeover),
+            ServerEvent::ClientHostFocus { client_id, focused } => {
+                if let Some(client) = self.clients.get_mut(&client_id) {
+                    client.host_window_focused = Some(focused);
+                }
+                false
+            }
             ServerEvent::ClientAttachGraphics { client_id } => {
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     return false;
@@ -3101,6 +3110,12 @@ impl HeadlessServer {
 
         if let api::schema::Method::MachineShow(params) = &msg.request.method {
             let response = self.handle_machine_show_api(msg.request.id.clone(), params.clone());
+            let _ = msg.respond_to.send(response);
+            return metadata_expired;
+        }
+
+        if let api::schema::Method::ClientNeruHintsRun(_) = &msg.request.method {
+            let response = self.handle_neru_hints_api(msg.request.id.clone());
             let _ = msg.respond_to.send(response);
             return metadata_expired;
         }

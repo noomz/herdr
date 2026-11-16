@@ -180,6 +180,11 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_float_button_response: Option<(PendingFloatButton, Vec<u8>)>,
     pub(crate) shell_pending_float_buttons: HashMap<String, PendingFloatButton>,
     pub(crate) shell_show_machine: bool,
+    /// Whether this shell's hello set `neru_hints`: it can take `endpoint.neru-hints.v1`.
+    pub(crate) shell_neru_hints: bool,
+    /// The host window focus from the last `endpoint.host-focus.v1`; `None` until the first.
+    /// It is not PTY focus and changes no foreground client or tab geometry (§V.20).
+    pub(crate) host_window_focused: Option<bool>,
     /// Whether this shell negotiated `pane_cursors_v1`.
     pub(crate) shell_pane_cursors_enabled: bool,
     /// Pane cursor set last delivered in a successful render write; `None` forces a resend.
@@ -270,6 +275,8 @@ impl ClientConnection {
             shell_float_button_response: None,
             shell_pending_float_buttons: HashMap::new(),
             shell_show_machine: false,
+            shell_neru_hints: false,
+            host_window_focused: None,
             shell_pane_cursors_enabled: false,
             shell_pane_cursors: None,
             host_mouse_capture_active: None,

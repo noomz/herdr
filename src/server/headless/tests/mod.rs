@@ -10,6 +10,8 @@ mod float_tests;
 #[path = "machine_show.rs"]
 mod machine_show_tests;
 mod native_graphics;
+#[path = "neru_hints.rs"]
+mod neru_hints_tests;
 #[path = "pane_cursors.rs"]
 mod pane_cursors_tests;
 #[path = "pane_move.rs"]
@@ -743,6 +745,7 @@ async fn client_shell_attach_seeds_workspace() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 6,
             surface_cols: 80,
             surface_rows: 23,
@@ -789,6 +792,7 @@ async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
         floats: false,
         show_machine: false,
         pane_cursors: false,
+        neru_hints: false,
         writer,
     });
     let (_, initial) = client_shell_projection(&control_rx);
@@ -841,6 +845,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -963,6 +968,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 77,
             surface_cols: 80,
             surface_rows: 23,
@@ -1069,6 +1075,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,
@@ -1240,6 +1247,7 @@ fn connect_test_shell(
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id,
             surface_cols,
             surface_rows,
@@ -1848,6 +1856,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 13,
             surface_cols: 80,
             surface_rows: 23,
@@ -1876,6 +1885,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 14,
             surface_cols: 80,
             surface_rows: 23,
@@ -2799,6 +2809,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 9,
             surface_cols: 80,
             surface_rows: 23,
@@ -3049,6 +3060,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 12,
             surface_cols: 80,
             surface_rows: 23,
@@ -3187,6 +3199,7 @@ async fn plugin_popup_opened_under_attached_shell_client_gets_cell_pixel_size() 
             endpoint_keybindings: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             mouse_capture: false,
             surface_active: true,
             writer,
@@ -6725,6 +6738,7 @@ async fn client_shell_requests_host_pixels_for_an_unfocused_pixel_pane() {
             floats: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,

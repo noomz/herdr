@@ -162,6 +162,7 @@ operations::define_operations! {
     FloatClose(FloatTarget) => "float.close", true, false;
     FloatButtonInvoke(FloatButtonInvokeParams) => "float.button.invoke", true, true;
     MachineShow(MachineShowParams) => "machine.show", false, false;
+    ClientNeruHintsRun(EmptyParams) => "client.neru_hints.run", false, false;
 }
 
 #[cfg(test)]

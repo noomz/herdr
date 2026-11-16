@@ -267,9 +267,9 @@ The CLI prints one plain line on stderr, not the JSON that `send_ok_request` pri
 | `no_focused_client` | 1 | `herdr neru-hints: no focused herdr window.` |
 | `ambiguous_focused_client` | 1 | `herdr neru-hints: <N> herdr windows report focus. Click one and try again.` |
 | No server listening | 1 | `herdr neru-hints: no herdr server is running.` |
-| Old server: error code `unknown_method` (`src/api/server.rs:289`) | 1 | `herdr neru-hints: the herdr server does not support neru-hints. Restart it after updating.` |
+| Old server: error code `invalid_request` (it cannot parse the method, `src/api/server.rs:367`), or `unknown_method` | 1 | `herdr neru-hints: the herdr server does not support neru-hints. Restart it after updating.` |
 | Protocol mismatch | 1 | the existing message from `ensure_server_protocol_compatible`, which prints it itself (`ProtocolMismatchReported`, `src/cli/protocol_guard.rs`). The CLI adds no line. |
-| Remote target | 1 | `herdr neru-hints runs only against the local server.` |
+| Remote target | 2 or 1 | `--machine` fails the shared target check before any connection (`validate_machine_command`, `src/cli/target.rs`): exit 2 and its usage line. Any other remote target: exit 1, `herdr neru-hints runs only against the local server.` |
 | Any other error | 1 | `herdr neru-hints: <server message>` |
 
 There is one non-zero code. The neru `exec` step tests only success, so different codes would carry no meaning.

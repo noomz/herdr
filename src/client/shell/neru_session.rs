@@ -79,6 +79,28 @@ pub(crate) fn neru_unavailable_reason(
     mouse_capture: bool,
     pixel_mouse: bool,
 ) -> Option<String> {
+    if let Some(reason) = neru_host_unavailable_reason(macos, remote_client, env) {
+        return Some(reason);
+    }
+    if !mouse_capture {
+        return Some("neru hints needs mouse capture (ui.mouse_capture).".into());
+    }
+    if !pixel_mouse {
+        return Some(
+            "neru hints needs a terminal that reports pixel mouse positions (kitty, Ghostty)."
+                .into(),
+        );
+    }
+    None
+}
+
+/// Design section 8 steps 1 to 3: what the client's host decides for the whole session. A
+/// client sets the `neru_hints` hello flag only when this is `None` (§V.23).
+pub(crate) fn neru_host_unavailable_reason(
+    macos: bool,
+    remote_client: bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
     if !macos {
         return Some("neru hints needs macOS.".into());
@@ -97,19 +119,7 @@ pub(crate) fn neru_unavailable_reason(
     ]
     .into_iter()
     .find(|(name, _)| set(name));
-    if let Some((_, name)) = multiplexer {
-        return Some(format!("neru hints is unavailable inside {name}."));
-    }
-    if !mouse_capture {
-        return Some("neru hints needs mouse capture (ui.mouse_capture).".into());
-    }
-    if !pixel_mouse {
-        return Some(
-            "neru hints needs a terminal that reports pixel mouse positions (kitty, Ghostty)."
-                .into(),
-        );
-    }
-    None
+    multiplexer.map(|(_, name)| format!("neru hints is unavailable inside {name}."))
 }
 
 /// Checks neru's version, then calibrates on this thread. `send` delivers events to the client

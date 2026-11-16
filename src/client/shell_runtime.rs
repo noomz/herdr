@@ -879,6 +879,9 @@ pub(super) fn finish_client_shell_input(
         // Host focus belongs to a pending target even when the source has gone offline or has
         // already had its surface revoked. Route it before the ordinary source-online gate.
         if let ClientMessage::ClientShellFocus { focused } = request {
+            // The host window's focus also goes to the local server, whatever endpoint is
+            // active or activating, so `herdr neru-hints` can find this client (§V.20).
+            endpoints.send_local_host_focus(focused);
             if let Some(activation) = pending_activation.as_mut() {
                 if let Err(error) = activation.update_host_focus(focused, endpoints) {
                     rollback_endpoint_activation(

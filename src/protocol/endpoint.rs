@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
+use super::{ClientMessage, ClientShellSnapshot, ClientSurfaceSize, ServerMessage};
 
 pub const ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const ENDPOINT_HELLO_KIND: &str = "endpoint.hello.v1";
@@ -42,6 +42,18 @@ pub const PANE_CURSORS_KIND: &str = "endpoint.pane-cursors.v1";
 /// images. Older servers ignore it, so old and new peers keep text-only attach.
 pub const ATTACH_GRAPHICS_KIND: &str = "endpoint.attach-graphics.v1";
 pub const SHOW_MACHINE_KIND: &str = "endpoint.show-machine.v1";
+/// The server forwards `herdr neru-hints` to a client, and accepts its host focus reports.
+pub const NERU_HINTS_CAPABILITY: &str = "neru_hints_v1";
+/// Server to client: start neru hints. Sent only to a client whose hello set `neru_hints`.
+pub const NERU_HINTS_KIND: &str = "endpoint.neru-hints.v1";
+/// Client to server: whether the host window holding this client is focused. It is not
+/// `ClientShellFocus`, which follows the active endpoint and drives PTY focus.
+pub const HOST_FOCUS_KIND: &str = "endpoint.host-focus.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointHostFocus {
+    pub focused: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {
@@ -158,6 +170,10 @@ pub struct EndpointClientHello {
     pub show_machine: bool,
     #[serde(default)]
     pub pane_cursors: bool,
+    /// The client can run neru hints on this host (design section 8 steps 1 to 3), and this
+    /// hello goes to its local server.
+    #[serde(default)]
+    pub neru_hints: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -225,6 +241,21 @@ pub fn show_machine_message(
     })
 }
 
+pub fn neru_hints_message() -> ServerMessage {
+    ServerMessage::EndpointControl {
+        kind: NERU_HINTS_KIND.into(),
+        data: "{}".into(),
+    }
+}
+
+pub fn host_focus_message(focused: bool) -> ClientMessage {
+    ClientMessage::EndpointControl {
+        kind: HOST_FOCUS_KIND.into(),
+        data: serde_json::to_string(&EndpointHostFocus { focused })
+            .expect("a bool struct always serializes"),
+    }
+}
+
 pub fn agent_view_projection_message(
     boot_id: &str,
     revision: u64,
@@ -280,6 +311,7 @@ impl EndpointServerWelcome {
                 super::floats::CAPABILITY.into(),
                 FLOAT_BUTTONS_CAPABILITY.into(),
                 PANE_CURSORS_CAPABILITY.into(),
+                NERU_HINTS_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -325,6 +357,7 @@ mod tests {
             float_buttons: false,
             show_machine: false,
             pane_cursors: false,
+            neru_hints: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -478,6 +511,7 @@ mod tests {
         value.as_object_mut().unwrap().remove("float_buttons");
         value.as_object_mut().unwrap().remove("show_machine");
         value.as_object_mut().unwrap().remove("pane_cursors");
+        value.as_object_mut().unwrap().remove("neru_hints");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
@@ -487,6 +521,28 @@ mod tests {
         assert!(!decoded.float_buttons);
         assert!(!decoded.show_machine);
         assert!(!decoded.pane_cursors);
+        assert!(!decoded.neru_hints);
+    }
+
+    #[test]
+    fn neru_hints_controls_carry_their_documented_shapes() {
+        let ServerMessage::EndpointControl { kind, data } = neru_hints_message() else {
+            panic!("neru hints request should use endpoint control");
+        };
+        assert_eq!(kind, "endpoint.neru-hints.v1");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&data).unwrap(),
+            serde_json::json!({})
+        );
+
+        let ClientMessage::EndpointControl { kind, data } = host_focus_message(false) else {
+            panic!("host focus should use endpoint control");
+        };
+        assert_eq!(kind, "endpoint.host-focus.v1");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&data).unwrap(),
+            serde_json::json!({"focused": false})
+        );
     }
 
     #[test]
@@ -506,6 +562,7 @@ mod tests {
                 super::super::floats::CAPABILITY.to_string(),
                 FLOAT_BUTTONS_CAPABILITY.to_string(),
                 PANE_CURSORS_CAPABILITY.to_string(),
+                NERU_HINTS_CAPABILITY.to_string(),
             ]
         );
     }
