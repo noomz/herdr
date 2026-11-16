@@ -256,6 +256,36 @@ mod tests {
     }
 
     #[test]
+    fn a_request_while_neru_hints_runs_does_what_a_second_press_does() {
+        // A request (`herdr neru-hints`) and a key press both reach `start` through the
+        // request flag (§V.21), so a second one during calibration or `neru hints` is refused.
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(1);
+        for phase in [Phase::Calibrating { reports: None }, Phase::Hints] {
+            let mut state = ClientState::test_new();
+            let mut shell = crate::client::ClientShellState::new(
+                crate::client::ClientShellConfig::from_config(&crate::config::Config::default()),
+            );
+            let mut outcome = shell::ClientShellInput::default();
+            shell.request_neru_hints(
+                &crate::client::endpoint::ClientEndpointId::Local,
+                &mut outcome,
+            );
+            state.shell = Some(shell);
+            let mut hints = NeruHints { phase };
+
+            let shell = state.shell.as_mut().unwrap();
+            assert!(shell.take_neru_hints_request());
+            hints.start(&mut state, false, &event_tx);
+
+            assert_eq!(
+                state.shell.as_ref().unwrap().visible_notice_body(),
+                Some("neru hints is already running.")
+            );
+            assert!(!matches!(hints.phase, Phase::Idle));
+        }
+    }
+
+    #[test]
     fn mode_writers_leave_the_host_modes_to_calibration() {
         use std::sync::atomic::Ordering;
         let mut state = ClientState::test_new();

@@ -551,6 +551,118 @@ mod menu_binding {
     }
 }
 
+mod cli_request {
+    //! §V.21, §V.23: `herdr neru-hints` runs the key path, and only for the local server.
+    use super::*;
+
+    fn request(state: &mut ClientShellState, origin: &ClientEndpointId) -> ClientShellInput {
+        let mut outcome = ClientShellInput::default();
+        state.request_neru_hints(origin, &mut outcome);
+        outcome
+    }
+
+    fn remote_id() -> ClientEndpointId {
+        ClientEndpointId::Ssh(
+            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        )
+    }
+
+    fn notice(state: &ClientShellState) -> Option<&str> {
+        state
+            .visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str())
+    }
+
+    #[test]
+    fn a_request_and_the_key_set_the_same_request_once() {
+        let mut state = shell();
+        request(&mut state, &ClientEndpointId::Local);
+        assert!(state.take_neru_hints_request());
+        assert!(!state.take_neru_hints_request());
+        assert_eq!(notice(&state), None);
+    }
+
+    #[test]
+    fn a_request_with_a_menu_open_leaves_it_open() {
+        let mut global = shell();
+        global.toggle_global_menu();
+        let mut context = shell();
+        context.open_tab_context_menu("tab_2".into(), 10, 3);
+        for (name, mut state) in [("global", global), ("context", context)] {
+            request(&mut state, &ClientEndpointId::Local);
+            assert!(state.take_neru_hints_request(), "{name}");
+            assert!(
+                matches!(
+                    state.overlay,
+                    Some(ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_))
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_request_ends_prefix_mode_and_leaves_resize_mode() {
+        let mut state = shell();
+        state.mode = ClientShellMode::Prefix;
+        let outcome = request(&mut state, &ClientEndpointId::Local);
+        assert!(outcome.repaint);
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+        assert!(state.take_neru_hints_request());
+
+        state.mode = ClientShellMode::Resize;
+        request(&mut state, &ClientEndpointId::Local);
+        assert_eq!(state.mode, ClientShellMode::Resize);
+        assert!(state.take_neru_hints_request());
+    }
+
+    #[test]
+    fn a_request_with_a_dialog_open_says_close_the_dialog_first() {
+        let mut state = shell();
+        state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+            title: "rename pane",
+            input: TextEditor::new("draft", true),
+            target: ClientRenameTarget::Pane {
+                pane_id: "pane_1".into(),
+            },
+        }));
+        let outcome = request(&mut state, &ClientEndpointId::Local);
+        assert!(outcome.repaint);
+        assert!(!state.take_neru_hints_request());
+        assert_eq!(notice(&state), Some("Close the dialog first."));
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::Rename(ClientRenameOverlay { ref input, .. }))
+                if input.as_str() == "draft"
+        ));
+
+        // Every request shows its reason (§V.16).
+        state.visible_endpoint_notice = None;
+        request(&mut state, &ClientEndpointId::Local);
+        assert_eq!(notice(&state), Some("Close the dialog first."));
+    }
+
+    #[test]
+    fn a_request_from_a_remote_endpoint_is_dropped() {
+        let mut state = shell();
+        state.mode = ClientShellMode::Prefix;
+        let outcome = request(&mut state, &remote_id());
+        assert!(!outcome.repaint);
+        assert!(!state.take_neru_hints_request());
+        assert_eq!(state.mode, ClientShellMode::Prefix);
+        assert_eq!(notice(&state), None);
+    }
+
+    #[test]
+    fn a_local_request_runs_while_a_remote_machine_is_shown() {
+        let mut state = shell();
+        state.active_endpoint_id = remote_id();
+        request(&mut state, &ClientEndpointId::Local);
+        assert!(state.take_neru_hints_request());
+    }
+}
+
 #[test]
 fn pane_cursors_keep_only_the_active_server_boot() {
     use crate::protocol::endpoint::{EndpointPaneCursor, EndpointPaneCursors};

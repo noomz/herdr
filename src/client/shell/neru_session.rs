@@ -248,6 +248,48 @@ impl ClientShellState {
         std::mem::take(&mut self.neru_hints_requested)
     }
 
+    /// Runs the action for an `endpoint.neru-hints.v1` request (`herdr neru-hints`) the way a
+    /// press of `keys.neru_hints` does (§V.21). Only the local server may ask (§V.23). A menu
+    /// stays open and its rows become the targets (§V.15). Any other overlay blocks the
+    /// request, and since no key reached the dialog, a notice says why (§V.16, §V.22).
+    pub(crate) fn request_neru_hints(
+        &mut self,
+        origin: &super::ClientEndpointId,
+        outcome: &mut super::ClientShellInput,
+    ) {
+        if !origin.is_local() {
+            return;
+        }
+        if self.overlay.is_some()
+            && !matches!(
+                self.overlay,
+                Some(
+                    super::ClientShellOverlay::ContextMenu(_)
+                        | super::ClientShellOverlay::GlobalMenu(_)
+                )
+            )
+        {
+            outcome.repaint |= self.show_neru_notice("Close the dialog first.");
+            return;
+        }
+        if self.mode == super::ClientShellMode::Prefix {
+            self.mode = self.copy_or_terminal_mode();
+            outcome.repaint = true;
+        }
+        self.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::NeruHints),
+            outcome,
+        );
+    }
+
+    /// The notice body on screen, for client-loop tests.
+    #[cfg(test)]
+    pub(crate) fn visible_notice_body(&self) -> Option<&str> {
+        self.visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str())
+    }
+
     /// The binary `neru.path` names.
     pub(crate) fn neru_path(&self) -> &str {
         &self.config.neru_path

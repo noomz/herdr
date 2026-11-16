@@ -2323,6 +2323,34 @@ async fn run_client_loop(
                                 }
                                 continue;
                             }
+                            Ok(endpoint::EndpointControlMessage::NeruHints) => {
+                                // Not gated on the active endpoint: a client that shows a
+                                // remote machine still takes the local request (design 10.6).
+                                let Some(shell) = state.shell.as_mut() else {
+                                    continue;
+                                };
+                                let mut outcome = shell::ClientShellInput::default();
+                                shell.request_neru_hints(&endpoint_id, &mut outcome);
+                                let frame = outcome
+                                    .repaint
+                                    .then(|| {
+                                        shell.compose(state.reported_size.0, state.reported_size.1)
+                                    })
+                                    .flatten();
+                                if finish_client_shell_input(
+                                    &mut state,
+                                    outcome,
+                                    frame,
+                                    &mut write_stream,
+                                    &mut pending_activation,
+                                    &mut endpoint_commands,
+                                    &mut prefix_input_source,
+                                    &mut scheduled_activation,
+                                )? {
+                                    return Ok(());
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::Ignored) => {
                                 debug!(%kind, "ignoring unknown endpoint control message");
                                 continue;
