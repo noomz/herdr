@@ -2,7 +2,7 @@
 
 ## Goal
 
-Let a user click any herdr control from the keyboard with neru. A herdr client action sends neru the screen positions of herdr's clickable controls, so neru labels those controls and nothing else. When the user picks a label, neru clicks it, and herdr handles the click like any other mouse click. neru also labels each visible pane's text input, at the pane's terminal cursor.
+Let a user click any herdr control from the keyboard with neru. A herdr client action sends neru the screen positions of herdr's clickable controls, so neru labels those controls and nothing else. When the user picks a label, neru clicks it, and herdr handles the click like any other mouse click. neru also labels each visible pane's text input, at the pane's terminal cursor. neru's own hint hotkey can start the same action: in a host terminal it runs `herdr neru-hints`, which starts the action in the herdr client whose window is focused, and falls back to neru's own hints when no herdr client takes the request.
 
 Background, measurements and rejected approaches are in `docs/design/neru-hints/research.md`. Its PoC section shows why this feature exists. neru's default scan sees only one text area per terminal window. neru's `segment` strategy labels herdr's controls, but in a real session it also labels every word of pane output: 729 targets on one kitty window.
 
@@ -30,6 +30,9 @@ Background, measurements and rejected approaches are in `docs/design/neru-hints/
 
 - Config keys: `keys.neru_hints` (binding, default `prefix+f`) runs the action. `neru.path` (default `"neru"`) names the neru binary.
 
+- CLI: `herdr neru-hints` sends API method `client.neru_hints.run` to the local server. The server forwards the request to one client (§V.20) as a server-to-client control, gated by a client hello flag `neru_hints` (serde default `false`). The wire shape, the exit codes and the messages are decided in T13. Exit 0 means a client took the request. Non-zero means none did, with the reason on stderr.
+- neru config (user side, documented in T16, not herdr code). A root `[[app_configs]]` entry for each host terminal (`space.noomz.kitty`, `com.mitchellh.ghostty`) binds `"Primary+Shift+Space"` to an `exec` step: `herdr neru-hints || neru hints --action left_click`, with absolute paths. `[hints.hotkeys]` binds `"Primary+Shift+Space" = "idle"`, so a second press closes the labels. This binding is required: in hint mode, neru sends an unbound Cmd chord back to `[hotkeys]` and `[[app_configs]]`, so without it a second press would run `herdr neru-hints` again while the labels are up.
+
 The target list, titles, size budget, config keys and unavailable-case messages are in `docs/design/neru-hints/design.md` (T2).
 
 ## Invariants
@@ -53,6 +56,10 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 17. A press that ends with the pointer not restored says so in the notice that ends the press, together with any other reason. A later notice never replaces the restore note.
 18. Each visible pane whose cursor is visible and inside its viewport (not scrolled back) gets one target: its cursor cell. The title is the pane's border title, else its agent name, else `pane`. There is no target when the cursor is hidden, the pane is scrolled back, a float or the toast covers the cell, an overlay is open, or the pane's server lacks `pane_cursors_v1`. Picking the label is a real click at that cell: it focuses the pane and reaches its app like any click (§V.2).
 19. Pane cursors travel only in `endpoint.pane-cursors.v1`. The wire layout of `PaneSurfacePane`, `PaneSurface` and `PaneSurfacePatch` never changes, so generation-1 peers of any version still decode each other. The server sends cursors only to a client whose hello sets `pane_cursors`. The cursor control is appended to the same render write as its surface or patch (full, identical-frame and retained-patch paths), never sent on `writer.control`, so it cannot overtake the surface it describes. The server records a cursor set as sent only after that write succeeds. The client drops a set whose `boot_id` is not its server's.
+20. `herdr neru-hints` starts the action in exactly one client: the active shell client of the local server whose host window is focused (`outer_terminal_focus == Some(true)`, `src/server/clients.rs`) and whose hello sets `neru_hints`. When no client qualifies, or more than one does (focus reports can be stale), it changes nothing, prints why, and exits non-zero. It never falls back to the latest or any other client.
+21. A request from the CLI runs the same client path as a press of `keys.neru_hints`: availability checks, overlay rule, calibration, targets and notices (§V.4–8, 14–17). Only the trigger differs. herdr does not add a second implementation of the action.
+22. The CLI never waits for calibration, neru or a label pick (§V.6). It exits once the server has handed the request to the chosen client, or has refused it. A failure after the hand-off (calibration, neru, an open dialog) is reported as the client's notice, not as the CLI's exit code.
+23. A client that does not set `neru_hints` (an older herdr) never receives the request and never counts as focused for §V.20. The server sends nothing new to it.
 
 ## Tasks
 
@@ -70,6 +77,11 @@ The target list, titles, size budget, config keys and unavailable-case messages 
 | T10 | x | Server and protocol: send each pane's cursor behind `pane_cursors_v1`. Test a new client with an old server and an old client with a new server. | 18, 19 |
 | T11 | x | Targets: pane-cursor targets in `neru_targets.rs`, with occlusion and titles. Unit-test them with fixed hit maps. | 1, 2, 3, 18 |
 | T12 | x | Verify live in kitty and Ghostty: label a pane that is not focused (Claude Code), pick it, and type into its input. | 1, 2, 18 |
+| T13 | . | Design `herdr neru-hints` in the design note: server-to-client wire (control kind, capability, hello flag), API method and CLI, client choice, exit codes and messages, a focused client that is showing a remote machine's workspace, and what the client shows when an open dialog blocks the request. | 20, 21, 22, 23 |
+| T14 | . | Server, protocol, API and CLI: hello flag, client choice, forwarding, exit codes. Test zero, one and two focused clients, an unfocused client, an old client without the flag, and the CLI exit codes. | 20, 22, 23 |
+| T15 | . | Client: run the action on a request through the `keys.neru_hints` path. Test that a request and a key press reach the same entry point, and that a request with an open dialog behaves like the key. | 21, 22 |
+| T16 | . | Document the neru config (the `[[app_configs]]` exec binding with fallback, and the required `[hints.hotkeys]` idle binding) in the design note and the user docs. | 20, 22 |
+| T17 | . | Verify live in kitty and Ghostty. `cmd+shift+space` in a herdr window shows herdr's labels, and a second press closes them. In another app, and in a terminal window without herdr, neru's own hints run. With two clients, only the focused one acts. | 20, 21, 22 |
 
 ## Bugs
 
