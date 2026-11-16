@@ -368,6 +368,22 @@ herdr terminal title clear
 
 `terminal title clear` 把外层终端窗口标题交还给 `ui.window_title`。
 
+## neru hints
+
+```bash
+herdr neru-hints
+```
+
+在终端窗口获得焦点的 Herdr 客户端中启动 neru hints（`keys.neru_hints`），效果与在那里按下按键相同。neru 的提示热键会运行此命令；neru 配置见 [neru hints](/docs/configuration/#neru-hints)。
+
+该命令只询问本地服务器：`HERDR_SESSION` 指定的服务器，否则为默认会话。它从不启动服务器，并拒绝 `--machine` 和已保存机器的目标。一旦有客户端接收请求，它立即返回，不等待校准或你选择标签。之后的错误会作为客户端通知显示。
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 有客户端接收了请求。 |
+| `1` | 没有客户端接收：没有获得焦点的 Herdr 窗口、多个窗口报告焦点、没有运行中的服务器，或服务器版本太旧不支持此命令。stderr 上有一行说明原因。 |
+| `2` | 用法错误：多余的参数，或 `--machine`。 |
+
 ## 输出等待
 
 等待窗格中的输出:

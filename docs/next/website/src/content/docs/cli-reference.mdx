@@ -408,6 +408,22 @@ for 30 seconds. A stalled stream can end without a final `terminal.closed` recor
 the pane and other clients keep running. Quiet panes do not trigger this timeout.
 `terminal title clear` hands the outer terminal window title back to `ui.window_title`.
 
+## neru hints
+
+```bash
+herdr neru-hints
+```
+
+Starts neru hints (`keys.neru_hints`) in the Herdr client whose terminal window is focused, as if you pressed the key there. neru's hint hotkey runs this command; see [neru hints](/docs/configuration/#neru-hints) for the neru config.
+
+The command asks the local server only: the server named by `HERDR_SESSION`, else the default session. It never starts a server, and it refuses `--machine` and saved-machine targets. It returns as soon as a client has the request. It does not wait for calibration or for you to pick a label. Errors after that point appear as a notice in the client.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | A client took the request. |
+| `1` | No client took it: no Herdr window is focused, more than one reports focus, no server is running, or the server is too old to support the command. One line on stderr says which. |
+| `2` | Usage error: extra arguments, or `--machine`. |
+
 ## Output waits
 
 Wait for output in a pane:

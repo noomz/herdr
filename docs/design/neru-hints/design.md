@@ -302,3 +302,27 @@ These go through the spec skill, not build:
 - **§I CLI bullet:** add capability `neru_hints_v1`, control kinds `endpoint.neru-hints.v1` (server → client) and `endpoint.host-focus.v1` (client → server), and the exit codes in 10.5. State that the CLI never starts a server.
 - **§T.14 tests:** add a focused client that shows a remote machine, a new client with no focus report (it qualifies), host focus against a server without `neru_hints_v1`, a request from a remote endpoint that the client drops, and a live handoff (`src/server/handoff.rs`) after which `shell_neru_hints` and `host_window_focused` are kept or rebuilt from a new hello and the post-welcome send.
 - **§T.15 tests:** add a request that arrives while a calibration or neru child from an earlier press is still running. A quick double press can do this before neru's `[hints.hotkeys]` idle binding takes effect. The request does what a second key press does in that state.
+
+### 10.9 neru config (T16)
+
+This is user config in `~/.config/neru/config.toml`, not herdr code (§I). Checked with `neru config validate` on neru v1.62.0.
+
+```toml
+[[app_configs]]
+bundle_id = "net.kovidgoyal.kitty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[[app_configs]]
+bundle_id = "com.mitchellh.ghostty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[hints.hotkeys]
+"Primary+Shift+Space" = "idle"
+```
+
+- **`[[app_configs]]`, one entry per host terminal.** A root entry overrides `[hotkeys]` only while its app is focused. In every other app, the same chord keeps neru's default `hints --action left_click`. `bundle_id` is the host's bundle ID: `osascript -e 'id of app "kitty"'`. A self-built kitty can have its own ID (this fork's build is `space.noomz.kitty`). neru refuses two entries with the same `bundle_id`.
+- **`herdr neru-hints || neru hints …`.** `herdr neru-hints` exits 0 only when a herdr client took the request (10.5), and never waits for it (§V.22). Every other case exits non-zero: a terminal window without herdr, no server, two focused clients, an older server. Then the `||` runs neru's own hints, so the hotkey still does something useful. Once a client has the request, failures are its notices (section 8), and neru's own hints do not run.
+- **Absolute paths.** neru runs an `exec` step with `[general.shell]` (default `/bin/bash -lc` on macOS). The neru daemon starts from launchd, so its `PATH` may not hold `herdr` or `neru`. Use the paths that `which herdr` and `which neru` print.
+- **Named sessions.** `herdr neru-hints` asks the server of `HERDR_SESSION`, else the default session (10.3). To reach a client attached to a named session, set it in the step: `exec HERDR_SESSION=work /opt/homebrew/bin/herdr neru-hints || …`. One binding reaches one session.
+- **`[hints.hotkeys]` idle binding (required).** In hint mode, neru sends an unbound Cmd chord back to `[hotkeys]` and `[[app_configs]]` (neru `docs/concepts/bindings.md`, "Which binding wins", step 4). A mode binding wins over that fallback (step 2). Without this line, a second press while the labels are up runs `herdr neru-hints` again: the client calibrates and starts neru a second time over the open labels. With it, a second press closes the labels in every app, including after the fallback `neru hints`.
+- **Chord.** `Primary` is Cmd on macOS (`[general.primary_modifier]`). Any chord works if the `app_configs` entry and the `[hints.hotkeys]` line use the same one. To keep `prefix+f` as the only trigger, leave the neru config out. The herdr key binding does not need it.
