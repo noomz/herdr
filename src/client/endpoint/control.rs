@@ -17,6 +17,8 @@ pub(crate) enum EndpointControlMessage {
     FloatButtonResult(crate::protocol::endpoint::EndpointFloatButtonResult),
     PaneCursors(crate::protocol::endpoint::EndpointPaneCursors),
     ShowMachine(crate::api::schema::MachineShow),
+    /// `herdr neru-hints` asks this client to run the action (SPEC-neru-hints.md §V.21).
+    NeruHints,
     Ignored,
 }
 
@@ -41,6 +43,15 @@ pub(crate) fn decode_endpoint_control(
                     EndpointControlMessage::Ignored,
                     EndpointControlMessage::ShowMachine,
                 ),
+        );
+    }
+    if kind == crate::protocol::endpoint::NERU_HINTS_KIND {
+        // The data is `{}`; fields a later server adds are ignored.
+        return Ok(
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(data)
+                .map_or(EndpointControlMessage::Ignored, |_| {
+                    EndpointControlMessage::NeruHints
+                }),
         );
     }
     if kind == crate::protocol::endpoint::AGENT_VIEW_PROJECTION_KIND {
@@ -217,6 +228,23 @@ mod tests {
         );
         assert!(matches!(
             decode(r#"{"boot_id":"boot","cursors":[{"pane_id":"w1:p1","x":-1}]}"#),
+            EndpointControlMessage::Ignored
+        ));
+    }
+
+    #[test]
+    fn neru_hints_control_ignores_unknown_fields_and_invalid_data() {
+        let decode = |data: &str| {
+            decode_endpoint_control(crate::protocol::endpoint::NERU_HINTS_KIND, data).unwrap()
+        };
+        assert!(matches!(decode("{}"), EndpointControlMessage::NeruHints));
+        assert!(matches!(
+            decode(r#"{"later":1}"#),
+            EndpointControlMessage::NeruHints
+        ));
+        assert!(matches!(decode("[]"), EndpointControlMessage::Ignored));
+        assert!(matches!(
+            decode("not json"),
             EndpointControlMessage::Ignored
         ));
     }

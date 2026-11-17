@@ -645,8 +645,9 @@ async fn run_client_loop(
             surface_decoder,
         )?;
         let mut registry = endpoint::EndpointRegistry::new(transport, 1, negotiation);
-        if state.shell.is_some() {
+        if let Some(shell) = state.shell.as_ref() {
             registry.send(&ClientMessage::ClientShellFocus { focused: true });
+            registry.send_local_host_focus(shell.host_focus_baseline());
         }
         registry
     } else {
@@ -1447,6 +1448,13 @@ async fn run_client_loop(
                         negotiation,
                         false,
                     );
+                    // A new Local server (a restart or live handoff) knows nothing of this
+                    // client's host focus until it is told (§V.20).
+                    if endpoint_id.is_local() {
+                        if let Some(shell) = state.shell.as_ref() {
+                            write_stream.send_local_host_focus(shell.host_focus_baseline());
+                        }
+                    }
                     if let Some(frame) = frame {
                         state.present_frame(frame);
                     }
@@ -2295,6 +2303,34 @@ async fn run_client_loop(
                                     continue;
                                 };
                                 let outcome = shell.show_machine(&endpoint_id, request);
+                                let frame = outcome
+                                    .repaint
+                                    .then(|| {
+                                        shell.compose(state.reported_size.0, state.reported_size.1)
+                                    })
+                                    .flatten();
+                                if finish_client_shell_input(
+                                    &mut state,
+                                    outcome,
+                                    frame,
+                                    &mut write_stream,
+                                    &mut pending_activation,
+                                    &mut endpoint_commands,
+                                    &mut prefix_input_source,
+                                    &mut scheduled_activation,
+                                )? {
+                                    return Ok(());
+                                }
+                                continue;
+                            }
+                            Ok(endpoint::EndpointControlMessage::NeruHints) => {
+                                // Not gated on the active endpoint: a client that shows a
+                                // remote machine still takes the local request (design 10.6).
+                                let Some(shell) = state.shell.as_mut() else {
+                                    continue;
+                                };
+                                let mut outcome = shell::ClientShellInput::default();
+                                shell.request_neru_hints(&endpoint_id, &mut outcome);
                                 let frame = outcome
                                     .repaint
                                     .then(|| {

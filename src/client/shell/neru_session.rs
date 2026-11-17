@@ -79,6 +79,28 @@ pub(crate) fn neru_unavailable_reason(
     mouse_capture: bool,
     pixel_mouse: bool,
 ) -> Option<String> {
+    if let Some(reason) = neru_host_unavailable_reason(macos, remote_client, env) {
+        return Some(reason);
+    }
+    if !mouse_capture {
+        return Some("neru hints needs mouse capture (ui.mouse_capture).".into());
+    }
+    if !pixel_mouse {
+        return Some(
+            "neru hints needs a terminal that reports pixel mouse positions (kitty, Ghostty)."
+                .into(),
+        );
+    }
+    None
+}
+
+/// Design section 8 steps 1 to 3: what the client's host decides for the whole session. A
+/// client sets the `neru_hints` hello flag only when this is `None` (§V.23).
+pub(crate) fn neru_host_unavailable_reason(
+    macos: bool,
+    remote_client: bool,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
     if !macos {
         return Some("neru hints needs macOS.".into());
@@ -97,19 +119,7 @@ pub(crate) fn neru_unavailable_reason(
     ]
     .into_iter()
     .find(|(name, _)| set(name));
-    if let Some((_, name)) = multiplexer {
-        return Some(format!("neru hints is unavailable inside {name}."));
-    }
-    if !mouse_capture {
-        return Some("neru hints needs mouse capture (ui.mouse_capture).".into());
-    }
-    if !pixel_mouse {
-        return Some(
-            "neru hints needs a terminal that reports pixel mouse positions (kitty, Ghostty)."
-                .into(),
-        );
-    }
-    None
+    multiplexer.map(|(_, name)| format!("neru hints is unavailable inside {name}."))
 }
 
 /// Checks neru's version, then calibrates on this thread. `send` delivers events to the client
@@ -236,6 +246,48 @@ impl ClientShellState {
     /// True once per press of the neru hints keybinding.
     pub(crate) fn take_neru_hints_request(&mut self) -> bool {
         std::mem::take(&mut self.neru_hints_requested)
+    }
+
+    /// Runs the action for an `endpoint.neru-hints.v1` request (`herdr neru-hints`) the way a
+    /// press of `keys.neru_hints` does (§V.21). Only the local server may ask (§V.23). A menu
+    /// stays open and its rows become the targets (§V.15). Any other overlay blocks the
+    /// request, and since no key reached the dialog, a notice says why (§V.16, §V.22).
+    pub(crate) fn request_neru_hints(
+        &mut self,
+        origin: &super::ClientEndpointId,
+        outcome: &mut super::ClientShellInput,
+    ) {
+        if !origin.is_local() {
+            return;
+        }
+        if self.overlay.is_some()
+            && !matches!(
+                self.overlay,
+                Some(
+                    super::ClientShellOverlay::ContextMenu(_)
+                        | super::ClientShellOverlay::GlobalMenu(_)
+                )
+            )
+        {
+            outcome.repaint |= self.show_neru_notice("Close the dialog first.");
+            return;
+        }
+        if self.mode == super::ClientShellMode::Prefix {
+            self.mode = self.copy_or_terminal_mode();
+            outcome.repaint = true;
+        }
+        self.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::NeruHints),
+            outcome,
+        );
+    }
+
+    /// The notice body on screen, for client-loop tests.
+    #[cfg(test)]
+    pub(crate) fn visible_notice_body(&self) -> Option<&str> {
+        self.visible_endpoint_notice
+            .as_ref()
+            .map(|notice| notice.body.as_str())
     }
 
     /// The binary `neru.path` names.

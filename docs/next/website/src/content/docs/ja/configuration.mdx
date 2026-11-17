@@ -599,6 +599,39 @@ macOS ではその時点の ASCII 対応キーボードレイアウトへ切り�
 Windows でのサポートは現時点で韓国語 IME に限定されています。それ以外の言語の IME を使用している場合、この設定は入力ソースを変更しません。
 :::
 
+## neru hints
+
+macOS では、Herdr は [neru](https://github.com/y3owk1n/neru) を使って自分のクリック可能なコントロールにラベルを付けられるため、キーボードからクリックできます。`prefix+f` を押すと、neru がワークスペース行、タブ、ボタン、メニュー行、そして表示中の各ペインの入力位置にラベルを表示します。ラベルを入力すると、そのコントロールがクリックされます。neru 1.58.0 以降と、ピクセル単位のマウス位置を報告するホストターミナル（kitty、Ghostty）が必要です。SSH 経由や別のマルチプレクサの中では動作しません。
+
+```toml
+[keys]
+neru_hints = "prefix+f"
+
+[neru]
+path = "neru"   # the neru binary, looked up on PATH when it has no "/"
+```
+
+`prefix+f` の代わりに neru 自身のヒントホットキーを使うには、`~/.config/neru/config.toml` に次を追加します。
+
+```toml
+[[app_configs]]
+bundle_id = "net.kovidgoyal.kitty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[[app_configs]]
+bundle_id = "com.mitchellh.ghostty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[hints.hotkeys]
+"Primary+Shift+Space" = "idle"
+```
+
+- Herdr を実行しているターミナルウィンドウでは、`cmd+shift+space` で Herdr のラベルが表示されます。それ以外のウィンドウでは [`herdr neru-hints`](/docs/cli-reference/#neru-hints) が 0 以外で終了し、neru が自身のヒントを表示します。
+- 絶対パスを使ってください。`which herdr` と `which neru` で確認できます。neru はコマンドを自身のシェルで実行するため、あなたの `PATH` が使われないことがあります。
+- ターミナルごとに `[[app_configs]]` を 1 つ追加します。バンドル ID は `osascript -e 'id of app "kitty"'` で確認できます。
+- `[hints.hotkeys]` の行は残してください。ラベル表示中、neru は未割り当ての Cmd コードを `[[app_configs]]` に渡すため、この行がないと 2 回目の押下で Herdr のラベルがもう一度起動します。この行があれば、2 回目の押下でラベルが閉じます。
+- 名前付きセッションのクライアントに届けるには、コマンドでセッションを指定します: `exec HERDR_SESSION=work /opt/homebrew/bin/herdr neru-hints || …`
+
 ## 環境変数
 
 | 変数 | 目的 |

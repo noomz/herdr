@@ -422,6 +422,7 @@ pub(crate) enum ServerEvent {
         floats: bool,
         show_machine: bool,
         pane_cursors: bool,
+        neru_hints: bool,
         writer: ClientWriter,
     },
     ClientShellFloatButtons {
@@ -544,6 +545,12 @@ pub(crate) enum ServerEvent {
     },
     /// A client-owned shell reported whether its outer terminal has focus.
     ClientShellFocus {
+        client_id: u64,
+        focused: bool,
+    },
+    /// A client reported whether the host window holding it is focused (`endpoint.host-focus.v1`).
+    /// Only `herdr neru-hints` reads it; it is not `ClientShellFocus`.
+    ClientHostFocus {
         client_id: u64,
         focused: bool,
     },
@@ -877,6 +884,7 @@ pub(crate) fn handle_client_handshake(
                     hello.float_buttons && hello.floats,
                     hello.show_machine,
                     hello.pane_cursors,
+                    hello.neru_hints,
                 )),
             )
         }
@@ -979,6 +987,7 @@ pub(crate) fn handle_client_handshake(
         _,
         show_machine,
         pane_cursors,
+        neru_hints,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -998,6 +1007,7 @@ pub(crate) fn handle_client_handshake(
             floats,
             show_machine,
             pane_cursors,
+            neru_hints,
             writer,
         }
     } else {
@@ -1462,6 +1472,20 @@ fn client_read_loop_with_endpoint_controls(
                     token: data,
                 }
             }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::endpoint::HOST_FOCUS_KIND =>
+            {
+                match serde_json::from_str::<crate::protocol::endpoint::EndpointHostFocus>(&data) {
+                    Ok(report) => ServerEvent::ClientHostFocus {
+                        client_id,
+                        focused: report.focused,
+                    },
+                    Err(error) => {
+                        warn!(client_id, %error, "invalid host focus report, ignoring");
+                        continue;
+                    }
+                }
+            }
             ClientMessage::EndpointControl { kind, .. }
                 if kind == crate::protocol::endpoint::ATTACH_GRAPHICS_KIND =>
             {
@@ -1602,6 +1626,7 @@ mod tests {
             float_buttons: false,
             show_machine: true,
             pane_cursors: false,
+            neru_hints: true,
             snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
@@ -2156,9 +2181,11 @@ mod tests {
                 floats,
                 show_machine,
                 pane_cursors,
+                neru_hints,
                 writer,
             } => {
                 assert!(!pane_cursors);
+                assert!(neru_hints);
                 assert!(!surface_reuse);
                 assert!(!surface_delta);
                 assert!(!surface_scroll);
@@ -2420,6 +2447,48 @@ mod tests {
         ));
         assert!(matches!(
             recv_server_event(&mut server_event_rx, "detach after opt-in"),
+            ServerEvent::ClientDetach { client_id: 7 }
+        ));
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
+    }
+
+    #[test]
+    fn client_read_loop_routes_host_focus_and_skips_an_invalid_report() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-host-focus");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
+        });
+
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::EndpointControl {
+                kind: crate::protocol::endpoint::HOST_FOCUS_KIND.into(),
+                data: r#"{"focused":"yes"}"#.into(),
+            },
+        )
+        .unwrap();
+        protocol::write_message(
+            &mut client_stream,
+            &crate::protocol::endpoint::host_focus_message(false),
+        )
+        .unwrap();
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "host focus after an invalid report"),
+            ServerEvent::ClientHostFocus {
+                client_id: 7,
+                focused: false
+            }
+        ));
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "detach after host focus"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
         handle

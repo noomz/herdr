@@ -68,6 +68,21 @@ pub(super) fn direct_graphics_profile_values(
     supported && !blocked_transport && terminals
 }
 
+/// The `neru_hints` hello flag goes only to the local server, and only from a client that can
+/// run neru on this host (design section 8 steps 1 to 3, §V.23). A remote server can therefore
+/// never start calibration on this Mac.
+fn neru_hints_hello(local_transport: bool, host_unavailable: Option<String>) -> bool {
+    local_transport && host_unavailable.is_none()
+}
+
+fn neru_host_unavailable() -> Option<String> {
+    shell::neru_host_unavailable_reason(
+        crate::platform::supports_neru_hints(),
+        is_remote_client_process(),
+        |name| std::env::var(name).ok(),
+    )
+}
+
 /// Server-owned files require a shared filesystem; the host terminal profile alone
 /// cannot establish that for a saved SSH endpoint.
 fn direct_graphics_capability(
@@ -226,6 +241,7 @@ pub(super) fn do_handshake(
             float_buttons: true,
             show_machine: true,
             pane_cursors: true,
+            neru_hints: neru_hints_hello(local_transport, neru_host_unavailable()),
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -502,6 +518,16 @@ mod tests {
         assert!(attach_graphics_opt_in(false, 8, 16).is_none());
         assert!(attach_graphics_opt_in(true, 0, 16).is_none());
         assert!(attach_graphics_opt_in(true, 8, 0).is_none());
+    }
+
+    #[test]
+    fn neru_hints_hello_flag_needs_the_local_server_and_an_eligible_host() {
+        assert!(neru_hints_hello(true, None));
+        assert!(!neru_hints_hello(false, None));
+        assert!(!neru_hints_hello(
+            true,
+            Some("neru hints is unavailable over SSH.".into())
+        ));
     }
 
     #[test]

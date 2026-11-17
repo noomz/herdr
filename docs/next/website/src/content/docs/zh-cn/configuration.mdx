@@ -599,6 +599,39 @@ switch_ascii_input_source_in_prefix = true
 目前 Windows 上的支持仅限于韩语 IME。使用其他语言的 IME 时，此设置不会改变输入源。
 :::
 
+## neru hints
+
+在 macOS 上，Herdr 可以用 [neru](https://github.com/y3owk1n/neru) 为自己的可点击控件加上标签，让你用键盘点击它们。按 `prefix+f`，neru 会在工作区行、标签页、按钮、菜单行以及每个可见窗格的输入位置上显示标签。输入标签即可点击对应的控件。需要 neru 1.58.0 或更高版本，以及能报告像素级鼠标位置的宿主终端（kitty、Ghostty）。通过 SSH 或在其他多路复用器中不可用。
+
+```toml
+[keys]
+neru_hints = "prefix+f"
+
+[neru]
+path = "neru"   # the neru binary, looked up on PATH when it has no "/"
+```
+
+如果想用 neru 自己的提示热键代替 `prefix+f`，把下面的内容加入 `~/.config/neru/config.toml`：
+
+```toml
+[[app_configs]]
+bundle_id = "net.kovidgoyal.kitty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[[app_configs]]
+bundle_id = "com.mitchellh.ghostty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[hints.hotkeys]
+"Primary+Shift+Space" = "idle"
+```
+
+- 在运行 Herdr 的终端窗口中，`cmd+shift+space` 显示 Herdr 的标签。在其他窗口中，[`herdr neru-hints`](/docs/cli-reference/#neru-hints) 以非零状态退出，neru 显示它自己的提示。
+- 使用绝对路径。运行 `which herdr` 和 `which neru` 查看。neru 在自己的 shell 中运行命令，可能没有你的 `PATH`。
+- 每个终端添加一个 `[[app_configs]]` 条目。运行 `osascript -e 'id of app "kitty"'` 查看终端的 bundle ID。
+- 保留 `[hints.hotkeys]` 这一行。显示标签时，neru 会把未绑定的 Cmd 组合键交给 `[[app_configs]]`，没有这一行，第二次按下会再次启动 Herdr 的标签。有了它，第二次按下会关闭标签。
+- 要连到命名会话中的客户端，在命令中指定会话：`exec HERDR_SESSION=work /opt/homebrew/bin/herdr neru-hints || …`
+
 ## 环境变量
 
 | 变量 | 用途 |

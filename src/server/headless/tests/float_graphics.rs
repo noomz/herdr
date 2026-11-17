@@ -214,6 +214,7 @@ impl Harness {
                 endpoint_keybindings: false,
                 show_machine: false,
                 pane_cursors: false,
+                neru_hints: false,
                 mouse_capture: false,
                 surface_active: true,
                 writer,

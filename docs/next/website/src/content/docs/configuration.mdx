@@ -614,6 +614,39 @@ On macOS this switches to the current ASCII-capable keyboard layout; on Windows 
 On Windows, support is currently limited to the Korean IME. With an IME for any other language, this setting leaves the input source unchanged.
 :::
 
+## neru hints
+
+On macOS, Herdr can label its own clickable controls with [neru](https://github.com/y3owk1n/neru), so you can click them from the keyboard. Press `prefix+f`: neru shows a label on each workspace row, tab, button and menu row, and on the input of each visible pane. Type a label to click that control. Herdr needs neru 1.58.0 or later, and a host terminal that reports pixel mouse positions (kitty, Ghostty). It does not work over SSH or inside another multiplexer.
+
+```toml
+[keys]
+neru_hints = "prefix+f"
+
+[neru]
+path = "neru"   # the neru binary, looked up on PATH when it has no "/"
+```
+
+To use neru's own hint hotkey instead of `prefix+f`, add this to `~/.config/neru/config.toml`:
+
+```toml
+[[app_configs]]
+bundle_id = "net.kovidgoyal.kitty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[[app_configs]]
+bundle_id = "com.mitchellh.ghostty"
+hotkeys = { "Primary+Shift+Space" = "exec /opt/homebrew/bin/herdr neru-hints || /opt/homebrew/bin/neru hints --action left_click" }
+
+[hints.hotkeys]
+"Primary+Shift+Space" = "idle"
+```
+
+- In a terminal window that runs Herdr, `cmd+shift+space` shows Herdr's labels. In any other window, [`herdr neru-hints`](/docs/cli-reference/#neru-hints) exits non-zero and neru shows its own hints.
+- Use absolute paths. Run `which herdr` and `which neru` to find them. neru runs the command in its own shell, which may not have your `PATH`.
+- Add one `[[app_configs]]` entry for each terminal. To find a terminal's bundle ID, run `osascript -e 'id of app "kitty"'`.
+- Keep the `[hints.hotkeys]` line. While labels are shown, neru sends an unbound Cmd chord to `[[app_configs]]`, so without it a second press starts Herdr's labels again. With it, a second press closes the labels.
+- To reach a client in a named session, set the session in the command: `exec HERDR_SESSION=work /opt/homebrew/bin/herdr neru-hints || …`.
+
 ## Environment variables
 
 | Variable | Purpose |

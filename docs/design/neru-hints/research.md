@@ -413,3 +413,22 @@ Findings (harness only, no herdr change):
 
 1. **Unix socket paths have a 104-byte limit.** With `XDG_CONFIG_HOME` under a long temp dir, the server could not bind `sessions/<name>/herdr-client.sock`, and the client failed with "server did not become ready within 15s". A kitty `--listen-on` path under the same dir was ignored for the same reason. Use a short root.
 2. **neru finds its IPC socket through `TMPDIR`.** A client started with `env -i` lost `TMPDIR`, and herdr correctly reported "neru query window failed: [IPC_SERVER_NOT_RUNNING] …" (§V.7). A normal login shell has `TMPDIR`, so this affects only stripped test environments.
+
+## neru hotkey, live (T17, 2026-11-16)
+
+Setup: herdr `fe2dffd6` release build (`~/.local/bin/herdr`), neru v1.62.0, built-in Retina display only (scale 2). One isolated named session (`herdr --session neru-t17`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` under `/tmp/n17`, `onboarding = false`), with `neru.path` pointing at a logging wrapper that records each neru call, its parent PID and the targets count. The user's neru config had the T16 bindings (design note 10.9). For the run, both `[[app_configs]]` steps were prefixed with `/usr/bin/env XDG_CONFIG_HOME=/tmp/n17/c HERDR_SESSION=neru-t17`, then restored from a backup and reloaded. kitty (`space.noomz.kitty`) and Ghostty ran as separate `open -na` instances attached to the session. A third kitty instance ran a plain `zsh` with no herdr. Each check raised a window with System Events, sent `cmd+shift+space` twice with System Events (`key code 49`), and read neru's mode with `neru status` after each press.
+
+| Check | Result | Invariants |
+| --- | --- | --- |
+| kitty herdr window, one client | pass: first press ran calibration (2 warps plus the restore warp) and `hints --targets -` with 8 targets; `Mode: hints`. Second press: `Mode: idle`, no second herdr call | 20, 21 |
+| Ghostty herdr window, two clients attached | pass: the same sequence in Ghostty's window, 8 targets; second press closed the labels | 20, 21 |
+| Two clients, focus kitty, then Ghostty | pass: every neru call came from the focused host's herdr client (parent PID 23567 in kitty, 31564 in Ghostty). The other client made no call | 20 |
+| kitty window without herdr | pass: `herdr neru-hints` printed `herdr neru-hints: no focused herdr window.` and exited 1. The chord opened neru's own hints (`Mode: hints`, no wrapper call); second press closed them | 20, 22 |
+| Another app (Finder) | pass: neru's own hints, no herdr call; second press closed them | 20 |
+| CLI does not wait (kitty focused) | pass: the CLI exited 0 after 19 ms. The client's first neru call came 323 ms after that, and `hints` started 590 ms after the CLI exited | 22 |
+
+Findings:
+
+1. **About 320 ms between the request and the first neru call.** The wrapper's own startup (one `perl` for the timestamp) accounts for about 25 ms of it. The rest is in the client before its availability checks start. It does not affect correctness: §V.22 needs only that the CLI does not wait. It makes the hotkey feel slower than `prefix+f`, which was not timed this way. Not investigated in T17.
+2. **The CLI follows `HERDR_SOCKET_PATH`.** From inside a herdr pane, a test CLI with only `XDG_CONFIG_HOME` and `HERDR_SESSION` set still reached the outer server. neru's `exec` step does not inherit the variable, so the real binding is unaffected. Harness only.
+3. **The default session already runs this build.** A stray `herdr neru-hints` run from this pane before the harness was set up exited 0 and started the action in the user's own focused herdr window. `neru idle` closed the labels. So the real T16 binding also works on the default session, outside the isolated run.

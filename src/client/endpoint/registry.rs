@@ -56,6 +56,10 @@ impl EndpointNegotiation {
         self.supports_capability(crate::protocol::endpoint::PANE_CURSORS_CAPABILITY)
     }
 
+    pub(crate) fn supports_neru_hints(&self) -> bool {
+        self.supports_capability(crate::protocol::endpoint::NERU_HINTS_CAPABILITY)
+    }
+
     pub(crate) fn supports_surface_interest(&self) -> bool {
         self.supports_capability(crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY)
             && self.supports_capability(
@@ -290,6 +294,22 @@ impl EndpointRegistry {
         changed
     }
 
+    /// Reports the host window focus to the local server, whatever endpoint is active, for
+    /// `herdr neru-hints` (§V.20). Only a server that lists `neru_hints_v1` gets it, so an older
+    /// server never sees the control, and a missing Local records no failure.
+    pub(crate) fn send_local_host_focus(&mut self, focused: bool) -> EndpointSendOutcome {
+        let accepts = self
+            .connection(&ClientEndpointId::Local)
+            .is_some_and(|connection| connection.negotiation.supports_neru_hints());
+        if !accepts {
+            return EndpointSendOutcome::NotSent;
+        }
+        self.send_to(
+            &ClientEndpointId::Local,
+            &crate::protocol::endpoint::host_focus_message(focused),
+        )
+    }
+
     pub(crate) fn send(&mut self, message: &ClientMessage) -> EndpointSendOutcome {
         let endpoint_id = self.active.clone();
         self.send_to(&endpoint_id, message)
@@ -425,6 +445,70 @@ mod tests {
             vec![crate::protocol::endpoint::PANE_CURSORS_CAPABILITY.to_owned()],
         );
         assert!(newer_server.supports_pane_cursors());
+    }
+
+    #[test]
+    fn host_focus_goes_only_to_a_local_server_that_lists_neru_hints() {
+        let with_neru = || {
+            EndpointNegotiation::new(
+                vec![],
+                vec![crate::protocol::endpoint::NERU_HINTS_CAPABILITY.to_owned()],
+            )
+        };
+        let older_sent = Arc::new(Mutex::new(Vec::new()));
+        let mut older = EndpointRegistry::new(
+            FakeTransport {
+                sent: older_sent.clone(),
+                error: None,
+            },
+            1,
+            negotiation(),
+        );
+        assert_eq!(
+            older.send_local_host_focus(true),
+            EndpointSendOutcome::NotSent
+        );
+        assert!(older_sent.lock().unwrap().is_empty());
+        assert!(older.take_failures().is_empty());
+
+        let local_sent = Arc::new(Mutex::new(Vec::new()));
+        let remote_sent = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = EndpointRegistry::new(
+            FakeTransport {
+                sent: local_sent.clone(),
+                error: None,
+            },
+            1,
+            with_neru(),
+        );
+        let ssh_id = ClientEndpointId::Ssh(profile());
+        registry.insert(
+            ssh_id.clone(),
+            FakeTransport {
+                sent: remote_sent.clone(),
+                error: None,
+            },
+            2,
+            with_neru(),
+            true,
+        );
+        assert!(registry.set_active(&ssh_id));
+        assert_eq!(
+            registry.send_local_host_focus(false),
+            EndpointSendOutcome::Sent
+        );
+        assert_eq!(
+            *local_sent.lock().unwrap(),
+            vec![crate::protocol::endpoint::host_focus_message(false)]
+        );
+        assert!(remote_sent.lock().unwrap().is_empty());
+
+        registry.disconnect(&ClientEndpointId::Local);
+        assert_eq!(
+            registry.send_local_host_focus(true),
+            EndpointSendOutcome::NotSent
+        );
+        assert!(registry.take_failures().is_empty());
     }
 
     struct FakeTransport {
